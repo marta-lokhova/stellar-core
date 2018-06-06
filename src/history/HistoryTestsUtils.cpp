@@ -287,10 +287,10 @@ CatchupSimulation::generateRandomLedger()
     mLedgerCloseDatas.emplace_back(ledgerSeq, txSet, sv);
     lm.closeLedger(mLedgerCloseDatas.back());
 
-    mLedgerSeqs.push_back(lm.getLastClosedLedgerHeader().header.ledgerSeq);
-    mLedgerHashes.push_back(lm.getLastClosedLedgerHeader().hash);
-    mBucketListHashes.push_back(
-        lm.getLastClosedLedgerHeader().header.bucketListHash);
+    auto lclh = lm.getLastClosedLedgerHeader();
+    mLedgerSeqs.push_back(lclh.header.ledgerSeq);
+    mLedgerHashes.push_back(lclh.hash);
+    mBucketListHashes.push_back(lclh.header.bucketListHash);
     mBucket0Hashes.push_back(mApp.getBucketManager()
                                  .getBucketList()
                                  .getLevel(0)
@@ -360,7 +360,8 @@ CatchupSimulation::generateAndPublishHistory(size_t nPublishes)
 Application::pointer
 CatchupSimulation::catchupNewApplication(uint32_t initLedger, uint32_t count,
                                          bool manual, Config::TestDbMode dbMode,
-                                         std::string const& appName)
+                                         std::string const& appName,
+                                         bool startCatchup)
 {
 
     CLOG(INFO, "History") << "****";
@@ -380,7 +381,10 @@ CatchupSimulation::catchupNewApplication(uint32_t initLedger, uint32_t count,
         mClock, mHistoryConfigurator->configure(mCfgs.back(), false));
 
     app2->start();
-    REQUIRE(catchupApplication(initLedger, count, manual, app2));
+    if (startCatchup)
+    {
+        REQUIRE(catchupApplication(initLedger, count, manual, app2));
+    }
     return app2;
 }
 

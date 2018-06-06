@@ -2,6 +2,7 @@
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
+#include "FileTransferInfo.h"
 #include "bucket/BucketManager.h"
 #include "catchup/CatchupWorkTests.h"
 #include "history/HistoryArchiveManager.h"
@@ -20,6 +21,7 @@
 #include "util/Fs.h"
 #include "work/WorkManager.h"
 
+#include "historywork/DownloadBucketsWork.h"
 #include <lib/catch.hpp>
 #include <lib/util/format.h>
 
@@ -202,6 +204,168 @@ TEST_CASE("History publish queueing", "[history][historydelay][historycatchup]")
         std::string("Catchup to delayed history"));
     CHECK(app2->getLedgerManager().getLedgerNum() ==
           catchupSimulation.getApp().getLedgerManager().getLedgerNum());
+}
+
+TEST_CASE("History bucket verification",
+          "[history][bucketverification[batching]]")
+{
+    /* Tests bucket verification stage of catchup. Assumes ledger chain
+     * verification was successful. **/
+
+    CatchupSimulation catchupSimulation{};
+    catchupSimulation.generateAndPublishInitialHistory(3);
+    uint32_t initLedger =
+        catchupSimulation.getApp().getLedgerManager().getLastClosedLedgerNum() -
+        2;
+
+    // Create a new app that is going to only perform bucket verification stage
+    auto app2 = catchupSimulation.catchupNewApplication(
+        initLedger, std::numeric_limits<uint32_t>::max(), false,
+        Config::TESTDB_IN_MEMORY_SQLITE,
+        std::string("Fake catchup, bucket test only"), false);
+    auto archive = app2->getHistoryArchiveManager().getHistoryArchive("test");
+    REQUIRE(archive);
+
+    HistoryArchiveState has;
+    auto& wm = app2->getWorkManager();
+    auto get = wm.executeWork<GetHistoryArchiveStateWork>(
+        "get-history-archive-state", has, initLedger, archive);
+    REQUIRE(get->getState() == Work::WORK_SUCCESS);
+
+    auto localState =
+        app2->getHistoryManager().getLastClosedHistoryArchiveState();
+    auto hashes = has.differingBuckets(localState);
+    REQUIRE(!hashes.empty());
+
+    std::map<std::string, std::shared_ptr<Bucket>> mBuckets;
+    auto tmpDir = std::make_unique<TmpDir>(
+        app2->getTmpDirManager().tmpDir("bucket-test"));
+
+    // Verify and apply buckets
+    auto verify =
+        wm.executeWork<DownloadBucketsWork>(mBuckets, hashes, *tmpDir);
+    REQUIRE(verify->getState() == Work::WORK_SUCCESS);
+
+    SECTION("successful verify and apply multiple times")
+    {
+        // Publish more history
+        catchupSimulation.generateAndPublishHistory(3);
+
+        localState =
+            app2->getHistoryManager().getLastClosedHistoryArchiveState();
+        auto bucketDiffsAfterVerification = has.differingBuckets(localState);
+        REQUIRE(!bucketDiffsAfterVerification.empty());
+
+        verify = wm.executeWork<DownloadBucketsWork>(
+            mBuckets, bucketDiffsAfterVerification, *tmpDir);
+        REQUIRE(verify->getState() == Work::WORK_SUCCESS);
+    }
+
+    SECTION("already caught up")
+    {
+        // Now that we are caught up, trigger bucket verification again
+        verify = wm.executeWork<DownloadBucketsWork>(
+            mBuckets, std::vector<std::string>(), *tmpDir);
+        REQUIRE(verify->getState() == Work::WORK_SUCCESS);
+    }
+
+    SECTION("download and unzip fails")
+    {
+        std::vector<std::string> h(1, hashes[0]);
+        auto dir =
+            catchupSimulation.getHistoryConfigurator().getArchiveDirName();
+        REQUIRE(!dir.empty());
+        auto bucketFile =
+            dir + "/" +
+            fs::remoteName(HISTORY_FILE_TYPE_BUCKET, h[0], "xdr.gz");
+
+        // Corrupt zipped bucket file by removing its content
+        std::ofstream ofs;
+        ofs.open(bucketFile, std::ofstream::out | std::ofstream::trunc);
+        ofs.close();
+
+        verify = wm.executeWork<DownloadBucketsWork>(mBuckets, h, *tmpDir);
+        REQUIRE(verify->getChildren().begin()->second->anyChildRaiseFailure());
+        REQUIRE(verify->getState() == Work::WORK_FAILURE_RAISE);
+    }
+
+    SECTION("verification fails")
+    {
+        std::vector<std::string> h(1, hashes[0]);
+        auto dir =
+            catchupSimulation.getHistoryConfigurator().getArchiveDirName();
+        REQUIRE(!dir.empty());
+        auto bucketFile =
+            dir + "/" + fs::remoteName(HISTORY_FILE_TYPE_BUCKET, h[0], "xdr");
+
+        // Corrupt the content of a bucket file
+        std::remove((bucketFile + ".gz").c_str());
+        {
+            std::string s = "I am corrupted";
+            std::ofstream out(bucketFile, std::ofstream::binary);
+            out.write(s.data(), s.size());
+        }
+        auto g = wm.executeWork<GzipFileWork>(bucketFile);
+        REQUIRE(g->getState() == Work::WORK_SUCCESS);
+        REQUIRE(!fs::exists(bucketFile));
+        REQUIRE(fs::exists(bucketFile + ".gz"));
+
+        verify = wm.executeWork<DownloadBucketsWork>(mBuckets, h, *tmpDir);
+
+        // Download is successful
+        REQUIRE(verify->getChildren().begin()->second->allChildrenSuccessful());
+        // Verify failed
+        REQUIRE(verify->getState() == Work::WORK_FAILURE_RAISE);
+    }
+}
+
+class GenericBatchWork : public BatchWork
+{
+  public:
+    int mCount{0};
+
+    GenericBatchWork(Application& app, WorkParent& parent,
+                     std::string const& uniqueName)
+        : BatchWork(app, parent, uniqueName)
+    {
+    }
+
+    bool
+    hasNext() override
+    {
+        return mCount < mApp.getConfig().MAX_CONCURRENT_SUBPROCESSES * 2;
+    }
+
+    void
+    resetIter() override
+    {
+        mCount = 0;
+    }
+
+    std::string
+    yieldMoreWork() override
+    {
+        return addWork<Work>(fmt::format("child-{:d}", mCount++), 0)
+            ->getUniqueName();
+    }
+};
+
+TEST_CASE("Work batching", "[batching]")
+{
+    CatchupSimulation catchupSimulation{};
+    auto& wm = catchupSimulation.getApp().getWorkManager();
+
+    auto& clock = catchupSimulation.getClock();
+    auto verify = wm.addWork<GenericBatchWork>("test-batch");
+    wm.advanceChildren();
+    while (!clock.getIOService().stopped() && !wm.allChildrenDone())
+    {
+        clock.crank(true);
+        REQUIRE(
+            verify->getChildren().size() <=
+            catchupSimulation.getApp().getConfig().MAX_CONCURRENT_SUBPROCESSES);
+    }
+    REQUIRE(verify->getState() == Work::WORK_SUCCESS);
 }
 
 TEST_CASE("History prefix catchup", "[history][historycatchup][prefixcatchup]")
