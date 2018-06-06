@@ -1,0 +1,40 @@
+// Copyright 2018 Stellar Development Foundation and contributors. Licensed
+// under the Apache License, Version 2.0. See the COPYING file at the root
+// of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
+#pragma once
+
+#include "BatchWork.h"
+#include "bucket/Bucket.h"
+#include "historywork/Progress.h"
+
+namespace stellar
+{
+
+class DownloadBucketsWork : public BatchWork
+{
+  public:
+    DownloadBucketsWork(Application& app, WorkParent& parent,
+                        std::map<std::string, std::shared_ptr<Bucket>>& buckets,
+                        std::vector<std::string> hashes,
+                        TmpDir const& downloadDir);
+    ~DownloadBucketsWork() override;
+    bool hasNext() override;
+    std::string yieldMoreWork() override;
+    void resetIter() override;
+    std::string getStatus() const override;
+    void markMetrics(Work& work) override;
+
+  private:
+    std::map<std::string, std::shared_ptr<Bucket>> mBuckets;
+    std::map<std::string, std::shared_ptr<Work>> mVerifyDownloadMap;
+    std::vector<std::string> mHashes;
+    uint32_t mNextBucketIndex;
+
+    TmpDir const& mDownloadDir;
+
+    // Download Metrics
+    medida::Meter& mDownloadBucketStart;
+    medida::Meter& mDownloadBucketSuccess;
+    medida::Meter& mDownloadBucketFailure;
+};
+}
