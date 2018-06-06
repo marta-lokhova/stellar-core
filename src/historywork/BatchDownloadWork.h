@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "history/FileTransferInfo.h"
+#include "historywork/BatchWork.h"
 #include "ledger/CheckpointRange.h"
 #include "work/Work.h"
 
@@ -15,9 +17,7 @@ class Meter;
 namespace stellar
 {
 
-class TmpDir;
-
-class BatchDownloadWork : public Work
+class BatchDownloadWork : public BatchWork
 {
     // Specialized class for downloading _lots_ of files (thousands to
     // millions). Sets up N (small number) of parallel download-decompress
@@ -27,27 +27,26 @@ class BatchDownloadWork : public Work
     // so you don't have to worry about making a few extra BatchDownloadWork
     // classes -- they won't override the global limit, just schedule a small
     // backlog in the ProcessManager).
-    std::deque<uint32_t> mFinished;
-    std::map<std::string, uint32_t> mRunning;
     CheckpointRange mRange;
     uint32_t mNext;
-    std::string mFileType;
     TmpDir const& mDownloadDir;
+    std::string mFileType;
 
-    medida::Meter& mDownloadCached;
+    // Download Metrics
     medida::Meter& mDownloadStart;
     medida::Meter& mDownloadSuccess;
     medida::Meter& mDownloadFailure;
-
-    void addNextDownloadWorker();
 
   public:
     BatchDownloadWork(Application& app, WorkParent& parent,
                       CheckpointRange range, std::string const& type,
                       TmpDir const& downloadDir);
-    ~BatchDownloadWork();
+    ~BatchDownloadWork() override;
     std::string getStatus() const override;
-    void onReset() override;
-    void notify(std::string const& child) override;
+    void markMetrics(Work& work) override;
+
+    bool hasNext() override;
+    std::string yieldMoreWork() override;
+    void resetIter() override;
 };
 }

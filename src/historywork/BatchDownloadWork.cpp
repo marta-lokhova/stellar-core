@@ -9,8 +9,6 @@
 #include "historywork/Progress.h"
 #include "lib/util/format.h"
 #include "main/Application.h"
-#include <medida/meter.h>
-#include <medida/metrics_registry.h>
 
 namespace stellar
 {
@@ -19,21 +17,19 @@ BatchDownloadWork::BatchDownloadWork(Application& app, WorkParent& parent,
                                      CheckpointRange range,
                                      std::string const& type,
                                      TmpDir const& downloadDir)
-    : Work(app, parent,
-           fmt::format("batch-download-{:s}-{:08x}-{:08x}", type, range.first(),
-                       range.last()))
+    : BatchWork{app, parent,
+                fmt::format("download-{:s}-{:08x}-{:08x}", type, range.first(),
+                            range.last())}
     , mRange(range)
     , mNext(mRange.first())
-    , mFileType(type)
-    , mDownloadDir(downloadDir)
-    , mDownloadCached(app.getMetrics().NewMeter(
-          {"history", "download-" + type, "cached"}, "event"))
-    , mDownloadStart(app.getMetrics().NewMeter(
-          {"history", "download-" + type, "start"}, "event"))
-    , mDownloadSuccess(app.getMetrics().NewMeter(
-          {"history", "download-" + type, "success"}, "event"))
-    , mDownloadFailure(app.getMetrics().NewMeter(
-          {"history", "download-" + type, "failure"}, "event"))
+    , mDownloadDir{downloadDir}
+    , mFileType{type}
+    , mDownloadStart{app.getMetrics().NewMeter(
+          {"history", "download-" + type, "start"}, "event")}
+    , mDownloadSuccess{app.getMetrics().NewMeter(
+          {"history", "download-" + type, "success"}, "event")}
+    , mDownloadFailure{app.getMetrics().NewMeter(
+          {"history", "download-" + type, "failure"}, "event")}
 {
 }
 
@@ -53,59 +49,40 @@ BatchDownloadWork::getStatus() const
     return Work::getStatus();
 }
 
-void
-BatchDownloadWork::addNextDownloadWorker()
+bool
+BatchDownloadWork::hasNext()
 {
-    if (mNext > mRange.last())
+    return mNext <= mRange.last();
+}
+
+void
+BatchDownloadWork::resetIter()
+{
+    mNext = mRange.first();
+}
+
+std::string
+BatchDownloadWork::yieldMoreWork()
+{
+    if (!hasNext())
     {
-        return;
+        throw std::runtime_error("Nothing to iterate over!");
     }
 
     FileTransferInfo ft(mDownloadDir, mFileType, mNext);
-    if (fs::exists(ft.localPath_nogz()))
-    {
-        CLOG(DEBUG, "History")
-            << "already have " << mFileType << " for checkpoint " << mNext;
-        mDownloadCached.Mark();
-    }
-    else
-    {
-        CLOG(DEBUG, "History") << "Downloading and unzipping " << mFileType
-                               << " for checkpoint " << mNext;
-        auto getAndUnzip = addWork<GetAndUnzipRemoteFileWork>(ft);
-        assert(mRunning.find(getAndUnzip->getUniqueName()) == mRunning.end());
-        mRunning.insert(std::make_pair(getAndUnzip->getUniqueName(), mNext));
-        mDownloadStart.Mark();
-    }
+    CLOG(DEBUG, "History") << "Downloading and unzipping " << mFileType << " "
+                           << mNext;
+    auto getAndUnzip = addWork<GetAndUnzipRemoteFileWork>(ft);
+    mDownloadStart.Mark();
+
     mNext += mApp.getHistoryManager().getCheckpointFrequency();
+    return getAndUnzip->getUniqueName();
 }
 
 void
-BatchDownloadWork::onReset()
+BatchDownloadWork::markMetrics(Work& work)
 {
-    mNext = mRange.first();
-    mRunning.clear();
-    mFinished.clear();
-    clearChildren();
-    size_t nChildren = mApp.getConfig().MAX_CONCURRENT_SUBPROCESSES;
-    while (mChildren.size() < nChildren && mNext <= mRange.last())
-    {
-        addNextDownloadWorker();
-    }
-}
-
-void
-BatchDownloadWork::notify(std::string const& child)
-{
-    auto i = mChildren.find(child);
-    if (i == mChildren.end())
-    {
-        CLOG(WARNING, "Work")
-            << "BatchDownloadWork notified by unknown child " << child;
-        return;
-    }
-
-    switch (i->second->getState())
+    switch (work.getState())
     {
     case Work::WORK_SUCCESS:
         mDownloadSuccess.Mark();
@@ -118,29 +95,5 @@ BatchDownloadWork::notify(std::string const& child)
     default:
         break;
     }
-
-    std::vector<std::string> done;
-    for (auto const& c : mChildren)
-    {
-        if (c.second->getState() == WORK_SUCCESS)
-        {
-            done.push_back(c.first);
-        }
-    }
-    for (auto const& d : done)
-    {
-        mChildren.erase(d);
-        auto checkpoint = mRunning.find(d);
-        assert(checkpoint != mRunning.end());
-
-        CLOG(DEBUG, "History") << "Finished download of " << mFileType
-                               << " for checkpoint " << checkpoint->second;
-
-        mFinished.push_back(checkpoint->second);
-        mRunning.erase(checkpoint);
-        addNextDownloadWorker();
-    }
-    mApp.getCatchupManager().logAndUpdateCatchupStatus(true);
-    advance();
 }
 }
