@@ -360,7 +360,8 @@ CatchupSimulation::generateAndPublishHistory(size_t nPublishes)
 Application::pointer
 CatchupSimulation::catchupNewApplication(uint32_t initLedger, uint32_t count,
                                          bool manual, Config::TestDbMode dbMode,
-                                         std::string const& appName)
+                                         std::string const& appName,
+                                         bool doStart)
 {
 
     CLOG(INFO, "History") << "****";
@@ -380,7 +381,7 @@ CatchupSimulation::catchupNewApplication(uint32_t initLedger, uint32_t count,
         mClock, mHistoryConfigurator->configure(mCfgs.back(), false));
 
     app2->start();
-    REQUIRE(catchupApplication(initLedger, count, manual, app2));
+    REQUIRE(catchupApplication(initLedger, count, manual, app2, doStart));
     return app2;
 }
 

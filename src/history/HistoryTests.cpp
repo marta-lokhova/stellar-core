@@ -162,7 +162,8 @@ TEST_CASE("Full history catchup", "[history][historycatchup]")
             auto a = catchupSimulation.catchupNewApplication(
                 initLedger, count, false, dbMode,
                 std::string("full, ") + resumeModeName(count) + ", " +
-                    dbModeName(dbMode));
+                    dbModeName(dbMode),
+                false);
             apps.push_back(a);
         }
     }
@@ -554,7 +555,7 @@ TEST_CASE("Catchup recent", "[history][catchuprecent]")
 
     for (auto a : apps)
     {
-        catchupSimulation.catchupApplication(initLedger, 80, false, a);
+        REQUIRE(catchupSimulation.catchupApplication(initLedger, 80, false, a));
     }
 
     // Now push network along a _lot_ futher along see that they can all
@@ -566,7 +567,7 @@ TEST_CASE("Catchup recent", "[history][catchuprecent]")
 
     for (auto a : apps)
     {
-        catchupSimulation.catchupApplication(initLedger, 80, false, a);
+        REQUIRE(catchupSimulation.catchupApplication(initLedger, 80, false, a));
     }
 }
 
@@ -609,11 +610,14 @@ TEST_CASE("Catchup manual", "[history][catchupmanual]")
                 auto a = catchupSimulation.catchupNewApplication(
                     configuration.toLedger(), configuration.count(), true,
                     dbMode, name);
+                REQUIRE(a);
                 // manual catchup-complete to first checkpoint
-                catchupSimulation.catchupApplication(
-                    initLedger1, std::numeric_limits<uint32_t>::max(), true, a);
+                REQUIRE(catchupSimulation.catchupApplication(
+                    initLedger1, std::numeric_limits<uint32_t>::max(), true,
+                    a));
                 // manual catchup-complete to second checkpoint
-                catchupSimulation.catchupApplication(initLedger2, 80, false, a);
+                REQUIRE(catchupSimulation.catchupApplication(initLedger2, 80,
+                                                             false, a));
             }
         }
     }

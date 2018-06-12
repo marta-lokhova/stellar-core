@@ -174,7 +174,8 @@ class CatchupSimulation
     Application::pointer catchupNewApplication(uint32_t initLedger,
                                                uint32_t count, bool manual,
                                                Config::TestDbMode dbMode,
-                                               std::string const& appName);
+                                               std::string const& appName,
+                                               bool doStart = true);
 
     bool catchupApplication(uint32_t initLedger, uint32_t count, bool manual,
                             Application::pointer app2, bool doStart = true,
