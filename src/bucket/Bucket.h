@@ -62,6 +62,11 @@ class Bucket : public std::enable_shared_from_this<Bucket>,
     // testing.
     std::pair<size_t, size_t> countLiveAndDeadEntries() const;
 
+    static std::vector<BucketEntry>
+    convertToBucketEntry(std::vector<LedgerEntry> liveEntries);
+    static std::vector<BucketEntry>
+    convertToBucketEntry(std::vector<LedgerKey> deadEntries);
+
     // "Applies" the bucket to the database. For each entry in the bucket, if
     // the entry is live, creates or updates the corresponding entry in the
     // database; if the entry is dead (a tombstone), deletes the corresponding

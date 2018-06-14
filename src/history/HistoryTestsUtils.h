@@ -5,12 +5,19 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "bucket/BucketList.h"
+#include "crypto/Hex.h"
 #include "herder/LedgerCloseData.h"
+#include "history/HistoryArchive.h"
+#include "historywork/GzipFileWork.h"
+#include "historywork/MakeRemoteDirWork.h"
+#include "historywork/PutRemoteFileWork.h"
+#include "ledger/LedgerTestUtils.h"
 #include "main/Application.h"
 #include "main/Config.h"
 #include "util/Timer.h"
 #include "util/TmpDir.h"
 
+#include <bucket/BucketOutputIterator.h>
 #include <random>
 
 namespace stellar
@@ -22,7 +29,16 @@ class HistoryManager;
 namespace historytestutils
 {
 
+enum class ArchiveFileState
+{
+    CONTENTS_AND_HASH_OK,
+    CORRUPTED_CONTENTS,
+    CORRUPTED_HASH
+};
+
 class HistoryConfigurator;
+class TestBucketGenerator;
+class BucketOutputIteratorForTesting;
 struct CatchupMetrics;
 struct CatchupPerformedWork;
 
@@ -50,6 +66,29 @@ class TmpDirHistoryConfigurator : public HistoryConfigurator
     std::string getArchiveDirName() const override;
 
     Config& configure(Config& cfg, bool writable) const override;
+};
+
+class BucketOutputIteratorForTesting : public BucketOutputIterator
+{
+    const size_t NUM_ITEMS_PER_BUCKET = 5;
+
+  public:
+    explicit BucketOutputIteratorForTesting(std::string tmpDir);
+    std::pair<std::string, uint256> writeTmpTestBucket(ArchiveFileState state);
+};
+
+class TestBucketGenerator
+{
+    Application& mApp;
+    std::shared_ptr<TmpDir> mTmpDir;
+    std::shared_ptr<HistoryArchive> mArchive;
+
+  public:
+    TestBucketGenerator(Application& app,
+                        std::shared_ptr<HistoryArchive> archive);
+
+    std::string generateBucket(
+        ArchiveFileState desiredState = ArchiveFileState::CONTENTS_AND_HASH_OK);
 };
 
 struct CatchupMetrics
@@ -174,8 +213,7 @@ class CatchupSimulation
     Application::pointer catchupNewApplication(uint32_t initLedger,
                                                uint32_t count, bool manual,
                                                Config::TestDbMode dbMode,
-                                               std::string const& appName,
-                                               bool startCatchup = true);
+                                               std::string const& appName);
 
     bool catchupApplication(uint32_t initLedger, uint32_t count, bool manual,
                             Application::pointer app2, bool doStart = true,

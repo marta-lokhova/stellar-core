@@ -3,6 +3,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "history/HistoryTestsUtils.h"
+#include "FileTransferInfo.h"
 #include "bucket/BucketManager.h"
 #include "crypto/Hex.h"
 #include "crypto/Random.h"
@@ -87,6 +88,86 @@ S3HistoryConfigurator::configure(Config& mCfg, bool writable) const
     mCfg.HISTORY["test"] =
         HistoryArchiveConfiguration{"test", getCmd, putCmd, mkdirCmd};
     return mCfg;
+}
+
+BucketOutputIteratorForTesting::BucketOutputIteratorForTesting(
+    std::string tmpDir)
+    : BucketOutputIterator{tmpDir, false}
+{
+}
+
+std::pair<std::string, uint256>
+BucketOutputIteratorForTesting::writeTmpTestBucket(ArchiveFileState state)
+{
+    auto ledgerEntries =
+        LedgerTestUtils::generateValidLedgerEntries(NUM_ITEMS_PER_BUCKET);
+    auto bucketEntries = Bucket::convertToBucketEntry(ledgerEntries);
+
+    for (auto const& bucketEntry : bucketEntries)
+    {
+        put(bucketEntry);
+    }
+
+    // Finish writing and close the bucket file
+    assert(mBuf);
+    mOut.writeOne(*mBuf, mHasher.get(), &mBytesPut);
+    mObjectsPut++;
+    mBuf.reset();
+
+    if (state == ArchiveFileState::CORRUPTED_CONTENTS)
+    {
+        REQUIRE(NUM_ITEMS_PER_BUCKET);
+        // Add a duplicate entry
+        mOut.writeOne(bucketEntries[0]);
+    }
+
+    mOut.close();
+
+    return std::pair<std::string, uint256>(mFilename, mHasher->finish());
+};
+
+TestBucketGenerator::TestBucketGenerator(
+    Application& app, std::shared_ptr<HistoryArchive> archive)
+    : mApp{app}, mArchive{archive}
+{
+    mTmpDir = std::make_unique<TmpDir>(
+        mApp.getTmpDirManager().tmpDir("tmp-bucket-generator"));
+}
+
+std::string
+TestBucketGenerator::generateBucket(ArchiveFileState state)
+{
+    BucketOutputIteratorForTesting bucketOut{mTmpDir->getName()};
+    uint256 hash;
+
+    if (state == ArchiveFileState::CORRUPTED_HASH)
+    {
+        // Return bad hash
+        return binToHex(hash);
+    }
+    std::string filename;
+    std::tie(filename, hash) = bucketOut.writeTmpTestBucket(state);
+
+    FileTransferInfo ft{mTmpDir->getName(), HISTORY_FILE_TYPE_BUCKET,
+                        binToHex(hash)};
+
+    {
+        auto& wm = mApp.getWorkManager();
+        auto archive =
+            mApp.getHistoryArchiveManager().getHistoryArchive("test");
+        auto put = wm.addWork<PutRemoteFileWork>(filename + ".gz",
+                                                 ft.remoteName(), archive);
+        auto mkdir = put->addWork<MakeRemoteDirWork>(ft.remoteDir(), archive);
+        auto gzip = mkdir->addWork<GzipFileWork>(filename, true);
+        gzip->advance();
+        while (!mApp.getClock().getIOService().stopped() &&
+               !wm.allChildrenDone())
+        {
+            mApp.getClock().crank(true);
+        }
+    }
+
+    return binToHex(hash);
 }
 
 CatchupMetrics::CatchupMetrics()
@@ -360,8 +441,7 @@ CatchupSimulation::generateAndPublishHistory(size_t nPublishes)
 Application::pointer
 CatchupSimulation::catchupNewApplication(uint32_t initLedger, uint32_t count,
                                          bool manual, Config::TestDbMode dbMode,
-                                         std::string const& appName,
-                                         bool startCatchup)
+                                         std::string const& appName)
 {
 
     CLOG(INFO, "History") << "****";
@@ -381,10 +461,7 @@ CatchupSimulation::catchupNewApplication(uint32_t initLedger, uint32_t count,
         mClock, mHistoryConfigurator->configure(mCfgs.back(), false));
 
     app2->start();
-    if (startCatchup)
-    {
-        REQUIRE(catchupApplication(initLedger, count, manual, app2));
-    }
+    REQUIRE(catchupApplication(initLedger, count, manual, app2));
     return app2;
 }
 
