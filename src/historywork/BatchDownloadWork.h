@@ -7,6 +7,8 @@
 #include "history/FileTransferInfo.h"
 #include "historywork/BatchWork.h"
 #include "ledger/CheckpointRange.h"
+#include "medida/meter.h"
+#include "medida/metrics_registry.h"
 #include "work/Work.h"
 
 namespace medida
@@ -43,7 +45,7 @@ class BatchDownloadWork : public BatchWork
                       TmpDir const& downloadDir);
     ~BatchDownloadWork() override;
     std::string getStatus() const override;
-    void markMetrics(Work& work) override;
+    void notify(std::string const& child) override;
 
     bool hasNext() override;
     std::string yieldMoreWork() override;

@@ -45,24 +45,21 @@ BatchWork::notify(std::string const& child)
     }
 
     assert(i->second);
-    markMetrics(*(i->second));
 
-    std::vector<std::string> done;
-    for (auto const& c : mChildren)
+    for (auto childIt = mChildren.begin(); childIt != mChildren.end();)
     {
-        if (c.second->getState() == WORK_SUCCESS)
+        if (childIt->second->getState() == WORK_SUCCESS)
         {
-            done.push_back(c.first);
+            CLOG(DEBUG, "History") << "Finished child work " << childIt->first;
+            childIt = mChildren.erase(childIt);
+            if (hasNext())
+            {
+                yieldMoreWork();
+            }
         }
-    }
-    for (auto const& d : done)
-    {
-        mChildren.erase(d);
-        CLOG(DEBUG, "History") << "Finished child work " << d;
-
-        if (hasNext())
+        else
         {
-            yieldMoreWork();
+            ++childIt;
         }
     }
 

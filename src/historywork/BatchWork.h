@@ -4,13 +4,6 @@
 #pragma once
 
 #include "work/Work.h"
-#include <medida/meter.h>
-#include <medida/metrics_registry.h>
-
-namespace medida
-{
-class Meter;
-}
 
 namespace stellar
 {
@@ -28,11 +21,12 @@ class BatchWork : public Work
     BatchWork(Application& app, WorkParent& parent, std::string name);
     ~BatchWork() override;
     void onReset() override;
+
+    // Note: If a subclass chooses to override notify, it needs to make sure
+    // it calls notify of BatchWork.
     void notify(std::string const& child) override;
 
-    // Optionally mark metrics
-    virtual void markMetrics(Work& work){};
-
+  protected:
     virtual bool hasNext() = 0;
     virtual std::string yieldMoreWork() = 0;
     virtual void resetIter() = 0;

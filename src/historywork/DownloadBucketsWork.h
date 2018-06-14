@@ -6,6 +6,8 @@
 #include "BatchWork.h"
 #include "bucket/Bucket.h"
 #include "historywork/Progress.h"
+#include "medida/meter.h"
+#include "medida/metrics_registry.h"
 
 namespace stellar
 {
@@ -22,13 +24,13 @@ class DownloadBucketsWork : public BatchWork
     std::string yieldMoreWork() override;
     void resetIter() override;
     std::string getStatus() const override;
-    void markMetrics(Work& work) override;
+    void notify(std::string const& child) override;
 
   private:
     std::map<std::string, std::shared_ptr<Bucket>> mBuckets;
     std::map<std::string, std::shared_ptr<Work>> mVerifyDownloadMap;
     std::vector<std::string> mHashes;
-    uint32_t mNextBucketIndex;
+    std::vector<std::string>::const_iterator mNextBucketIndex;
 
     TmpDir const& mDownloadDir;
 

@@ -80,20 +80,26 @@ BatchDownloadWork::yieldMoreWork()
 }
 
 void
-BatchDownloadWork::markMetrics(Work& work)
+BatchDownloadWork::notify(std::string const& child)
 {
-    switch (work.getState())
+    auto work = mChildren.find(child);
+    if (work != mChildren.end())
     {
-    case Work::WORK_SUCCESS:
-        mDownloadSuccess.Mark();
-        break;
-    case Work::WORK_FAILURE_RETRY:
-    case Work::WORK_FAILURE_FATAL:
-    case Work::WORK_FAILURE_RAISE:
-        mDownloadFailure.Mark();
-        break;
-    default:
-        break;
+        switch (work->second->getState())
+        {
+        case Work::WORK_SUCCESS:
+            mDownloadSuccess.Mark();
+            break;
+        case Work::WORK_FAILURE_RETRY:
+        case Work::WORK_FAILURE_FATAL:
+        case Work::WORK_FAILURE_RAISE:
+            mDownloadFailure.Mark();
+            break;
+        default:
+            break;
+        }
     }
+
+    BatchWork::notify(child);
 }
 }

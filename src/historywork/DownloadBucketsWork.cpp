@@ -18,6 +18,7 @@ DownloadBucketsWork::DownloadBucketsWork(
     : BatchWork{app, parent, "download-verify-buckets"}
     , mBuckets{buckets}
     , mHashes{hashes}
+    , mNextBucketIndex{hashes.begin()}
     , mDownloadDir{downloadDir}
     , mDownloadBucketStart{app.getMetrics().NewMeter(
           {"history", fmt::format("download-{:s}", HISTORY_FILE_TYPE_BUCKET),
@@ -46,10 +47,12 @@ DownloadBucketsWork::getStatus() const
     {
         if (!mHashes.empty())
         {
-            auto pct = 100 * mNextBucketIndex / mHashes.size();
+            auto numDone = std::distance(mHashes.begin(), mNextBucketIndex);
+            auto total = static_cast<uint32_t>(mHashes.size());
+            auto pct = (100 * numDone) / total;
             return fmt::format(
-                "downloading and verifying buckets: {:d}/{:d} ({:d}%)",
-                mNextBucketIndex, mHashes.size(), pct);
+                "downloading and verifying buckets: {:d}/{:d} ({:d}%)", numDone,
+                total, pct);
         }
     }
     return Work::getStatus();
@@ -58,13 +61,13 @@ DownloadBucketsWork::getStatus() const
 bool
 DownloadBucketsWork::hasNext()
 {
-    return mHashes.size() > mNextBucketIndex;
+    return mNextBucketIndex != mHashes.end();
 }
 
 void
 DownloadBucketsWork::resetIter()
 {
-    mNextBucketIndex = 0;
+    mNextBucketIndex = mHashes.begin();
 }
 
 std::string
@@ -75,7 +78,7 @@ DownloadBucketsWork::yieldMoreWork()
         throw std::runtime_error("Nothing to iterate over!");
     }
 
-    auto hash = mHashes[mNextBucketIndex];
+    auto hash = *mNextBucketIndex;
     FileTransferInfo ft(mDownloadDir, HISTORY_FILE_TYPE_BUCKET, hash);
     auto verify = addWork<VerifyBucketWork>(mBuckets, ft.localPath_nogz(),
                                             hexToBin256(hash));
@@ -92,9 +95,9 @@ DownloadBucketsWork::yieldMoreWork()
 }
 
 void
-DownloadBucketsWork::markMetrics(Work& work)
+DownloadBucketsWork::notify(std::string const& child)
 {
-    auto downloadWork = mVerifyDownloadMap.find(work.getUniqueName());
+    auto downloadWork = mVerifyDownloadMap.find(child);
     assert(downloadWork != mVerifyDownloadMap.end());
 
     switch (downloadWork->second->getState())
@@ -112,5 +115,6 @@ DownloadBucketsWork::markMetrics(Work& work)
     }
 
     mVerifyDownloadMap.erase(downloadWork);
+    BatchWork::notify(child);
 }
 }
