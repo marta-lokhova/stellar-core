@@ -62,7 +62,7 @@ CatchupManagerImpl::catchupHistory(CatchupConfiguration catchupConfiguration,
     mCatchupStart.Mark();
 
     mCatchupWork = mApp.getWorkManager().addWork<CatchupWork>(
-        catchupConfiguration, handler, Work::RETRY_NEVER, trustedHash);
+        catchupConfiguration, handler, trustedHash, Work::RETRY_NEVER);
     mApp.getWorkManager().advanceChildren();
 }
 

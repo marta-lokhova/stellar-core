@@ -25,8 +25,8 @@ namespace stellar
 
 CatchupWork::CatchupWork(Application& app, WorkParent& parent,
                          CatchupConfiguration catchupConfiguration,
-                         ProgressHandler progressHandler, size_t maxRetries,
-                         optional<Hash> trustedScpHash)
+                         ProgressHandler progressHandler,
+                         optional<Hash> trustedScpHash, size_t maxRetries)
     : BucketDownloadWork(
           app, parent, "catchup",
           app.getHistoryManager().getLastClosedHistoryArchiveState(),

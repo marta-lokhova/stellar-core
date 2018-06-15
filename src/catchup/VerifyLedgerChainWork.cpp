@@ -53,7 +53,7 @@ verifyLedgerHistoryLink(Hash const& prev, LedgerHeaderHistoryEntry const& curr)
 VerifyLedgerChainWork::VerifyLedgerChainWork(
     Application& app, WorkParent& parent, TmpDir const& downloadDir,
     LedgerRange range, LedgerHeaderHistoryEntry& firstVerified,
-    LedgerHeaderHistoryEntry& lastClosedLedger, optional<Hash> scpHash)
+    LedgerHeaderHistoryEntry const& lastClosedLedger, optional<Hash> scpHash)
     : Work(app, parent, "verify-ledger-chain")
     , mDownloadDir(downloadDir)
     , mRange(range)
@@ -103,6 +103,13 @@ VerifyLedgerChainWork::getStatus() const
 void
 VerifyLedgerChainWork::onReset()
 {
+    // Note that mFirstVerified is not reset here, since it is set
+    // in the end of verification, where work wouldn't fail
+
+    if (mVerifiedAhead.header.ledgerSeq != 0)
+    {
+        mVerifiedAhead = {};
+    }
     mCurrCheckpoint =
         mApp.getHistoryManager().checkpointContainingLedger(mRange.last());
 }
@@ -209,6 +216,9 @@ VerifyLedgerChainWork::verifyHistoryOfSingleCheckpoint()
 
     if (curr.header.ledgerSeq == mRange.last())
     {
+        // Verifying the most recent checkpoint means no other checkpoints are
+        // verified yet
+        assert(nextCheckpointFirstLedger.header.ledgerSeq == 0);
         auto verifyTrustedHash = verifyAgainstTrustedHash(curr);
         if (verifyTrustedHash != HistoryManager::VERIFY_STATUS_OK)
         {
@@ -218,6 +228,10 @@ VerifyLedgerChainWork::verifyHistoryOfSingleCheckpoint()
     }
     else if (curr.header.ledgerSeq == mCurrCheckpoint)
     {
+        // If we reached the end of checkpoint, ensure there's a previously
+        // verified checkpoint to compare against
+        assert(nextCheckpointFirstLedger.header.ledgerSeq != 0);
+
         // Last ledger in the checkpoint needs to agree with first ledger of a
         // checkpoint ahead of it
         CLOG(INFO, "History")
@@ -276,7 +290,7 @@ VerifyLedgerChainWork::onSuccess()
         mApp.getHistoryManager().checkpointContainingLedger(mRange.first()))
     {
         throw std::runtime_error(
-            "Verification overshot first ledger in the range.");
+            "Verification undershot first ledger in the range.");
     }
 
     // This is in onSuccess rather than onRun, so we can force a FAILURE_RAISE.

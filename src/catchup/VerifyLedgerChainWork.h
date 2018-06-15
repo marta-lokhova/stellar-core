@@ -25,7 +25,7 @@ class VerifyLedgerChainWork : public Work
     LedgerRange mRange;
     uint32_t mCurrCheckpoint;
     LedgerHeaderHistoryEntry& mFirstVerified;
-    LedgerHeaderHistoryEntry mLastClosedLedger;
+    LedgerHeaderHistoryEntry const& mLastClosedLedger;
     optional<Hash> mTrustedHash;
 
     // First ledger of last verified checkpoint. Needed for a checkpoint that
@@ -51,7 +51,7 @@ class VerifyLedgerChainWork : public Work
     VerifyLedgerChainWork(Application& app, WorkParent& parent,
                           TmpDir const& downloadDir, LedgerRange range,
                           LedgerHeaderHistoryEntry& firstVerified,
-                          LedgerHeaderHistoryEntry& lastClosedLedger,
+                          LedgerHeaderHistoryEntry const& lastClosedLedger,
                           optional<Hash> scpHash);
     ~VerifyLedgerChainWork() override;
     std::string getStatus() const override;
