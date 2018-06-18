@@ -121,12 +121,9 @@ class LedgerManagerImpl : public LedgerManager
 
     Database& getDatabase() override;
 
-    void startCatchup(CatchupConfiguration configuration,
-                      bool manualCatchup) override;
+    void startCatchup(CatchupConfiguration configuration, bool manualCatchup,
+                      optional<Hash> trustedHash) override;
 
-    HistoryManager::LedgerVerificationStatus
-    verifyCatchupCandidate(LedgerHeaderHistoryEntry const&,
-                           bool manualCatchup) const override;
     void closeLedger(LedgerCloseData const& ledgerData) override;
     void deleteOldEntries(Database& db, uint32_t ledgerSeq,
                           uint32_t count) override;

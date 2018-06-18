@@ -257,10 +257,16 @@ CommandHandler::fileNotFound(std::string const& params, std::string& retStr)
         "/droppeer?node=NODE_ID[&ban=D]</h1>"
         "drops peer identified by PEER_ID, when D is 1 the peer is also banned"
         "</p><p><h1> "
-        "/generateload[?mode=(create|pay)&accounts=N&txs=M&txrate=(R|auto)&"
+        "/generateload[?mode=(create|pay)&accounts=N&offset=K&txs=M&txrate=(R|"
+        "auto)&"
         "batchsize=L]</h1>"
         "artificially generate load for testing; must be used with "
-        "ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING set to true"
+        "ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING set to true. "
+        "Depending on the mode, either creates new accounts or generates "
+        "payments on accounts specified"
+        " (where number of accounts can be offset)."
+        " Additionally, allows batching up to 100 account creations per "
+        "transaction via 'batchsize'."
         "</p><p><h1> /help</h1>"
         "give a list of currently supported commands"
         "</p><p><h1> /info</h1>"
@@ -478,7 +484,7 @@ CommandHandler::peers(std::string const&, std::string& retStr)
     int counter = 0;
     for (auto peer : mApp.getOverlayManager().getPendingPeers())
     {
-        root["pending_peers"][counter]["address"] = peer->toString();
+        root["pending_peers"][counter] = peer->toString();
 
         counter++;
     }
@@ -567,7 +573,7 @@ CommandHandler::catchup(std::string const& params, std::string& retStr)
         }
     }
 
-    mApp.getLedgerManager().startCatchup({ledger, count}, true);
+    mApp.getLedgerManager().startCatchup({ledger, count}, true, nullptr);
     retStr = (std::string("Started catchup to ledger ") +
               std::to_string(ledger) + std::string(" in mode ") +
               std::string(

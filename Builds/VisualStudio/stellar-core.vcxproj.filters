@@ -1588,7 +1588,8 @@
     <None Include="..\..\CONTRIBUTING.md" />
     <None Include="..\..\README" />
     <None Include="..\..\travis-build.sh" />
-    <None Include="..\..\ISSUE_TEMPLATE.md" />
+    <None Include="..\..\.github\ISSUE_TEMPLATE.md" />
+    <None Include="..\..\.github\PULL_REQUEST_TEMPLATE.md" />
     <None Include="..\..\src\history\readme.md">
       <Filter>history</Filter>
     </None>
@@ -1598,6 +1599,7 @@
     <None Include="..\..\src\history\serialize-tests\stellar-history.testnet.6714239.json">
       <Filter>history\tests\serialize-tests</Filter>
     </None>
+    <None Include="..\..\performance-eval.md" />
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="..\..\src\xdr\Stellar-ledger.x">

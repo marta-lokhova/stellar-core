@@ -602,8 +602,10 @@ LedgerManagerImpl::startCatchupIf(uint32_t lastReceivedLedgerSeq)
         // to verify history consistency - compare previousLedgerHash of
         // buffered ledger with last one downloaded from history
         auto firstBufferedLedgerSeq = mSyncingLedgers.front().getLedgerSeq();
-        startCatchup({firstBufferedLedgerSeq - 1, getCatchupCount(mApp)},
-                     false);
+        auto hash = make_optional<Hash>(
+            mSyncingLedgers.front().getTxSet()->previousLedgerHash());
+        startCatchup({firstBufferedLedgerSeq - 1, getCatchupCount(mApp)}, false,
+                     hash);
     }
     else
     {
@@ -618,7 +620,7 @@ LedgerManagerImpl::startCatchupIf(uint32_t lastReceivedLedgerSeq)
 
 void
 LedgerManagerImpl::startCatchup(CatchupConfiguration configuration,
-                                bool manualCatchup)
+                                bool manualCatchup, optional<Hash> trustedHash)
 {
     auto lastClosedLedger = getLastClosedLedgerNum();
     if ((configuration.toLedger() != CatchupConfiguration::CURRENT) &&
@@ -628,48 +630,13 @@ LedgerManagerImpl::startCatchup(CatchupConfiguration configuration,
     }
 
     setCatchupState(CatchupState::APPLYING_HISTORY);
+    assert(manualCatchup == mSyncingLedgers.empty());
 
     mApp.getCatchupManager().catchupHistory(
-        configuration, manualCatchup,
-        std::bind(&LedgerManagerImpl::historyCaughtup, this, _1, _2, _3));
+        configuration,
+        std::bind(&LedgerManagerImpl::historyCaughtup, this, _1, _2, _3),
+        trustedHash);
 }
-
-HistoryManager::LedgerVerificationStatus
-LedgerManagerImpl::verifyCatchupCandidate(
-    LedgerHeaderHistoryEntry const& candidate, bool manualCatchup) const
-{
-    assert(mCatchupState == CatchupState::APPLYING_HISTORY);
-
-    if (manualCatchup)
-    {
-        assert(mSyncingLedgers.empty());
-        CLOG(WARNING, "History")
-            << "Accepting unknown-hash ledger due to manual catchup";
-        return HistoryManager::VERIFY_STATUS_OK;
-    }
-
-    assert(!mSyncingLedgers.empty());
-    assert(mSyncingLedgers.front().getLedgerSeq() ==
-           candidate.header.ledgerSeq + 1);
-
-    // asserts dont work in release builds
-    if (mSyncingLedgers.empty())
-    {
-        return HistoryManager::VERIFY_STATUS_ERR_BAD_HASH;
-    }
-
-    auto& firstSyncing = mSyncingLedgers.front();
-    if (firstSyncing.getLedgerSeq() == candidate.header.ledgerSeq + 1 &&
-        firstSyncing.getTxSet()->previousLedgerHash() == candidate.hash)
-    {
-        return HistoryManager::VERIFY_STATUS_OK;
-    }
-    else
-    {
-        return HistoryManager::VERIFY_STATUS_ERR_BAD_HASH;
-    }
-}
-
 void
 LedgerManagerImpl::historyCaughtup(asio::error_code const& ec,
                                    CatchupWork::ProgressState progressState,
