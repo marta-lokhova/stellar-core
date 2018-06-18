@@ -162,8 +162,7 @@ TEST_CASE("Full history catchup", "[history][historycatchup]")
             auto a = catchupSimulation.catchupNewApplication(
                 initLedger, count, false, dbMode,
                 std::string("full, ") + resumeModeName(count) + ", " +
-                    dbModeName(dbMode),
-                false);
+                    dbModeName(dbMode));
             apps.push_back(a);
         }
     }
@@ -184,6 +183,8 @@ TEST_CASE("History publish queueing", "[history][historydelay][historycatchup]")
     // One more ledger is needed to close as stellar-core only publishes to
     // just-before-LCL
     catchupSimulation.generateRandomLedger();
+    // And one more to trigger catchup
+    catchupSimulation.generateRandomLedger();
 
     CLOG(INFO, "History") << "publish-delay count: "
                           << hm.getPublishDelayCount();
@@ -196,7 +197,7 @@ TEST_CASE("History publish queueing", "[history][historydelay][historycatchup]")
 
     auto initLedger =
         catchupSimulation.getApp().getLedgerManager().getLastClosedLedgerNum() -
-        1;
+        2;
     auto app2 = catchupSimulation.catchupNewApplication(
         initLedger, std::numeric_limits<uint32_t>::max(), false,
         Config::TESTDB_IN_MEMORY_SQLITE,
@@ -232,7 +233,7 @@ TEST_CASE("History prefix catchup", "[history][historycatchup][prefixcatchup]")
     CHECK(apps.back()->getLedgerManager().getLedgerNum() == 2 * freq + 2);
 }
 
-TEST_CASE("Publish/catchup alternation, with stall",
+TEST_CASE("Publish catchup alternation with stall",
           "[history][historycatchup][catchupalternation]")
 {
     CatchupSimulation catchupSimulation{};
@@ -496,8 +497,7 @@ TEST_CASE("too far behind / catchup restart", "[history][catchupstall]")
     // Now start a catchup on that catchups as far as it can due to gap
     LOG(INFO) << "Starting catchup (with gap) from " << init;
     REQUIRE(catchupSimulation.catchupApplication(
-        init, std::numeric_limits<uint32_t>::max(), false, app2, true,
-        init + 10));
+        init, std::numeric_limits<uint32_t>::max(), false, app2, init + 10));
     REQUIRE(app2->getLedgerManager().getLastClosedLedgerNum() == 76);
 
     app2->getWorkManager().clearChildren();
@@ -558,7 +558,7 @@ TEST_CASE("Catchup recent", "[history][catchuprecent]")
         REQUIRE(catchupSimulation.catchupApplication(initLedger, 80, false, a));
     }
 
-    // Now push network along a _lot_ futher along see that they can all
+    // Now push network along a _lot_ further along see that they can all
     // still catch up properly.
     catchupSimulation.generateAndPublishHistory(25);
     initLedger =
@@ -610,7 +610,6 @@ TEST_CASE("Catchup manual", "[history][catchupmanual]")
                 auto a = catchupSimulation.catchupNewApplication(
                     configuration.toLedger(), configuration.count(), true,
                     dbMode, name);
-                REQUIRE(a);
                 // manual catchup-complete to first checkpoint
                 REQUIRE(catchupSimulation.catchupApplication(
                     initLedger1, std::numeric_limits<uint32_t>::max(), true,
