@@ -55,7 +55,7 @@ DownloadVerifyLedgersWork::getStatus() const
     {
         auto task = "downloading and verifying ledger chain files";
         return fmtProgress(mApp, task, mRange.first(), mRange.last(),
-                           (mRange.last() - mNext));
+                           (mRange.last() - mNext + mRange.first()));
     }
     return Work::getStatus();
 }
@@ -80,7 +80,7 @@ DownloadVerifyLedgersWork::yieldMoreWork()
         throw std::runtime_error("Nothing to iterate over!");
     }
 
-    CLOG(INFO, "History")
+    CLOG(DEBUG, "History")
         << "Downloading, unzipping, and verifying ledger header " << mNext;
 
     mDownloadStart.Mark();
