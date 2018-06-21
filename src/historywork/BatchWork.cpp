@@ -27,9 +27,12 @@ BatchWork::onReset()
     resetIter();
     clearChildren();
     size_t nChildren = mApp.getConfig().MAX_CONCURRENT_SUBPROCESSES;
+
+    bool isFirst = true;
     while (mChildren.size() < nChildren && hasNext())
     {
-        yieldMoreWork();
+        handleNewWork(isFirst);
+        isFirst = false;
     }
 }
 
@@ -50,11 +53,11 @@ BatchWork::notify(std::string const& child)
     {
         if (childIt->second->getState() == WORK_SUCCESS)
         {
-            CLOG(DEBUG, "History") << "Finished child work " << childIt->first;
+            CLOG(INFO, "History") << "Finished child work " << childIt->first;
             childIt = mChildren.erase(childIt);
             if (hasNext())
             {
-                yieldMoreWork();
+                handleNewWork(false);
             }
         }
         else
@@ -65,5 +68,29 @@ BatchWork::notify(std::string const& child)
 
     mApp.getCatchupManager().logAndUpdateCatchupStatus(true);
     advance();
+}
+
+void
+BatchWork::handleNewWork(bool isFirst)
+{
+    auto newWork = yieldMoreWork();
+
+    if (!isFirst)
+    {
+        assert(mLastAssignedWork);
+        mLastAssignedWork->registerDependent(newWork);
+
+        // There is a possibility that previous work has already finished
+        // (successfully), which means that registering a dependent will not
+        // actually notify the dependent, since the work has completed.
+        // In this case we manually trigger completion of the dependent work.
+        if (mLastAssignedWork->getState() == Work::WORK_SUCCESS)
+        {
+
+            mLastAssignedWork->notifyCompleted(mLastAssignedWork->getSnapshotData());
+        }
+    }
+
+    mLastAssignedWork = newWork;
 }
 }

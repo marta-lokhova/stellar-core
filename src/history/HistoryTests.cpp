@@ -10,6 +10,7 @@
 #include "history/HistoryTestsUtils.h"
 #include "historywork/GetHistoryArchiveStateWork.h"
 #include "historywork/GunzipFileWork.h"
+#include "historywork/DownloadVerifyLedgersWork.h"
 #include "historywork/GzipFileWork.h"
 #include "historywork/PutHistoryArchiveStateWork.h"
 #include "ledger/LedgerManager.h"
@@ -251,7 +252,7 @@ TEST_CASE("History bucket verification",
         // Download is successful
         REQUIRE(verify->getChildren().begin()->second->allChildrenSuccessful());
     }
-    SECTION("download fial due to corrupted hash")
+    SECTION("download fail due to corrupted hash")
     {
         hashes.push_back(
             bucketGenerator.generateBucket(ArchiveFileState::CORRUPTED_HASH));
@@ -295,11 +296,10 @@ class TestBatchWork : public BatchWork
         mCount = 0;
     }
 
-    std::string
+    std::shared_ptr<BatchableWork>
     yieldMoreWork() override
     {
-        return addWork<Work>(fmt::format("child-{:d}", mCount++), 0)
-            ->getUniqueName();
+        return addWork<BatchableWork>(fmt::format("child-{:d}", mCount++), 0);
     }
 };
 
@@ -320,6 +320,54 @@ TEST_CASE("Work batching", "[batching]")
     }
     REQUIRE(verify->getState() == Work::WORK_SUCCESS);
 }
+
+class TestDownloadVerifyLedgersWork : public DownloadVerifyLedgersWork
+{
+public:
+    uint32_t mPrevious{0};
+    TestDownloadVerifyLedgersWork(Application& app, WorkParent& parent,
+                                  LedgerRange range,
+                                  TmpDir const& downloadDir, LedgerHeaderHistoryEntry const& lcl,
+                                  LedgerHeaderHistoryEntry& firstVerified, optional<Hash> scpHash)
+    : DownloadVerifyLedgersWork(app, parent, range, downloadDir, lcl, firstVerified, scpHash)
+    {
+    }
+
+    void
+    notify(std::string const& child) override
+    {
+        if (mPrevious != 0)
+        {
+            auto next = mPrevious - mApp.getHistoryManager().getCheckpointFrequency();
+            REQUIRE("checkpoint-download-verify-" + std::to_string(next) == child);
+            mPrevious = next;
+        }
+        else
+        {
+            mPrevious = mCheckpointRange.last();
+        }
+
+        DownloadVerifyLedgersWork::notify(child);
+    }
+};
+
+//TEST_CASE("Ledger verification reversed", "[ledgerchain]")
+//{
+//    Config cfg(getTestConfig(0, Config::TESTDB_ON_DISK_SQLITE));
+//    VirtualClock clock;
+//    Application::pointer app = createTestApplication(clock, cfg);
+//    auto& wm = app->getWorkManager();
+//
+//    auto verify = wm.addWork<TestDownloadVerifyLedgersWork>("test-batch");
+//    wm.advanceChildren();
+//    while (!clock.getIOService().stopped() && !wm.allChildrenDone())
+//    {
+//        clock.crank(true);
+//        REQUIRE(verify->getChildren().size() <=
+//                app->getConfig().MAX_CONCURRENT_SUBPROCESSES);
+//    }
+//    REQUIRE(verify->getState() == Work::WORK_SUCCESS);
+//}
 
 TEST_CASE("History prefix catchup", "[history][historycatchup][prefixcatchup]")
 {

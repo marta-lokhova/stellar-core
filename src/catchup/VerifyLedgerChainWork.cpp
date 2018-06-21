@@ -52,14 +52,17 @@ verifyLedgerHistoryLink(Hash const& prev, LedgerHeaderHistoryEntry const& curr)
 
 VerifyLedgerChainWork::VerifyLedgerChainWork(
     Application& app, WorkParent& parent, TmpDir const& downloadDir,
-    LedgerRange range, LedgerHeaderHistoryEntry& firstVerified,
+    uint32_t checkpoint, LedgerRange range,
+    LedgerHeaderHistoryEntry& lastVerified,
+    LedgerHeaderHistoryEntry& verifiedAhead,
     LedgerHeaderHistoryEntry const& lastClosedLedger, optional<Hash> scpHash)
     : Work(app, parent, "verify-ledger-chain")
     , mDownloadDir(downloadDir)
     , mRange(range)
-    , mCurrCheckpoint(
-          mApp.getHistoryManager().checkpointContainingLedger(mRange.last()))
-    , mFirstVerified(firstVerified)
+    , mCheckpoint(checkpoint)
+    , mFirstVerified{lastVerified}
+    , mVerifiedAhead{verifiedAhead}
+    , mPreviousVerifiedAhead{verifiedAhead}
     , mLastClosedLedger(lastClosedLedger)
     , mTrustedHash(scpHash)
     , mVerifyLedgerSuccessOld(app.getMetrics().NewMeter(
@@ -95,7 +98,7 @@ VerifyLedgerChainWork::getStatus() const
     {
         std::string task = "verifying checkpoint";
         return fmtProgress(mApp, task, mRange.first(), mRange.last(),
-                           (mRange.last() - mCurrCheckpoint));
+                           (mRange.last() - mCheckpoint));
     }
     return Work::getStatus();
 }
@@ -103,15 +106,15 @@ VerifyLedgerChainWork::getStatus() const
 void
 VerifyLedgerChainWork::onReset()
 {
-    // Note that mFirstVerified is not reset here, since it is set
-    // in the end of verification, where work wouldn't fail
-
-    if (mVerifiedAhead.header.ledgerSeq != 0)
+    if (mFirstVerified.header.ledgerSeq != 0)
     {
-        mVerifiedAhead = {};
+        mFirstVerified = {};
     }
-    mCurrCheckpoint =
-        mApp.getHistoryManager().checkpointContainingLedger(mRange.last());
+
+    if (mVerifiedAhead.header.ledgerSeq != mPreviousVerifiedAhead.header.ledgerSeq)
+    {
+        mVerifiedAhead = mPreviousVerifiedAhead;
+    }
 }
 
 HistoryManager::LedgerVerificationStatus
@@ -122,9 +125,11 @@ VerifyLedgerChainWork::verifyHistoryOfSingleCheckpoint()
     // Once the end of the range is reached, ensure that the chain agrees with
     // trusted hash passed in. If LCL is reached, verify that it agrees with
     // the chain.
+    // Additionally, if we are in the of the chain, and reached the end of
+    // current checkpoint, ensure it agrees with mFirstVerified (checkpoint
+    // ahead of us that has already been verified)
 
-    FileTransferInfo ft(mDownloadDir, HISTORY_FILE_TYPE_LEDGER,
-                        mCurrCheckpoint);
+    FileTransferInfo ft(mDownloadDir, HISTORY_FILE_TYPE_LEDGER, mCheckpoint);
     XDRInputFileStream hdrIn;
     hdrIn.open(ft.localPath_nogz());
 
@@ -134,9 +139,9 @@ VerifyLedgerChainWork::verifyHistoryOfSingleCheckpoint()
 
     CLOG(DEBUG, "History") << "Verifying ledger headers from "
                            << ft.localPath_nogz() << " for checkpoint "
-                           << mCurrCheckpoint;
+                           << mCheckpoint;
 
-    auto nextCheckpointFirstLedger = mVerifiedAhead;
+    mPreviousVerifiedAhead = mVerifiedAhead;
     while (hdrIn && hdrIn.readOne(curr))
     {
         if (curr.header.ledgerVersion > Config::CURRENT_LEDGER_PROTOCOL_VERSION)
@@ -156,7 +161,7 @@ VerifyLedgerChainWork::verifyHistoryOfSingleCheckpoint()
         }
 
         // Remember first ledger in the checkpoint that will be used by the next
-        // checkpoint
+        // checkpoint (unless we've reached the last checkpoint)
         if (beginCheckpoint)
         {
             mVerifiedAhead = curr;
@@ -201,7 +206,7 @@ VerifyLedgerChainWork::verifyHistoryOfSingleCheckpoint()
         }
     }
 
-    if (curr.header.ledgerSeq != mCurrCheckpoint &&
+    if (curr.header.ledgerSeq != mCheckpoint &&
         curr.header.ledgerSeq != mRange.last())
     {
         // We can end at mCurrCheckpoint if history chain file was valid
@@ -209,7 +214,7 @@ VerifyLedgerChainWork::verifyHistoryOfSingleCheckpoint()
         // reached last ledger that we should check.
         // Any other ledger here means that file is corrupted.
         CLOG(ERROR, "History") << "History chain did not end with "
-                               << mCurrCheckpoint << " or " << mRange.last();
+                               << mCheckpoint << " or " << mRange.last();
         mVerifyLedgerChainFailureEnd.Mark();
         return HistoryManager::VERIFY_STATUS_ERR_MISSING_ENTRIES;
     }
@@ -218,7 +223,7 @@ VerifyLedgerChainWork::verifyHistoryOfSingleCheckpoint()
     {
         // Verifying the most recent checkpoint means no other checkpoints are
         // verified yet
-        assert(nextCheckpointFirstLedger.header.ledgerSeq == 0);
+        assert(mPreviousVerifiedAhead.header.ledgerSeq == 0);
         auto verifyTrustedHash = verifyAgainstTrustedHash(curr);
         if (verifyTrustedHash != HistoryManager::VERIFY_STATUS_OK)
         {
@@ -226,20 +231,20 @@ VerifyLedgerChainWork::verifyHistoryOfSingleCheckpoint()
             return verifyTrustedHash;
         }
     }
-    else if (curr.header.ledgerSeq == mCurrCheckpoint)
+    else if (curr.header.ledgerSeq == mCheckpoint)
     {
         // If we reached the end of checkpoint, ensure there's a previously
         // verified checkpoint to compare against
-        assert(nextCheckpointFirstLedger.header.ledgerSeq != 0);
+        assert(mPreviousVerifiedAhead.header.ledgerSeq != 0);
 
         // Last ledger in the checkpoint needs to agree with first ledger of a
         // checkpoint ahead of it
         CLOG(INFO, "History")
             << "Verifying ledger " << LedgerManager::ledgerAbbrev(curr)
             << " against previously verified "
-            << LedgerManager::ledgerAbbrev(nextCheckpointFirstLedger);
+            << LedgerManager::ledgerAbbrev(mPreviousVerifiedAhead);
         auto linkNextCheckpoint =
-            verifyLedgerHistoryLink(curr.hash, nextCheckpointFirstLedger);
+            verifyLedgerHistoryLink(curr.hash, mPreviousVerifiedAhead);
         if (linkNextCheckpoint != HistoryManager::VERIFY_STATUS_OK)
         {
             mVerifyLedgerChainFailure.Mark();
@@ -248,9 +253,10 @@ VerifyLedgerChainWork::verifyHistoryOfSingleCheckpoint()
     }
 
     mVerifyLedgerChainSuccess.Mark();
-    if (mCurrCheckpoint ==
+    if (mCheckpoint ==
         mApp.getHistoryManager().checkpointContainingLedger(mRange.first()))
     {
+        // Last checkpoint
         mFirstVerified = curr;
     }
 
@@ -286,27 +292,15 @@ VerifyLedgerChainWork::onSuccess()
 {
     mApp.getCatchupManager().logAndUpdateCatchupStatus(true);
 
-    if (mCurrCheckpoint <
-        mApp.getHistoryManager().checkpointContainingLedger(mRange.first()))
-    {
-        throw std::runtime_error(
-            "Verification undershot first ledger in the range.");
-    }
-
     // This is in onSuccess rather than onRun, so we can force a FAILURE_RAISE.
     switch (verifyHistoryOfSingleCheckpoint())
     {
     case HistoryManager::VERIFY_STATUS_OK:
-        if (mCurrCheckpoint ==
-            mApp.getHistoryManager().checkpointContainingLedger(mRange.first()))
-        {
-            CLOG(INFO, "History") << "History chain [" << mRange.first() << ","
-                                  << mRange.last() << "] verified";
-            return WORK_SUCCESS;
-        }
-
-        mCurrCheckpoint -= mApp.getHistoryManager().getCheckpointFrequency();
-        return WORK_RUNNING;
+        CLOG(INFO, "History")
+            << "History checkpoint ["
+            << mCheckpoint - mApp.getHistoryManager().getCheckpointFrequency() + 1
+            << "," << mCheckpoint << "] verified";
+        return WORK_SUCCESS;
     case HistoryManager::VERIFY_STATUS_ERR_BAD_LEDGER_VERSION:
         CLOG(ERROR, "History") << "Catchup material failed verification - "
                                   "unsupported ledger version, propagating "

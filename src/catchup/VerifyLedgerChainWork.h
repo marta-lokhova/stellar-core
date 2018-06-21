@@ -23,15 +23,16 @@ class VerifyLedgerChainWork : public Work
 {
     TmpDir const& mDownloadDir;
     LedgerRange mRange;
-    uint32_t mCurrCheckpoint;
-    LedgerHeaderHistoryEntry& mFirstVerified;
-    LedgerHeaderHistoryEntry const& mLastClosedLedger;
-    optional<Hash> mTrustedHash;
+    uint32_t mCheckpoint;
 
     // First ledger of last verified checkpoint. Needed for a checkpoint that
     // is being verified: last ledger in current checkpoint must agree with
-    // mVerifiedAhead
-    LedgerHeaderHistoryEntry mVerifiedAhead{};
+    // mFirstVerified
+    LedgerHeaderHistoryEntry& mFirstVerified;
+    LedgerHeaderHistoryEntry& mVerifiedAhead;
+    LedgerHeaderHistoryEntry mPreviousVerifiedAhead;
+    LedgerHeaderHistoryEntry const& mLastClosedLedger;
+    optional<Hash> mTrustedHash;
 
     medida::Meter& mVerifyLedgerSuccessOld;
     medida::Meter& mVerifyLedgerSuccess;
@@ -49,8 +50,10 @@ class VerifyLedgerChainWork : public Work
 
   public:
     VerifyLedgerChainWork(Application& app, WorkParent& parent,
-                          TmpDir const& downloadDir, LedgerRange range,
+                          TmpDir const& downloadDir, uint32_t checkpoint,
+                          LedgerRange range,
                           LedgerHeaderHistoryEntry& firstVerified,
+                          LedgerHeaderHistoryEntry& verifiedAhead,
                           LedgerHeaderHistoryEntry const& lastClosedLedger,
                           optional<Hash> scpHash);
     ~VerifyLedgerChainWork() override;

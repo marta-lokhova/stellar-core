@@ -3,6 +3,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 #pragma once
 
+#include "BatchableWork.h"
 #include "work/Work.h"
 
 namespace stellar
@@ -17,6 +18,9 @@ class BatchWork : public Work
        they'd like to perform. This class only acts as a commander, adding more
        work if it has bandwidth.
     **/
+    void handleNewWork(bool isFirst);
+    std::shared_ptr<BatchableWork> mLastAssignedWork{nullptr};
+
   public:
     BatchWork(Application& app, WorkParent& parent, std::string name);
     ~BatchWork() override;
@@ -28,7 +32,7 @@ class BatchWork : public Work
 
   protected:
     virtual bool hasNext() = 0;
-    virtual std::string yieldMoreWork() = 0;
+    virtual std::shared_ptr<BatchableWork> yieldMoreWork() = 0;
     virtual void resetIter() = 0;
 };
 }
