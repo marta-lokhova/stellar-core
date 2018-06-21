@@ -73,7 +73,7 @@ LedgerChainVerificationSnapshotWork::onSuccess()
         mSnapshotData =  BatchableWorkResultData{mVerifiedAhead};
         if (mDependentSnapshot)
         {
-            CLOG(INFO, "History")
+            CLOG(DEBUG, "History")
                 << "Checkpoint " << mCheckpoint
                 << " completed verification: Notifying dependent work";
             notifyCompleted(mSnapshotData);
@@ -88,7 +88,7 @@ LedgerChainVerificationSnapshotWork::onSuccess()
                     "No dependent work found, even though the "
                     "end of the chain was not reached.");
             }
-            CLOG(INFO, "History")
+            CLOG(DEBUG, "History")
                 << "End of ledger chain: No dependent work to notify";
         }
     }
@@ -102,7 +102,7 @@ LedgerChainVerificationSnapshotWork::unblockWork(
 {
     auto verified = data.mVerifiedAheadLedger;
 
-    CLOG(INFO, "History")
+    CLOG(DEBUG, "History")
         << "Snapshot for checkpoint " << mCheckpoint
         << " got notified by finished blocking work. Starting verify...";
 

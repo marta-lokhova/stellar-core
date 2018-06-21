@@ -53,7 +53,7 @@ BatchWork::notify(std::string const& child)
     {
         if (childIt->second->getState() == WORK_SUCCESS)
         {
-            CLOG(INFO, "History") << "Finished child work " << childIt->first;
+            CLOG(DEBUG, "History") << "Finished child work " << childIt->first;
             childIt = mChildren.erase(childIt);
             if (hasNext())
             {
