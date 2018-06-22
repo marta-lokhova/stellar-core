@@ -8,9 +8,9 @@
 #include "history/HistoryArchiveManager.h"
 #include "history/HistoryManager.h"
 #include "history/HistoryTestsUtils.h"
+#include "historywork/DownloadVerifyLedgersWork.h"
 #include "historywork/GetHistoryArchiveStateWork.h"
 #include "historywork/GunzipFileWork.h"
-#include "historywork/DownloadVerifyLedgersWork.h"
 #include "historywork/GzipFileWork.h"
 #include "historywork/PutHistoryArchiveStateWork.h"
 #include "ledger/LedgerManager.h"
@@ -321,53 +321,219 @@ TEST_CASE("Work batching", "[batching]")
     REQUIRE(verify->getState() == Work::WORK_SUCCESS);
 }
 
-class TestDownloadVerifyLedgersWork : public DownloadVerifyLedgersWork
+class TestGatedBatchableWork : public BatchableWork
 {
-public:
-    uint32_t mPrevious{0};
-    TestDownloadVerifyLedgersWork(Application& app, WorkParent& parent,
-                                  LedgerRange range,
-                                  TmpDir const& downloadDir, LedgerHeaderHistoryEntry const& lcl,
-                                  LedgerHeaderHistoryEntry& firstVerified, optional<Hash> scpHash)
-    : DownloadVerifyLedgersWork(app, parent, range, downloadDir, lcl, firstVerified, scpHash)
+  public:
+    bool isReady{false};
+    TestGatedBatchableWork(Application& app, WorkParent& parent,
+                           std::string const& uniqueName)
+        : BatchableWork(app, parent, uniqueName)
     {
+        isReady = uniqueName == "child-0";
+    }
+
+    void
+    unblockWork(BatchableWorkResultData const& data) override
+    {
+        isReady = true;
+    }
+
+    Work::State
+    onSuccess() override
+    {
+        if (isReady)
+        {
+            notifyCompleted();
+            return Work::WORK_SUCCESS;
+        }
+        return Work::WORK_PENDING;
+    }
+};
+
+class TestBatchWorkGated : public TestBatchWork
+{
+    std::deque<std::shared_ptr<BatchableWork>> mBatchableDependents;
+
+  public:
+    TestBatchWorkGated(Application& app, WorkParent& parent,
+                       std::string const& uniqueName)
+        : TestBatchWork(app, parent, uniqueName)
+    {
+    }
+
+    std::shared_ptr<BatchableWork>
+    yieldMoreWork() override
+    {
+        auto newWork = addWork<TestGatedBatchableWork>(
+            fmt::format("child-{:d}", mCount++));
+        mBatchableDependents.push_back(newWork);
+        return newWork;
     }
 
     void
     notify(std::string const& child) override
     {
-        if (mPrevious != 0)
+        if (!mBatchableDependents.empty())
         {
-            auto next = mPrevious - mApp.getHistoryManager().getCheckpointFrequency();
-            REQUIRE("checkpoint-download-verify-" + std::to_string(next) == child);
-            mPrevious = next;
+            auto blockingWork = mBatchableDependents.front();
+            // Ensure work succeeds in correct order
+            REQUIRE(blockingWork->getUniqueName() == child);
+            REQUIRE(blockingWork->isDone());
+            auto dependent = blockingWork->getDependent();
+            mBatchableDependents.pop_front();
+            if (dependent)
+            {
+                REQUIRE_FALSE(dependent->isDone());
+                REQUIRE(mBatchableDependents.front()->getUniqueName() ==
+                        dependent->getUniqueName());
+            }
         }
-        else
-        {
-            mPrevious = mCheckpointRange.last();
-        }
-
-        DownloadVerifyLedgersWork::notify(child);
+        TestBatchWork::notify(child);
     }
 };
 
-//TEST_CASE("Ledger verification reversed", "[ledgerchain]")
-//{
-//    Config cfg(getTestConfig(0, Config::TESTDB_ON_DISK_SQLITE));
-//    VirtualClock clock;
-//    Application::pointer app = createTestApplication(clock, cfg);
-//    auto& wm = app->getWorkManager();
-//
-//    auto verify = wm.addWork<TestDownloadVerifyLedgersWork>("test-batch");
-//    wm.advanceChildren();
-//    while (!clock.getIOService().stopped() && !wm.allChildrenDone())
-//    {
-//        clock.crank(true);
-//        REQUIRE(verify->getChildren().size() <=
-//                app->getConfig().MAX_CONCURRENT_SUBPROCESSES);
-//    }
-//    REQUIRE(verify->getState() == Work::WORK_SUCCESS);
-//}
+TEST_CASE("Gated work batching", "[batching][gatedbatching]")
+{
+    Config cfg(getTestConfig(0));
+    VirtualClock clock;
+    Application::pointer app = createTestApplication(clock, cfg);
+    auto& wm = app->getWorkManager();
+
+    auto gatedBatching = wm.executeWork<TestBatchWorkGated>("test-gated-batch");
+    REQUIRE(gatedBatching->getState() == Work::WORK_SUCCESS);
+}
+
+TEST_CASE("Ledger chain verification",
+          "[batching][gatedbatching][ledgerheaderverification]")
+{
+    Config cfg(getTestConfig(0));
+    VirtualClock clock;
+    auto cg = std::make_shared<TmpDirHistoryConfigurator>();
+    cg->configure(cfg, true);
+    Application::pointer app = createTestApplication(clock, cfg);
+
+    CHECK(app->getHistoryArchiveManager().initializeHistoryArchive("test"));
+    LedgerRange ledgerRange{63, 191};
+    CheckpointRange checkpointRange{ledgerRange, app->getHistoryManager()};
+
+    auto tempDir = app->getTmpDirManager().tmpDir("tmp-bucket-generator");
+    auto ledgerChainGenerator = TestLedgerChainGenerator{
+        *app, app->getHistoryArchiveManager().getHistoryArchive("test"),
+        checkpointRange, tempDir};
+
+    LedgerHeaderHistoryEntry firstVerified{};
+    auto& wm = app->getWorkManager();
+    auto tmpDir = std::make_unique<TmpDir>(
+        app->getTmpDirManager().tmpDir("ledger-chain-snap-test"));
+
+    LedgerHeaderHistoryEntry lcl, last;
+    std::tie(lcl, last) = ledgerChainGenerator.writeTmpLedgersFiles();
+    auto ledgerVerify = wm.executeWork<DownloadVerifyLedgersWork>(
+        ledgerRange, *tmpDir, lcl, firstVerified, nullptr);
+    REQUIRE(ledgerVerify->getState() == Work::WORK_SUCCESS);
+}
+
+TEST_CASE("Checkpoint verification", "[ledgerheaderverification]")
+{
+    // This test focuses on edge cases during a single checkpoint verification
+
+    Config cfg(getTestConfig(0));
+    VirtualClock clock;
+    auto cg = std::make_shared<TmpDirHistoryConfigurator>();
+    cg->configure(cfg, true);
+    Application::pointer app = createTestApplication(clock, cfg);
+    CHECK(app->getHistoryArchiveManager().initializeHistoryArchive("test"));
+
+    auto tmpDir = app->getTmpDirManager().tmpDir("ledger-chain-snap-test");
+    auto& wm = app->getWorkManager();
+
+    LedgerHeaderHistoryEntry firstVerified{};
+    LedgerHeaderHistoryEntry verifiedAhead{};
+
+    LedgerRange ledgerRange{64, 127};
+    CheckpointRange checkpointRange{ledgerRange, app->getHistoryManager()};
+    auto ledgerChainGenerator = TestLedgerChainGenerator{
+        *app, app->getHistoryArchiveManager().getHistoryArchive("test"),
+        checkpointRange, tmpDir};
+
+    auto checkExpectedBehavior = [&](Work::State expectedState,
+                                     LedgerHeaderHistoryEntry lcl,
+                                     Hash trustedHash) {
+        auto w = wm.executeWork<VerifyLedgerChainWork>(
+            tmpDir, checkpointRange.last(), ledgerRange, firstVerified,
+            verifiedAhead, lcl, make_optional<Hash>(trustedHash));
+        REQUIRE(expectedState == w->getState());
+    };
+
+    LedgerHeaderHistoryEntry lcl, last;
+    SECTION("fully valid")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.writeTmpLedgersFiles(
+            HistoryManager::VERIFY_STATUS_OK);
+        checkExpectedBehavior(Work::WORK_SUCCESS, lcl, last.hash);
+    }
+    SECTION("invalid link due to bad hash")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.writeTmpLedgersFiles(
+            HistoryManager::VERIFY_STATUS_ERR_BAD_HASH);
+        checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
+    }
+    SECTION("invalid ledger version")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.writeTmpLedgersFiles(
+            HistoryManager::VERIFY_STATUS_ERR_BAD_LEDGER_VERSION);
+        checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
+    }
+    SECTION("overshot")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.writeTmpLedgersFiles(
+            HistoryManager::VERIFY_STATUS_ERR_OVERSHOT);
+        checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
+    }
+    SECTION("undershot")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.writeTmpLedgersFiles(
+            HistoryManager::VERIFY_STATUS_ERR_UNDERSHOT);
+        checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
+    }
+    SECTION("missing entries")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.writeTmpLedgersFiles(
+            HistoryManager::VERIFY_STATUS_ERR_MISSING_ENTRIES);
+        checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
+    }
+    SECTION("chain does not agree with LCL")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.writeTmpLedgersFiles(
+            HistoryManager::VERIFY_STATUS_OK);
+        lcl.hash = HashUtils::random();
+
+        checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
+    }
+    SECTION("chain does not agree with trusted hash")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.writeTmpLedgersFiles(
+            HistoryManager::VERIFY_STATUS_OK);
+        checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl,
+                              HashUtils::random());
+    }
+    SECTION("first checkpoint valid")
+    {
+        // Test specifically first checkpoint ([1, 63])
+        LedgerRange ledgerRangeFirstCheckpoint{1, 63};
+        CheckpointRange firstCheckpointRange{ledgerRangeFirstCheckpoint,
+                                             app->getHistoryManager()};
+
+        auto lcGen = TestLedgerChainGenerator{
+            *app, app->getHistoryArchiveManager().getHistoryArchive("test"),
+            firstCheckpointRange, tmpDir};
+        std::tie(lcl, last) =
+            lcGen.writeTmpLedgersFiles(HistoryManager::VERIFY_STATUS_OK);
+        auto w = wm.addWork<VerifyLedgerChainWork>(
+            tmpDir, firstCheckpointRange.last(), ledgerRangeFirstCheckpoint,
+            firstVerified, verifiedAhead, lcl, make_optional<Hash>(last.hash));
+    }
+}
 
 TEST_CASE("History prefix catchup", "[history][historycatchup][prefixcatchup]")
 {

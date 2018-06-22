@@ -13,7 +13,7 @@
 
 namespace stellar
 {
-
+// TODO update VS files
 DownloadVerifyLedgersWork::DownloadVerifyLedgersWork(
     Application& app, WorkParent& parent, LedgerRange range,
     TmpDir const& downloadDir, LedgerHeaderHistoryEntry const& lcl,
@@ -94,6 +94,7 @@ DownloadVerifyLedgersWork::yieldMoreWork()
     return verifySnapshot;
 }
 
+    // TODO use throw instead of assert
 void
 DownloadVerifyLedgersWork::notify(std::string const& child)
 {

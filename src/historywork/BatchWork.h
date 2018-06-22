@@ -19,7 +19,7 @@ class BatchWork : public Work
        work if it has bandwidth.
     **/
     void handleNewWork(bool isFirst);
-    std::shared_ptr<BatchableWork> mLastAssignedWork{nullptr};
+    std::shared_ptr<BatchableWork> mLastAssignedWork;
 
   public:
     BatchWork(Application& app, WorkParent& parent, std::string name);

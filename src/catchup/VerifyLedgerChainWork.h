@@ -44,9 +44,9 @@ class VerifyLedgerChainWork : public Work
     medida::Meter& mVerifyLedgerChainFailure;
     medida::Meter& mVerifyLedgerChainFailureEnd;
 
-    HistoryManager::LedgerVerificationStatus verifyHistoryOfSingleCheckpoint();
     HistoryManager::LedgerVerificationStatus
     verifyAgainstTrustedHash(LedgerHeaderHistoryEntry& ledger);
+    HistoryManager::LedgerVerificationStatus verifyHistoryOfSingleCheckpoint();
 
   public:
     VerifyLedgerChainWork(Application& app, WorkParent& parent,

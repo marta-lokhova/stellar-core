@@ -26,6 +26,8 @@ BatchWork::onReset()
 {
     resetIter();
     clearChildren();
+    mLastAssignedWork.reset();
+
     size_t nChildren = mApp.getConfig().MAX_CONCURRENT_SUBPROCESSES;
 
     bool isFirst = true;
@@ -42,13 +44,11 @@ BatchWork::notify(std::string const& child)
     auto i = mChildren.find(child);
     if (i == mChildren.end())
     {
-        CLOG(WARNING, "Work")
-            << "BatchWork notified by unknown child " << child;
+        CLOG(ERROR, "Work") << "BatchWork notified by unknown child " << child;
         return;
     }
 
     assert(i->second);
-
     for (auto childIt = mChildren.begin(); childIt != mChildren.end();)
     {
         if (childIt->second->getState() == WORK_SUCCESS)
@@ -87,7 +87,7 @@ BatchWork::handleNewWork(bool isFirst)
         if (mLastAssignedWork->getState() == Work::WORK_SUCCESS)
         {
 
-            mLastAssignedWork->notifyCompleted(mLastAssignedWork->getSnapshotData());
+            mLastAssignedWork->notifyCompleted();
         }
     }
 

@@ -48,21 +48,24 @@ class BatchableWork : public Work
     };
 
     virtual void
-    notifyCompleted(BatchableWorkResultData const& data)
+    notifyCompleted()
     {
-        mDependentSnapshot->unblockWork(data);
+        if (mDependentSnapshot)
+        {
+            mDependentSnapshot->unblockWork(mSnapshotData);
+        }
     };
 
-    // Set work as ready to proceed
+    // Each subclass decides how to proceed
     virtual void
     unblockWork(BatchableWorkResultData const& data)
     {
     };
 
-    BatchableWorkResultData const&
-    getSnapshotData()
+    std::shared_ptr<BatchableWork>
+    getDependent()
     {
-        return mSnapshotData;
+        return mDependentSnapshot;
     }
 
 };

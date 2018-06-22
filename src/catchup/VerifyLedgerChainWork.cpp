@@ -111,7 +111,8 @@ VerifyLedgerChainWork::onReset()
         mFirstVerified = {};
     }
 
-    if (mVerifiedAhead.header.ledgerSeq != mPreviousVerifiedAhead.header.ledgerSeq)
+    if (mVerifiedAhead.header.ledgerSeq !=
+        mPreviousVerifiedAhead.header.ledgerSeq)
     {
         mVerifiedAhead = mPreviousVerifiedAhead;
     }
@@ -155,6 +156,11 @@ VerifyLedgerChainWork::verifyHistoryOfSingleCheckpoint()
         {
             if (curr.hash != mLastClosedLedger.hash)
             {
+                CLOG(ERROR, "History")
+                    << "Bad ledger-header history entry: claimed ledger "
+                    << LedgerManager::ledgerAbbrev(curr)
+                    << " does not agree with LCL "
+                    << LedgerManager::ledgerAbbrev(mLastClosedLedger);
                 mVerifyLedgerFailureLink.Mark();
                 return HistoryManager::VERIFY_STATUS_ERR_BAD_HASH;
             }
@@ -298,7 +304,8 @@ VerifyLedgerChainWork::onSuccess()
     case HistoryManager::VERIFY_STATUS_OK:
         CLOG(INFO, "History")
             << "History checkpoint ["
-            << mCheckpoint - mApp.getHistoryManager().getCheckpointFrequency() + 1
+            << mCheckpoint - mApp.getHistoryManager().getCheckpointFrequency() +
+                   1
             << "," << mCheckpoint << "] verified";
         return WORK_SUCCESS;
     case HistoryManager::VERIFY_STATUS_ERR_BAD_LEDGER_VERSION:
@@ -313,6 +320,10 @@ VerifyLedgerChainWork::onSuccess()
     case HistoryManager::VERIFY_STATUS_ERR_OVERSHOT:
         CLOG(ERROR, "History") << "Catchup material failed verification - "
                                   "overshot, propagating failure";
+        return WORK_FAILURE_FATAL;
+    case HistoryManager::VERIFY_STATUS_ERR_UNDERSHOT:
+        CLOG(ERROR, "History") << "Catchup material failed verification - "
+                                  "undershot, propagating failure";
         return WORK_FAILURE_FATAL;
     case HistoryManager::VERIFY_STATUS_ERR_MISSING_ENTRIES:
         CLOG(ERROR, "History") << "Catchup material failed verification - "

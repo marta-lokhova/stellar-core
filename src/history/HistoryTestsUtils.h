@@ -4,20 +4,25 @@
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
+#include "FileTransferInfo.h"
 #include "bucket/BucketList.h"
+#include "catchup/VerifyLedgerChainWork.h"
 #include "crypto/Hex.h"
 #include "herder/LedgerCloseData.h"
 #include "history/HistoryArchive.h"
 #include "historywork/GzipFileWork.h"
 #include "historywork/MakeRemoteDirWork.h"
 #include "historywork/PutRemoteFileWork.h"
+#include "ledger/LedgerRange.h"
 #include "ledger/LedgerTestUtils.h"
 #include "main/Application.h"
 #include "main/Config.h"
 #include "util/Timer.h"
 #include "util/TmpDir.h"
 
-#include <bucket/BucketOutputIterator.h>
+#include "bucket/BucketOutputIterator.h"
+#include "ledger/CheckpointRange.h"
+#include <lib/catch.hpp>
 #include <random>
 
 namespace stellar
@@ -89,6 +94,27 @@ class TestBucketGenerator
 
     std::string generateBucket(
         ArchiveFileState desiredState = ArchiveFileState::CONTENTS_AND_HASH_OK);
+};
+
+class TestLedgerChainGenerator
+{
+    // TODO refactor with TestBucketGenerator
+    Application& mApp;
+    CheckpointRange mCheckpointRange;
+    TmpDir const& mTmpDir;
+    std::shared_ptr<HistoryArchive> mArchive;
+
+  public:
+    TestLedgerChainGenerator(Application& app,
+                             std::shared_ptr<HistoryArchive> archive,
+                             CheckpointRange range, const TmpDir& tmpDir);
+    std::pair<LedgerHeaderHistoryEntry, LedgerHeaderHistoryEntry>
+    writeTmpLedgerSnapFile(uint32_t currCheckpoint, Hash prevHash,
+                           HistoryManager::LedgerVerificationStatus state =
+                               HistoryManager::VERIFY_STATUS_OK);
+    std::pair<LedgerHeaderHistoryEntry, LedgerHeaderHistoryEntry>
+    writeTmpLedgersFiles(HistoryManager::LedgerVerificationStatus state =
+                             HistoryManager::VERIFY_STATUS_OK);
 };
 
 struct CatchupMetrics

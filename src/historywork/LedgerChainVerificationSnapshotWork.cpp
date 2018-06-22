@@ -6,7 +6,6 @@
 #include "history/FileTransferInfo.h"
 #include "historywork/Progress.h"
 #include "ledger/LedgerManager.h"
-#include "main/Application.h"
 
 namespace stellar
 {
@@ -70,13 +69,13 @@ LedgerChainVerificationSnapshotWork::onSuccess()
     }
     else
     {
-        mSnapshotData =  BatchableWorkResultData{mVerifiedAhead};
+        mSnapshotData = BatchableWorkResultData{mVerifiedAhead};
         if (mDependentSnapshot)
         {
             CLOG(DEBUG, "History")
                 << "Checkpoint " << mCheckpoint
                 << " completed verification: Notifying dependent work";
-            notifyCompleted(mSnapshotData);
+            notifyCompleted();
         }
         else
         {
@@ -98,7 +97,7 @@ LedgerChainVerificationSnapshotWork::onSuccess()
 
 void
 LedgerChainVerificationSnapshotWork::unblockWork(
-        BatchableWorkResultData const& data)
+    BatchableWorkResultData const& data)
 {
     auto verified = data.mVerifiedAheadLedger;
 
@@ -106,17 +105,41 @@ LedgerChainVerificationSnapshotWork::unblockWork(
         << "Snapshot for checkpoint " << mCheckpoint
         << " got notified by finished blocking work. Starting verify...";
 
-    // Ensure work hasn't been triggered already
-    assert(!mVerifyWork);
-    assert(!isReady());
-    assert(verified.header.ledgerSeq != 0);
+    if (mVerifyWork || isReady())
+    {
+        throw std::runtime_error(
+            fmt::format("Verify work for {:s} checkpoint has already been set",
+                        mCheckpoint));
+    }
+    if (verified.header.ledgerSeq == 0)
+    {
+        throw std::runtime_error(
+            fmt::format("Blocking work for checkpoint {:s} passed invalid data",
+                        mCheckpoint));
+    }
 
     mVerifiedAhead = verified;
 
-    // Download MUST complete before triggering verify
-    if (mDownloadWork && mDownloadWork->getState() == Work::WORK_SUCCESS)
+    if (mDownloadWork)
     {
-        verifyChain();
+        switch (mDownloadWork->getState())
+        {
+        case Work::WORK_SUCCESS:
+            // Download must complete before triggering verify.
+            verifyChain();
+            break;
+        case Work::WORK_PENDING:
+        case Work::WORK_RUNNING:
+            CLOG(DEBUG, "History") << "Download work for checkpoint "
+                                   << mCheckpoint << " is still in progress";
+            break;
+        default:
+            CLOG(WARNING, "History")
+                << "Download work for checkpoint " << mCheckpoint
+                << " failed, notification of blocking work completion will "
+                   "have no effect.";
+            break;
+        }
     }
 }
 
@@ -139,9 +162,7 @@ LedgerChainVerificationSnapshotWork::downloadChain()
 bool
 LedgerChainVerificationSnapshotWork::verifyChain()
 {
-    auto end = mApp.getHistoryManager().checkpointContainingLedger(
-                   mRange.last()) == mCheckpoint;
-    if (!isReady() && !end)
+    if (!isReady())
     {
         // Verify is still waiting on dependent work
         return false;
@@ -158,10 +179,16 @@ LedgerChainVerificationSnapshotWork::verifyChain()
         {
             return false;
         }
+        else
+        {
+            throw std::runtime_error(
+                fmt::format("Verify work for checkpoint {:s} already failed.",
+                            mCheckpoint));
+        }
     }
 
     // We want to provide the following guarantee: Verify work is only scheduled
-    // AFTER all work we depend on completes. This includes:
+    // AFTER all blocking work completes. This includes:
     // * Previous checkpoint verification
     // * Ledger header download
     CLOG(DEBUG, "History") << "Verifying checkpoint " << mCheckpoint;

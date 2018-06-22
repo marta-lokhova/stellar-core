@@ -8,6 +8,7 @@
 #include "historywork/BatchableWork.h"
 #include "historywork/GetAndUnzipRemoteFileWork.h"
 #include "historywork/LedgerChainVerificationSnapshotWork.h"
+#include "main/Application.h"
 
 namespace stellar
 {
@@ -62,8 +63,12 @@ class LedgerChainVerificationSnapshotWork : public BatchableWork
     isReady()
     {
         // When last verified is set that means checkpoint ahead of us completed
-        // verification
-        return mVerifiedAhead.header.ledgerSeq != 0;
+        // verification. The only time this does not apply is when we begin
+        // chain verification, and first ledger is instantly ready (it has
+        // nothing to wait for)
+        auto end = mApp.getHistoryManager().checkpointContainingLedger(
+                       mRange.last()) == mCheckpoint;
+        return mVerifiedAhead.header.ledgerSeq != 0 || end;
     }
 };
 }
