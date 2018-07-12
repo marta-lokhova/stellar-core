@@ -427,6 +427,122 @@ TEST_CASE("Gated work batching", "[batching][gatedbatching]")
     REQUIRE(gatedBatching->getState() == Work::WORK_SUCCESS);
 }
 
+TEST_CASE("Ledger chain verification",
+          "[batching][gatedbatching][ledgerheaderverification]")
+{
+    Config cfg(getTestConfig(0));
+    VirtualClock clock;
+    auto cg = std::make_shared<TmpDirHistoryConfigurator>();
+    cg->configure(cfg, true);
+    Application::pointer app = createTestApplication(clock, cfg);
+
+    CHECK(app->getHistoryArchiveManager().initializeHistoryArchive("test"));
+    LedgerRange ledgerRange{63, 703};
+    CheckpointRange checkpointRange{ledgerRange, app->getHistoryManager()};
+
+    auto tempDir = app->getTmpDirManager().tmpDir("tmp-bucket-generator");
+    auto ledgerChainGenerator = TestLedgerChainGenerator{
+            *app, app->getHistoryArchiveManager().getHistoryArchive("test"),
+            checkpointRange, tempDir};
+
+    LedgerHeaderHistoryEntry firstVerified{};
+    auto& wm = app->getWorkManager();
+    auto tmpDir = std::make_unique<TmpDir>(
+            app->getTmpDirManager().tmpDir("ledger-chain-snap-test"));
+
+    LedgerHeaderHistoryEntry lcl, last;
+    std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles();
+    auto ledgerVerify = wm.executeWork<DownloadVerifyLedgersWork>(
+            ledgerRange, *tmpDir, lcl, firstVerified, nullptr);
+    REQUIRE(ledgerVerify->getState() == Work::WORK_SUCCESS);
+}
+
+TEST_CASE("Checkpoint verification", "[ledgerheaderverification]")
+{
+    // This test focuses on edge cases during a single checkpoint verification
+
+    Config cfg(getTestConfig(0));
+    VirtualClock clock;
+    auto cg = std::make_shared<TmpDirHistoryConfigurator>();
+    cg->configure(cfg, true);
+    Application::pointer app = createTestApplication(clock, cfg);
+    CHECK(app->getHistoryArchiveManager().initializeHistoryArchive("test"));
+
+    auto tmpDir = app->getTmpDirManager().tmpDir("ledger-chain-snap-test");
+    auto& wm = app->getWorkManager();
+
+    LedgerHeaderHistoryEntry firstVerified{};
+    LedgerHeaderHistoryEntry verifiedAhead{};
+
+    LedgerRange ledgerRange{64, 127};
+    CheckpointRange checkpointRange{ledgerRange, app->getHistoryManager()};
+    auto ledgerChainGenerator = TestLedgerChainGenerator{
+            *app, app->getHistoryArchiveManager().getHistoryArchive("test"),
+            checkpointRange, tmpDir};
+
+    auto checkExpectedBehavior = [&](Work::State expectedState,
+                                     LedgerHeaderHistoryEntry lcl,
+                                     Hash trustedHash) {
+        auto w = wm.executeWork<VerifyLedgerChainWork>(
+                tmpDir, checkpointRange.last(), ledgerRange, firstVerified,
+                verifiedAhead, lcl, make_optional<Hash>(trustedHash));
+        REQUIRE(expectedState == w->getState());
+    };
+
+    LedgerHeaderHistoryEntry lcl, last;
+    SECTION("fully valid")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
+                HistoryManager::VERIFY_STATUS_OK);
+        checkExpectedBehavior(Work::WORK_SUCCESS, lcl, last.hash);
+    }
+    SECTION("invalid link due to bad hash")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
+                HistoryManager::VERIFY_STATUS_ERR_BAD_HASH);
+        checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
+    }
+    SECTION("invalid ledger version")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
+                HistoryManager::VERIFY_STATUS_ERR_BAD_LEDGER_VERSION);
+        checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
+    }
+    SECTION("overshot")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
+                HistoryManager::VERIFY_STATUS_ERR_OVERSHOT);
+        checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
+    }
+    SECTION("undershot")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
+                HistoryManager::VERIFY_STATUS_ERR_UNDERSHOT);
+        checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
+    }
+    SECTION("missing entries")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
+                HistoryManager::VERIFY_STATUS_ERR_MISSING_ENTRIES);
+        checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
+    }
+    SECTION("chain does not agree with LCL")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
+                HistoryManager::VERIFY_STATUS_OK);
+        lcl.hash = HashUtils::random();
+
+        checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
+    }
+    SECTION("chain does not agree with trusted hash")
+    {
+        std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
+                HistoryManager::VERIFY_STATUS_OK);
+        checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl,
+                              HashUtils::random());
+    }
+}
+
 TEST_CASE("History prefix catchup", "[history][historycatchup][prefixcatchup]")
 {
     CatchupSimulation catchupSimulation{};
