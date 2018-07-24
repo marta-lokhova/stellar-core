@@ -989,7 +989,7 @@ LedgerManagerImpl::applyTransactions(std::vector<TransactionFramePtr>& txs,
                                      LedgerDelta& ledgerDelta,
                                      TransactionResultSet& txResultSet)
 {
-    CLOG(DEBUG, "Tx") << "applyTransactions: ledger = "
+    CLOG(DEBUG, "Tx") << "verifyApplyTransactions: ledger = "
                       << mCurrentLedger->mHeader.ledgerSeq;
     int index = 0;
 

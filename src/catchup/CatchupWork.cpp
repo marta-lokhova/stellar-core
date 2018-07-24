@@ -19,6 +19,7 @@
 #include "main/Application.h"
 #include "test/TestPrinter.h"
 #include "util/Logging.h"
+#include <historywork/VerifyMaybeReplayTxsWork.h>
 #include <lib/util/format.h>
 
 namespace stellar
@@ -51,10 +52,6 @@ CatchupWork::getStatus() const
         if (mApplyTransactionsWork)
         {
             return mApplyTransactionsWork->getStatus();
-        }
-        else if (mDownloadTransactionsWork)
-        {
-            return mDownloadTransactionsWork->getStatus();
         }
         else if (mApplyBucketsWork)
         {
@@ -111,7 +108,6 @@ CatchupWork::onReset()
     mGetBucketsHistoryArchiveStateWork.reset();
     mDownloadBucketsWork.reset();
     mApplyBucketsWork.reset();
-    mDownloadTransactionsWork.reset();
     mApplyTransactionsWork.reset();
 
     mLastClosedLedgerAtReset =
@@ -141,7 +137,7 @@ CatchupWork::hasAnyLedgersToCatchupTo() const
 }
 
 bool
-CatchupWork::downloadVerifyLedgers(const LedgerRange &range)
+CatchupWork::downloadVerifyLedgers(const LedgerRange& range)
 {
     if (mDownloadVerifyLedgersWork)
     {
@@ -240,25 +236,7 @@ CatchupWork::applyBuckets()
 }
 
 bool
-CatchupWork::downloadTransactions(CheckpointRange const& range)
-{
-    if (mDownloadTransactionsWork)
-    {
-        assert(mDownloadTransactionsWork->getState() == WORK_SUCCESS);
-        return false;
-    }
-
-    CLOG(INFO, "History") << "Catchup downloading transactions for range ["
-                          << range.first() << ".." << range.last() << "]";
-
-    mDownloadTransactionsWork = addWork<BatchDownloadWork>(
-        range, HISTORY_FILE_TYPE_TRANSACTIONS, *mDownloadDir);
-
-    return true;
-}
-
-bool
-CatchupWork::applyTransactions(LedgerRange const& range)
+CatchupWork::verifyApplyTransactions(LedgerRange const& range)
 {
     if (mApplyTransactionsWork)
     {
@@ -269,8 +247,8 @@ CatchupWork::applyTransactions(LedgerRange const& range)
     CLOG(INFO, "History") << "Catchup applying transactions for range ["
                           << range.first() << ".." << range.last() << "]";
 
-    mApplyTransactionsWork =
-        addWork<ApplyLedgerChainWork>(*mDownloadDir, range, mLastApplied);
+    mApplyTransactionsWork = addWork<VerifyMaybeReplayTxsWork>(
+        range, *mDownloadDir, true, mLastApplied);
 
     return true;
 }
@@ -339,16 +317,13 @@ CatchupWork::onSuccess()
                               << checkpointRange.first() << " not needed";
     }
 
-    if (downloadTransactions(checkpointRange))
+    if (verifyApplyTransactions(ledgerRange))
     {
         return WORK_PENDING;
     }
 
-    if (applyTransactions(ledgerRange))
-    {
-        return WORK_PENDING;
-    }
-
+    // TODO set mLAstApplied correctly
+    //    mLastApplied = mApp.getLedgerManager().getLastClosedLedgerHeader();
     mProgressHandler({}, ProgressState::APPLIED_TRANSACTIONS, mLastApplied);
     mProgressHandler({}, ProgressState::FINISHED, mLastApplied);
     mApp.getCatchupManager().historyCaughtup();

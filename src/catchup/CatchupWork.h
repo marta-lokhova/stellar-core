@@ -118,7 +118,6 @@ class CatchupWork : public BucketDownloadWork
     std::shared_ptr<Work> mGetBucketsHistoryArchiveStateWork;
     std::shared_ptr<Work> mDownloadBucketsWork;
     std::shared_ptr<Work> mApplyBucketsWork;
-    std::shared_ptr<Work> mDownloadTransactionsWork;
     std::shared_ptr<Work> mApplyTransactionsWork;
     LedgerHeaderHistoryEntry mFirstVerified;
     LedgerHeaderHistoryEntry mLastApplied;
@@ -132,7 +131,6 @@ class CatchupWork : public BucketDownloadWork
     bool downloadBucketsHistoryArchiveState(uint32_t atCheckpoint);
     bool downloadBuckets();
     bool applyBuckets();
-    bool downloadTransactions(CheckpointRange const& range);
-    bool applyTransactions(LedgerRange const& range);
+    bool verifyApplyTransactions(LedgerRange const& range);
 };
 }
