@@ -11,6 +11,7 @@
 #include "util/Math.h"
 #include "util/types.h"
 #include <cctype>
+#include <herder/TxSetFrame.h>
 #include <string>
 #include <xdrpp/autocheck.h>
 
@@ -144,19 +145,22 @@ makeValid(DataEntry& d)
 }
 
 void
-makeValid(std::vector<LedgerHeaderHistoryEntry>& lhv, Hash initHash,
-          uint32_t initLedgerSeq,
+makeValid(std::vector<LedgerHeaderHistoryEntry>& lhv,
+          LedgerHeaderHistoryEntry firstLedger,
           HistoryManager::LedgerVerificationStatus state)
 {
-    auto randomIndex = rand_uniform<size_t>(0, lhv.size() - 1);
+    assert(lhv.size() > 1);
+    auto randomIndex = rand_uniform<size_t>(1, lhv.size() - 1);
+    auto prevHash = firstLedger.header.previousLedgerHash;
+    auto ledgerSeq = firstLedger.header.ledgerSeq;
 
     for (auto i = 0; i < lhv.size(); i++)
     {
         auto& lh = lhv[i];
 
         lh.header.ledgerVersion = Config::CURRENT_LEDGER_PROTOCOL_VERSION;
-        lh.header.previousLedgerHash = initHash;
-        lh.header.ledgerSeq = initLedgerSeq + 1;
+        lh.header.previousLedgerHash = prevHash;
+        lh.header.ledgerSeq = ledgerSeq;
 
         if (i == randomIndex && state != HistoryManager::VERIFY_STATUS_OK)
         {
@@ -169,7 +173,7 @@ makeValid(std::vector<LedgerHeaderHistoryEntry>& lhv, Hash initHash,
                 lh.header.previousLedgerHash = HashUtils::random();
                 break;
             case HistoryManager::VERIFY_STATUS_ERR_UNDERSHOT:
-                lh.header.ledgerSeq = initLedgerSeq - 1;
+                lh.header.ledgerSeq = ledgerSeq - 1;
                 break;
             case HistoryManager::VERIFY_STATUS_ERR_OVERSHOT:
                 lh.header.ledgerSeq += 1;
@@ -178,11 +182,17 @@ makeValid(std::vector<LedgerHeaderHistoryEntry>& lhv, Hash initHash,
                 break;
             }
         }
+
+        if (i == 0)
+        {
+            lh = firstLedger;
+        }
+
         LedgerHeaderFrame lFrame(lh.header);
         lh.hash = lFrame.getHash();
 
-        initHash = lh.hash;
-        initLedgerSeq = lh.header.ledgerSeq;
+        prevHash = lh.hash;
+        ledgerSeq = lh.header.ledgerSeq + 1;
     }
 
     if (state == HistoryManager::VERIFY_STATUS_ERR_MISSING_ENTRIES)
@@ -190,6 +200,18 @@ makeValid(std::vector<LedgerHeaderHistoryEntry>& lhv, Hash initHash,
         // Delete last element
         lhv.erase(lhv.begin() + lhv.size() - 1);
     }
+}
+
+void
+makeValid(LedgerHeaderHistoryEntry& lh, TransactionHistoryEntry& th,
+          Hash const& networkID)
+{
+    th.ledgerSeq = lh.header.ledgerSeq;
+    th.txSet.previousLedgerHash = lh.header.previousLedgerHash;
+
+    TxSetFrame txset{networkID, th.txSet};
+    auto const& hash = txset.getContentsHash();
+    lh.header.scpValue.txSetHash = hash;
 }
 
 static auto validLedgerEntryGenerator = autocheck::map(
@@ -313,14 +335,22 @@ generateValidDataEntries(size_t n)
 
 std::vector<LedgerHeaderHistoryEntry>
 generateLedgerHeadersForCheckpoint(
-    Hash initHash, uint32_t initLedgerSeq, uint32_t freq,
+    LedgerHeaderHistoryEntry firstLedger, uint32_t freq,
     HistoryManager::LedgerVerificationStatus state)
 {
     static auto vecgen =
         autocheck::list_of(autocheck::generator<LedgerHeaderHistoryEntry>());
     auto res = vecgen(freq);
-    makeValid(res, initHash, initLedgerSeq, state);
+    makeValid(res, firstLedger, state);
     return res;
+}
+
+std::vector<TransactionHistoryEntry>
+generateTransactionEntries(size_t n)
+{
+    static auto vecgen =
+        autocheck::list_of(autocheck::generator<TransactionHistoryEntry>());
+    return vecgen(n);
 }
 }
 }

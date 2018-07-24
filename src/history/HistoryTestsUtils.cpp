@@ -15,9 +15,9 @@
 #include "test/TestUtils.h"
 #include "test/TxTests.h"
 #include "test/test.h"
+#include "util/Math.h"
 #include "util/XDROperators.h"
 #include "work/WorkManager.h"
-
 #include <medida/metrics_registry.h>
 
 using namespace stellar;
@@ -181,7 +181,10 @@ TestBucketGenerator::generateBucket(TestBucketState state)
 TestLedgerChainGenerator::TestLedgerChainGenerator(
     Application& app, std::shared_ptr<HistoryArchive> archive,
     CheckpointRange range, TmpDir const& tmpDir)
-    : mApp{app}, mArchive{archive}, mCheckpointRange{range}, mTmpDir{tmpDir}
+    : TestFileUploader(app)
+    , mArchive{archive}
+    , mCheckpointRange{range}
+    , mTmpDir{tmpDir}
 {
 }
 
@@ -190,27 +193,38 @@ TestLedgerChainGenerator::makeOneLedgerFile(
     uint32_t currCheckpoint, Hash prevHash,
     HistoryManager::LedgerVerificationStatus state)
 {
-    // TODO  (mlokhava) this needs to be re-factored as it shares upload code
-    // with TestBucketGenerator
     auto initLedger =
         mApp.getHistoryManager().prevCheckpointLedger(currCheckpoint);
-    auto frequency = mApp.getHistoryManager().getCheckpointFrequency() - 1;
-    if (initLedger > 0)
+    auto frequency = mApp.getHistoryManager().getCheckpointFrequency();
+    if (initLedger == 0)
     {
-        initLedger -= 1;
-        frequency += 1;
+        initLedger = LedgerManager::GENESIS_LEDGER_SEQ;
+        frequency -= 1;
     }
 
-    LedgerHeaderHistoryEntry first, last;
-    std::vector<LedgerHeaderHistoryEntry> ledgerChain =
-        LedgerTestUtils::generateLedgerHeadersForCheckpoint(
-            prevHash, initLedger, frequency, state);
+    LedgerHeaderHistoryEntry first, last, lcl;
+    lcl.header.ledgerSeq = initLedger;
+    lcl.header.previousLedgerHash = prevHash;
 
-    FileTransferInfo ft{mTmpDir, HISTORY_FILE_TYPE_LEDGER, currCheckpoint};
+    std::vector<LedgerHeaderHistoryEntry> ledgerChain =
+        LedgerTestUtils::generateLedgerHeadersForCheckpoint(lcl, frequency,
+                                                            state);
+
+    writeAndUploadFile(ledgerChain, first, last, currCheckpoint);
+    return CheckpointEnds(first, last);
+}
+
+void
+TestLedgerChainGenerator::writeAndUploadFile(
+    std::vector<LedgerHeaderHistoryEntry> const& lhv,
+    LedgerHeaderHistoryEntry& first, LedgerHeaderHistoryEntry& last,
+    uint32_t checkpoint)
+{
+    FileTransferInfo ft{mTmpDir, HISTORY_FILE_TYPE_LEDGER, checkpoint};
     XDROutputFileStream ledgerOut;
     ledgerOut.open(ft.localPath_nogz());
 
-    for (auto& ledger : ledgerChain)
+    for (auto& ledger : lhv)
     {
         if (first.header.ledgerSeq == 0)
         {
@@ -220,25 +234,7 @@ TestLedgerChainGenerator::makeOneLedgerFile(
         last = ledger;
     }
     ledgerOut.close();
-
-    // Upload a checkpoint to the archive
-    {
-        auto& wm = mApp.getWorkManager();
-        auto archive =
-            mApp.getHistoryArchiveManager().getHistoryArchive("test");
-        auto put = wm.addWork<PutRemoteFileWork>(ft.localPath_gz(),
-                                                 ft.remoteName(), archive);
-        auto mkdir = put->addWork<MakeRemoteDirWork>(ft.remoteDir(), archive);
-        auto gzip = mkdir->addWork<GzipFileWork>(ft.localPath_nogz(), true);
-        gzip->advance();
-        while (!mApp.getClock().getIOService().stopped() &&
-               !wm.allChildrenDone())
-        {
-            mApp.getClock().crank(true);
-        }
-    }
-
-    return CheckpointEnds(first, last);
+    uploadFile(ft);
 }
 
 TestLedgerChainGenerator::CheckpointEnds
@@ -246,7 +242,7 @@ TestLedgerChainGenerator::makeLedgerChainFiles(
     HistoryManager::LedgerVerificationStatus state)
 {
     Hash hash = HashUtils::random();
-    LedgerHeaderHistoryEntry lcl;
+    LedgerHeaderHistoryEntry beginRange;
 
     LedgerHeaderHistoryEntry first, last;
     for (auto i = mCheckpointRange.first(); i <= mCheckpointRange.last();
@@ -261,13 +257,98 @@ TestLedgerChainGenerator::makeLedgerChainFiles(
         std::tie(first, last) = makeOneLedgerFile(i, hash, state);
         hash = last.hash;
 
-        if (lcl.header.ledgerSeq == 0)
+        if (beginRange.header.ledgerSeq == 0)
         {
-            lcl = first;
+            beginRange = first;
         }
     }
 
-    return CheckpointEnds(lcl, last);
+    return CheckpointEnds(beginRange, last);
+}
+
+TestTransactionsGenerator::TestTransactionsGenerator(
+    Application& app, std::shared_ptr<HistoryArchive> archive,
+    LedgerRange range, const TmpDir& tmpDir)
+    : TestFileUploader(app), mArchive(archive), mRange(range), mTmpDir(tmpDir)
+{
+}
+
+void
+TestTransactionsGenerator::makeTransactionFiles(const bool isValid)
+{
+    auto checkpointRange = CheckpointRange{mRange, mApp.getHistoryManager()};
+    auto lcg =
+        TestLedgerChainGenerator{mApp, mArchive, checkpointRange, mTmpDir};
+    auto firstGenerated = mApp.getLedgerManager().getLastClosedLedgerHeader();
+    auto freq = mApp.getHistoryManager().getCheckpointFrequency();
+
+    for (auto i = checkpointRange.first(); i <= checkpointRange.last();
+         i += freq)
+    {
+        auto numLedgers = i == 63 ? freq - 1 : freq;
+        auto ledgerChain = LedgerTestUtils::generateLedgerHeadersForCheckpoint(
+            firstGenerated, numLedgers, HistoryManager::VERIFY_STATUS_OK);
+        auto transactions =
+            LedgerTestUtils::generateTransactionEntries(ledgerChain.size());
+        for (auto idx = 0; idx < ledgerChain.size(); ++idx)
+        {
+            LedgerTestUtils::makeValid(ledgerChain[idx], transactions[idx],
+                                       mApp.getNetworkID());
+        }
+
+        if (!isValid)
+        {
+            auto randomIndex = rand_uniform<size_t>(0, ledgerChain.size() - 1);
+            ledgerChain[randomIndex].header.scpValue.txSetHash =
+                HashUtils::random();
+        }
+
+        LedgerHeaderHistoryEntry first, last;
+        lcg.writeAndUploadFile(ledgerChain, first, last, i);
+        writeAndUploadFile(transactions, i);
+
+        firstGenerated = {};
+        firstGenerated.header.ledgerSeq =
+            ledgerChain[ledgerChain.size() - 1].header.ledgerSeq + 1;
+        firstGenerated.header.previousLedgerHash =
+            ledgerChain[ledgerChain.size() - 1].hash;
+    }
+}
+
+void
+TestTransactionsGenerator::writeAndUploadFile(
+    std::vector<TransactionHistoryEntry> const& thv, uint32_t checkpoint)
+{
+    FileTransferInfo ft{mTmpDir, HISTORY_FILE_TYPE_TRANSACTIONS, checkpoint};
+    XDROutputFileStream txsOut;
+    txsOut.open(ft.localPath_nogz());
+
+    for (auto& tx : thv)
+    {
+        REQUIRE(txsOut.writeOne(tx));
+    }
+    txsOut.close();
+    uploadFile(ft);
+}
+
+TestFileUploader::TestFileUploader(Application& app) : mApp(app)
+{
+}
+
+void
+TestFileUploader::uploadFile(FileTransferInfo ft)
+{
+    auto& wm = mApp.getWorkManager();
+    auto archive = mApp.getHistoryArchiveManager().getHistoryArchive("test");
+    auto put = wm.addWork<PutRemoteFileWork>(ft.localPath_gz(), ft.remoteName(),
+                                             archive);
+    auto mkdir = put->addWork<MakeRemoteDirWork>(ft.remoteDir(), archive);
+    auto gzip = mkdir->addWork<GzipFileWork>(ft.localPath_nogz(), true);
+    gzip->advance();
+    while (!mApp.getClock().getIOService().stopped() && !wm.allChildrenDone())
+    {
+        mApp.getClock().crank(true);
+    }
 }
 
 CatchupMetrics::CatchupMetrics()

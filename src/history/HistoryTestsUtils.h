@@ -84,6 +84,16 @@ class BucketOutputIteratorForTesting : public BucketOutputIterator
     std::pair<std::string, uint256> writeTmpTestBucket();
 };
 
+class TestFileUploader
+{
+  protected:
+    Application& mApp;
+
+  public:
+    TestFileUploader(Application& app);
+    void uploadFile(FileTransferInfo ft);
+};
+
 class TestBucketGenerator
 {
     Application& mApp;
@@ -98,9 +108,8 @@ class TestBucketGenerator
         TestBucketState desiredState = TestBucketState::CONTENTS_AND_HASH_OK);
 };
 
-class TestLedgerChainGenerator
+class TestLedgerChainGenerator : public TestFileUploader
 {
-    Application& mApp;
     std::shared_ptr<HistoryArchive> mArchive;
     CheckpointRange mCheckpointRange;
     TmpDir const& mTmpDir;
@@ -117,6 +126,25 @@ class TestLedgerChainGenerator
     CheckpointEnds
     makeLedgerChainFiles(HistoryManager::LedgerVerificationStatus state =
                              HistoryManager::VERIFY_STATUS_OK);
+    void writeAndUploadFile(std::vector<LedgerHeaderHistoryEntry> const& lhv,
+                            LedgerHeaderHistoryEntry& first,
+                            LedgerHeaderHistoryEntry& last,
+                            uint32_t checkpoint);
+};
+
+class TestTransactionsGenerator : public TestFileUploader
+{
+    std::shared_ptr<HistoryArchive> mArchive;
+    LedgerRange mRange;
+    TmpDir const& mTmpDir;
+
+  public:
+    TestTransactionsGenerator(Application& app,
+                              std::shared_ptr<HistoryArchive> archive,
+                              LedgerRange range, const TmpDir& tmpDir);
+    void makeTransactionFiles(const bool isValid);
+    void writeAndUploadFile(std::vector<TransactionHistoryEntry> const& thv,
+                            uint32_t checkpoint);
 };
 
 struct CatchupMetrics

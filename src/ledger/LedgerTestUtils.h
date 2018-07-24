@@ -26,8 +26,10 @@ void makeValid(TrustLineEntry& tl);
 void makeValid(OfferEntry& o);
 void makeValid(DataEntry& d);
 void makeValid(LedgerHeaderHistoryEntry& lh,
-               optional<LedgerHeaderHistoryEntry> prevLedger,
+               LedgerHeaderHistoryEntry firstLedger,
                HistoryManager::LedgerVerificationStatus state);
+void makeValid(LedgerHeaderHistoryEntry& lh, TransactionHistoryEntry& th,
+               Hash const& networkID);
 
 LedgerEntry generateValidLedgerEntry(size_t b = 3);
 std::vector<LedgerEntry> generateValidLedgerEntries(size_t n);
@@ -45,8 +47,9 @@ DataEntry generateValidDataEntry(size_t b = 3);
 std::vector<DataEntry> generateValidDataEntries(size_t n);
 
 std::vector<LedgerHeaderHistoryEntry> generateLedgerHeadersForCheckpoint(
-    Hash initHash, uint32_t initLedger, uint32_t freq,
+    LedgerHeaderHistoryEntry firstLedger, uint32_t freq,
     HistoryManager::LedgerVerificationStatus state =
         HistoryManager::VERIFY_STATUS_OK);
+std::vector<TransactionHistoryEntry> generateTransactionEntries(size_t n);
 }
 }

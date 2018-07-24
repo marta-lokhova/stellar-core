@@ -23,6 +23,7 @@
 #include "work/WorkManager.h"
 
 #include "historywork/DownloadBucketsWork.h"
+#include "historywork/VerifyMaybeReplayTxsWork.h"
 #include <lib/catch.hpp>
 #include <lib/util/format.h>
 
@@ -442,18 +443,18 @@ TEST_CASE("Ledger chain verification",
 
     auto tempDir = app->getTmpDirManager().tmpDir("tmp-bucket-generator");
     auto ledgerChainGenerator = TestLedgerChainGenerator{
-            *app, app->getHistoryArchiveManager().getHistoryArchive("test"),
-            checkpointRange, tempDir};
+        *app, app->getHistoryArchiveManager().getHistoryArchive("test"),
+        checkpointRange, tempDir};
 
     LedgerHeaderHistoryEntry firstVerified{};
     auto& wm = app->getWorkManager();
     auto tmpDir = std::make_unique<TmpDir>(
-            app->getTmpDirManager().tmpDir("ledger-chain-snap-test"));
+        app->getTmpDirManager().tmpDir("ledger-chain-snap-test"));
 
     LedgerHeaderHistoryEntry lcl, last;
     std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles();
     auto ledgerVerify = wm.executeWork<DownloadVerifyLedgersWork>(
-            ledgerRange, *tmpDir, lcl, firstVerified, nullptr);
+        ledgerRange, *tmpDir, lcl, firstVerified, nullptr);
     REQUIRE(ledgerVerify->getState() == Work::WORK_SUCCESS);
 }
 
@@ -477,15 +478,15 @@ TEST_CASE("Checkpoint verification", "[ledgerheaderverification]")
     LedgerRange ledgerRange{64, 127};
     CheckpointRange checkpointRange{ledgerRange, app->getHistoryManager()};
     auto ledgerChainGenerator = TestLedgerChainGenerator{
-            *app, app->getHistoryArchiveManager().getHistoryArchive("test"),
-            checkpointRange, tmpDir};
+        *app, app->getHistoryArchiveManager().getHistoryArchive("test"),
+        checkpointRange, tmpDir};
 
     auto checkExpectedBehavior = [&](Work::State expectedState,
                                      LedgerHeaderHistoryEntry lcl,
                                      Hash trustedHash) {
         auto w = wm.executeWork<VerifyLedgerChainWork>(
-                tmpDir, checkpointRange.last(), ledgerRange, firstVerified,
-                verifiedAhead, lcl, make_optional<Hash>(trustedHash));
+            tmpDir, checkpointRange.last(), ledgerRange, firstVerified,
+            verifiedAhead, lcl, make_optional<Hash>(trustedHash));
         REQUIRE(expectedState == w->getState());
     };
 
@@ -493,43 +494,43 @@ TEST_CASE("Checkpoint verification", "[ledgerheaderverification]")
     SECTION("fully valid")
     {
         std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
-                HistoryManager::VERIFY_STATUS_OK);
+            HistoryManager::VERIFY_STATUS_OK);
         checkExpectedBehavior(Work::WORK_SUCCESS, lcl, last.hash);
     }
     SECTION("invalid link due to bad hash")
     {
         std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
-                HistoryManager::VERIFY_STATUS_ERR_BAD_HASH);
+            HistoryManager::VERIFY_STATUS_ERR_BAD_HASH);
         checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
     }
     SECTION("invalid ledger version")
     {
         std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
-                HistoryManager::VERIFY_STATUS_ERR_BAD_LEDGER_VERSION);
+            HistoryManager::VERIFY_STATUS_ERR_BAD_LEDGER_VERSION);
         checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
     }
     SECTION("overshot")
     {
         std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
-                HistoryManager::VERIFY_STATUS_ERR_OVERSHOT);
+            HistoryManager::VERIFY_STATUS_ERR_OVERSHOT);
         checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
     }
     SECTION("undershot")
     {
         std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
-                HistoryManager::VERIFY_STATUS_ERR_UNDERSHOT);
+            HistoryManager::VERIFY_STATUS_ERR_UNDERSHOT);
         checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
     }
     SECTION("missing entries")
     {
         std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
-                HistoryManager::VERIFY_STATUS_ERR_MISSING_ENTRIES);
+            HistoryManager::VERIFY_STATUS_ERR_MISSING_ENTRIES);
         checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
     }
     SECTION("chain does not agree with LCL")
     {
         std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
-                HistoryManager::VERIFY_STATUS_OK);
+            HistoryManager::VERIFY_STATUS_OK);
         lcl.hash = HashUtils::random();
 
         checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl, last.hash);
@@ -537,9 +538,48 @@ TEST_CASE("Checkpoint verification", "[ledgerheaderverification]")
     SECTION("chain does not agree with trusted hash")
     {
         std::tie(lcl, last) = ledgerChainGenerator.makeLedgerChainFiles(
-                HistoryManager::VERIFY_STATUS_OK);
+            HistoryManager::VERIFY_STATUS_OK);
         checkExpectedBehavior(Work::WORK_FAILURE_FATAL, lcl,
                               HashUtils::random());
+    }
+}
+
+// TODO (mlokhava) once abort logic is in place, test proper application and
+// failure modes
+TEST_CASE("Transaction verification", "[batching][transactionverification]")
+{
+    Config cfg(getTestConfig(0));
+    VirtualClock clock;
+    auto cg = std::make_shared<TmpDirHistoryConfigurator>();
+    cg->configure(cfg, true);
+    Application::pointer app = createTestApplication(clock, cfg);
+
+    CHECK(app->getHistoryArchiveManager().initializeHistoryArchive("test"));
+    LedgerRange ledgerRange{1, 127};
+
+    auto tmpDir = app->getTmpDirManager().tmpDir("transaction-snap-test");
+    auto txsGenerator = TestTransactionsGenerator{
+        *app, app->getHistoryArchiveManager().getHistoryArchive("test"),
+        ledgerRange, tmpDir};
+
+    auto& wm = app->getWorkManager();
+    // Test verification part only
+    const bool shouldApply = false;
+    LedgerHeaderHistoryEntry applied;
+
+    SECTION("all valid")
+    {
+        txsGenerator.makeTransactionFiles(true);
+        auto txsVerify = wm.executeWork<VerifyMaybeReplayTxsWork>(
+            ledgerRange, tmpDir, shouldApply, applied);
+        REQUIRE(txsVerify->getState() == Work::WORK_SUCCESS);
+    }
+    SECTION("invalid hash")
+    {
+        txsGenerator.makeTransactionFiles(false);
+        auto txsVerify = wm.executeWork<VerifyMaybeReplayTxsWork>(
+            ledgerRange, tmpDir, shouldApply, applied);
+        REQUIRE(txsVerify->getState() == Work::WORK_FAILURE_FATAL);
     }
 }
 
