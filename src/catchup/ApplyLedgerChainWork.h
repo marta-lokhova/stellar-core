@@ -23,11 +23,11 @@ class TmpDir;
 struct LedgerHeaderHistoryEntry;
 
 /**
- * This class is responsible for applying transactions stored in files on
- * temporary directory (downloadDir) to local ledger. It requires two sets of
- * files - ledgers and transactions - int .xdr format. Transaction files are
- * used to read transactions that will be used and ledger files are used to
- * check if ledger hashes are matching.
+ * This class is responsible for verifying and * maybe * applying transactions
+ * stored in files on temporary directory (downloadDir) to local ledger. It
+ * requires two sets of files - ledgers and transactions - int .xdr format.
+ * Transaction files are used to read transactions that will be used and ledger
+ * files are used to check if ledger hashes are matching.
  *
  * In each run it skips or applies transactions from one ledger. Skipping occurs
  * when ledger to by applied is older than LCL from local ledger. At LCL
@@ -36,7 +36,7 @@ struct LedgerHeaderHistoryEntry;
  * an apply ledger operation is performed. Then another check is made - if new
  * local ledger matches corresponding ledger from file.
  *
- * Contructor of this class takes some important parameters:
+ * Constructor of this class takes some important parameters:
  * * downloadDir - directory containing ledger and transaction files
  * * range - range of ledgers to apply (low boundary can overlap with local
  * history)
@@ -44,14 +44,21 @@ struct LedgerHeaderHistoryEntry;
  */
 class ApplyLedgerChainWork : public Work
 {
-    TmpDir const& mDownloadDir;
-    LedgerRange mRange;
-    uint32_t mCurrSeq;
+    // TODO add to VS project
+    // Transactions verification (and optional application) work.
+
+    uint32_t mCurrLedger;
     XDRInputFileStream mHdrIn;
     XDRInputFileStream mTxIn;
     TransactionHistoryEntry mTxHistoryEntry;
-    LedgerHeaderHistoryEntry& mLastApplied;
 
+    TmpDir const& mDownloadDir;
+    uint32_t mCurrCheckpoint;
+    LedgerRange const& mRange;
+    bool mShouldApply;
+    bool mReady{false};
+
+    // Apply metrics
     medida::Meter& mApplyLedgerStart;
     medida::Meter& mApplyLedgerSkip;
     medida::Meter& mApplyLedgerSuccess;
@@ -61,19 +68,27 @@ class ApplyLedgerChainWork : public Work
     medida::Meter& mApplyLedgerFailureInvalidTxSetHash;
     medida::Meter& mApplyLedgerFailureInvalidResultHash;
 
-    TxSetFramePtr getCurrentTxSet();
+    uint32_t checkpointStart();
     void openCurrentInputFiles();
-    bool applyHistoryOfSingleLedger();
+    void verifyMaybeApply();
+    TxSetFramePtr getCurrentTxSet(LedgerHeaderHistoryEntry histEntry);
+    void applyLedger(LedgerHeaderHistoryEntry lh, TxSetFramePtr txSet);
+    void
+    makeReady()
+    {
+        mReady = true;
+    }
+    friend class VerifyMaybeReplayTxsSnapWork;
 
   public:
     ApplyLedgerChainWork(Application& app, WorkParent& parent,
-                         TmpDir const& downloadDir, LedgerRange range,
-                         LedgerHeaderHistoryEntry& lastApplied);
-    ~ApplyLedgerChainWork();
+                         TmpDir const& downloadDir, uint32_t checkpoint,
+                         LedgerRange const& range, bool shouldApply);
+    ~ApplyLedgerChainWork() override;
+
     std::string getStatus() const override;
     void onReset() override;
     void onStart() override;
-    void onRun() override;
     Work::State onSuccess() override;
 };
 }
