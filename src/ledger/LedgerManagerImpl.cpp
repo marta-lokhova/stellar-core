@@ -24,6 +24,8 @@
 #include "main/Application.h"
 #include "main/Config.h"
 #include "overlay/OverlayManager.h"
+#include "transactions/OperationFrame.h"
+#include "transactions/TransactionUtils.h"
 #include "util/Logging.h"
 #include "util/XDROperators.h"
 #include "util/format.h"
@@ -970,6 +972,28 @@ LedgerManagerImpl::processFeesSeqNums(std::vector<TransactionFramePtr>& txs,
 }
 
 void
+LedgerManagerImpl::prefetchTransactionData(
+    std::vector<TransactionFramePtr>& txs)
+{
+    auto& root = mApp.getLedgerTxnRoot();
+    for (auto const& tx : txs)
+    {
+        stellar::prefetchAccount(root, tx->getSourceID());
+        for (auto const& op : tx->getOperations())
+        {
+            if (!(tx->getSourceID() == op->getSourceID()))
+            {
+                stellar::prefetchAccount(root, op->getSourceID());
+            }
+            for (auto const& key : op->getLedgerKeysToPrefetch(mApp))
+            {
+                root.prefetch(key);
+            }
+        }
+    }
+}
+
+void
 LedgerManagerImpl::applyTransactions(std::vector<TransactionFramePtr>& txs,
                                      AbstractLedgerTxn& ltx,
                                      TransactionResultSet& txResultSet)
@@ -991,6 +1015,8 @@ LedgerManagerImpl::applyTransactions(std::vector<TransactionFramePtr>& txs,
                                         ltx.loadHeader().current().ledgerSeq,
                                         numTxs, numOps);
     }
+
+    prefetchTransactionData(txs);
 
     for (auto tx : txs)
     {

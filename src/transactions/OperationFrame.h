@@ -84,5 +84,7 @@ class OperationFrame
     {
         return mOperation;
     }
+
+    virtual std::vector<LedgerKey> getLedgerKeysToPrefetch(Application& app);
 };
 }

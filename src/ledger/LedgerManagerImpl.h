@@ -76,6 +76,7 @@ class LedgerManagerImpl : public LedgerManager
 
     void storeCurrentLedger(LedgerHeader const& header);
     void advanceLedgerPointers(LedgerHeader const& header);
+    void prefetchTransactionData(std::vector<TransactionFramePtr>& txs);
 
     enum class CloseLedgerIfResult
     {

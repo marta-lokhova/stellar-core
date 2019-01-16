@@ -10,6 +10,7 @@
 #include "ledger/LedgerTxnHeader.h"
 #include "main/Application.h"
 #include "transactions/PathPaymentOpFrame.h"
+#include "transactions/TransactionUtils.h"
 #include "util/Logging.h"
 #include "util/XDROperators.h"
 #include <algorithm>
@@ -124,5 +125,38 @@ PaymentOpFrame::doCheckValid(Application& app, uint32_t ledgerVersion)
         return false;
     }
     return true;
+}
+
+std::vector<LedgerKey>
+PaymentOpFrame::getLedgerKeysToPrefetch(Application& app)
+{
+    std::vector<LedgerKey> keys;
+
+    keys.push_back(stellar::getLedgerKey(mPayment.destination));
+
+    // Prefetch issuer for non-native assets
+    if (mPayment.asset.type() != ASSET_TYPE_NATIVE)
+    {
+        auto issuer = getIssuer(mPayment.asset);
+        bool destIsIssuer = issuer == mPayment.destination;
+        bool sourceIsIssuer = issuer == getSourceID();
+        if (!sourceIsIssuer && !destIsIssuer)
+        {
+            keys.push_back(stellar::getLedgerKey(issuer));
+        }
+        // These are *maybe* needed; For now, we load everything
+        if (!destIsIssuer)
+        {
+            keys.push_back(
+                stellar::getLedgerKey(mPayment.destination, mPayment.asset));
+        }
+        if (!sourceIsIssuer)
+        {
+            keys.push_back(
+                stellar::getLedgerKey(getSourceID(), mPayment.asset));
+        }
+    }
+
+    return keys;
 }
 }
