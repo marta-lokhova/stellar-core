@@ -39,17 +39,6 @@ struct PeerRecord
 
 bool operator==(PeerRecord const& x, PeerRecord const& y);
 
-using PeerRecordModifier = std::function<void(Application&, PeerRecord&)>;
-
-namespace PeerRecordModifiers
-{
-void resetBackOff(Application& app, PeerRecord& peer);
-void backOff(Application& app, PeerRecord& peer);
-void markPreferred(Application& app, PeerRecord& peer);
-void markOutbound(Application& app, PeerRecord& peer);
-void markInbound(Application& app, PeerRecord& peer);
-}
-
 PeerAddress toXdr(PeerBareAddress const& address);
 
 /**
@@ -66,6 +55,21 @@ class PeerManager
         optional<bool> mRequireOutbound;
     };
 
+    enum class TypeUpdate
+    {
+        KEEP,
+        SET_INBOUND,
+        SET_OUTBOUND,
+        SET_PREFERRED
+    };
+
+    enum class BackOffUpdate
+    {
+        KEEP,
+        RESET,
+        INCREASE
+    };
+
     static PeerQuery maxFailures(int maxFailures, bool outbound);
     static PeerQuery nextAttemptCutoff(PeerType peerType);
 
@@ -79,13 +83,26 @@ class PeerManager
                    std::function<bool(PeerBareAddress const&)> pred);
 
     /**
-     * Update or create PeerRecord entry in database with given addrees. If
-     * data for given address is not available, a new default PeerRecord is
-     * created. Before saving data to database again each function in
-     * peerModifiers parameter is called on that PeerRecord.
+     * Ensure that given peer is stored in database.
      */
-    void update(PeerBareAddress const& address,
-                std::vector<PeerRecordModifier> const& peerModifiers);
+    void ensureExists(PeerBareAddress const& address);
+
+    /**
+     * Update type of peer associated with given address.
+     */
+    void update(PeerBareAddress const& address, TypeUpdate type);
+
+    /**
+     * Update "next try" of peer associated with given address - can reset
+     * it to now or back off even further in future.
+     */
+    void update(PeerBareAddress const& address, BackOffUpdate backOff);
+
+    /**
+     * Update both type and "next try" of peer associated with given address.
+     */
+    void update(PeerBareAddress const& address, TypeUpdate type,
+                BackOffUpdate backOff);
 
     /**
      * Load PeerRecord data for peer with given address. If not available in
@@ -117,6 +134,9 @@ class PeerManager
     std::vector<PeerBareAddress>
     loadPeers(int limit, int offset, std::string const& where,
               std::function<void(soci::statement&)> const& bind);
+
+    void update(PeerRecord& peer, TypeUpdate type);
+    void update(PeerRecord& peer, BackOffUpdate backOff, Application& app);
 };
 
 bool operator<(PeerManager::PeerQuery const& x,

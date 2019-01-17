@@ -43,56 +43,6 @@ operator==(PeerRecord const& x, PeerRecord const& y)
     return x.mType == y.mType;
 }
 
-namespace PeerRecordModifiers
-{
-
-void
-resetBackOff(Application& app, PeerRecord& peer)
-{
-    peer.mNumFailures = 0;
-    auto nextAttempt = app.getClock().now();
-    peer.mNextAttempt = VirtualClock::pointToTm(nextAttempt);
-}
-
-static std::chrono::seconds
-computeBackoff(int numFailures)
-{
-    constexpr const auto SECONDS_PER_BACKOFF = 10;
-    constexpr const auto MAX_BACKOFF_EXPONENT = 10;
-
-    auto backoffCount = std::min<int32_t>(MAX_BACKOFF_EXPONENT, numFailures);
-    auto nsecs = std::chrono::seconds(
-        std::rand() % int(std::pow(2, backoffCount) * SECONDS_PER_BACKOFF) + 1);
-    return nsecs;
-}
-
-void
-backOff(Application& app, PeerRecord& peer)
-{
-    peer.mNumFailures++;
-    auto nextAttempt = app.getClock().now() + computeBackoff(peer.mNumFailures);
-    peer.mNextAttempt = VirtualClock::pointToTm(nextAttempt);
-}
-
-void
-markPreferred(Application&, PeerRecord& peer)
-{
-    peer.mType = static_cast<int>(PeerType::PREFERRED);
-}
-
-void
-markOutbound(Application&, PeerRecord& peer)
-{
-    peer.mType = static_cast<int>(PeerType::OUTBOUND);
-}
-
-void
-markInbound(Application&, PeerRecord& peer)
-{
-    peer.mType = static_cast<int>(PeerType::INBOUND);
-}
-}
-
 namespace
 {
 
@@ -341,14 +291,116 @@ PeerManager::store(PeerBareAddress const& address, PeerRecord const& peerRecord,
 }
 
 void
-PeerManager::update(PeerBareAddress const& address,
-                    std::vector<PeerRecordModifier> const& peerModifiers)
+PeerManager::update(PeerRecord& peer, TypeUpdate type)
+{
+    switch (type)
+    {
+    case TypeUpdate::KEEP:
+    {
+        break;
+    }
+    case TypeUpdate::SET_INBOUND:
+    {
+        peer.mType = static_cast<int>(PeerType::INBOUND);
+        break;
+    }
+    case TypeUpdate::SET_OUTBOUND:
+    {
+        peer.mType = static_cast<int>(PeerType::OUTBOUND);
+        break;
+    }
+    case TypeUpdate::SET_PREFERRED:
+    {
+        peer.mType = static_cast<int>(PeerType::PREFERRED);
+        break;
+    }
+    default:
+    {
+        abort();
+    }
+    }
+}
+
+namespace
+{
+
+static std::chrono::seconds
+computeBackoff(int numFailures)
+{
+    constexpr const auto SECONDS_PER_BACKOFF = 10;
+    constexpr const auto MAX_BACKOFF_EXPONENT = 10;
+
+    auto backoffCount = std::min<int32_t>(MAX_BACKOFF_EXPONENT, numFailures);
+    auto nsecs = std::chrono::seconds(
+        std::rand() % int(std::pow(2, backoffCount) * SECONDS_PER_BACKOFF) + 1);
+    return nsecs;
+}
+}
+
+void
+PeerManager::update(PeerRecord& peer, BackOffUpdate backOff, Application& app)
+{
+    switch (backOff)
+    {
+    case BackOffUpdate::KEEP:
+    {
+        break;
+    }
+    case BackOffUpdate::RESET:
+    {
+        peer.mNumFailures = 0;
+        auto nextAttempt = app.getClock().now();
+        peer.mNextAttempt = VirtualClock::pointToTm(nextAttempt);
+        break;
+    }
+    case BackOffUpdate::INCREASE:
+    {
+        peer.mNumFailures++;
+        auto nextAttempt =
+            app.getClock().now() + computeBackoff(peer.mNumFailures);
+        peer.mNextAttempt = VirtualClock::pointToTm(nextAttempt);
+        break;
+    }
+    default:
+    {
+        abort();
+    }
+    }
+}
+
+void
+PeerManager::ensureExists(PeerBareAddress const& address)
 {
     auto peer = load(address);
-    for (auto& peerModifier : peerModifiers)
+    if (!peer.second)
     {
-        peerModifier(mApp, peer.first);
+        store(address, peer.first, peer.second);
     }
+}
+
+void
+PeerManager::update(PeerBareAddress const& address, TypeUpdate type)
+{
+    auto peer = load(address);
+    update(peer.first, type);
+    store(address, peer.first, peer.second);
+}
+
+void
+PeerManager::update(PeerBareAddress const& address, BackOffUpdate backOff)
+{
+    auto peer = load(address);
+    update(peer.first, backOff, mApp);
+    store(address, peer.first, peer.second);
+}
+
+void
+PeerManager::update(PeerBareAddress const& address, TypeUpdate type,
+                    BackOffUpdate backOff)
+{
+    auto peer = load(address);
+    update(peer.first, type);
+    update(peer.first, backOff, mApp);
     store(address, peer.first, peer.second);
 }
 

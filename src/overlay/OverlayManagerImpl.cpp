@@ -252,8 +252,7 @@ OverlayManagerImpl::connectToImpl(PeerBareAddress const& address,
     if (!currentConnection || (forceoutbound && currentConnection->getRole() ==
                                                     Peer::REMOTE_CALLED_US))
     {
-        using namespace PeerRecordModifiers;
-        getPeerManager().update(address, {backOff});
+        getPeerManager().update(address, PeerManager::BackOffUpdate::INCREASE);
         addOutboundConnection(TCPPeer::initiate(mApp, address));
     }
     else
@@ -272,16 +271,12 @@ OverlayManagerImpl::storePeerList(std::vector<std::string> const& list,
     {
         try
         {
-            using namespace PeerRecordModifiers;
             auto address = PeerBareAddress::resolve(peerStr, mApp);
-            if (setPreferred)
-            {
-                getPeerManager().update(address, {markPreferred, resetBackOff});
-            }
-            else
-            {
-                getPeerManager().update(address, {resetBackOff});
-            }
+            auto typeUpgrade = setPreferred
+                                   ? PeerManager::TypeUpdate::SET_PREFERRED
+                                   : PeerManager::TypeUpdate::KEEP;
+            getPeerManager().update(address, typeUpgrade,
+                                    PeerManager::BackOffUpdate::RESET);
         }
         catch (std::runtime_error&)
         {

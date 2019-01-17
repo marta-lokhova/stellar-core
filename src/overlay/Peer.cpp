@@ -838,27 +838,12 @@ Peer::updatePeerRecordAfterEcho()
 {
     assert(!getAddress().isEmpty());
 
-    using namespace PeerRecordModifiers;
-    if (mRole == WE_CALLED_REMOTE)
-    {
-        auto setType = mApp.getOverlayManager().isPreferred(this)
-                           ? markPreferred
-                           : markOutbound;
-        mApp.getOverlayManager().getPeerManager().update(getAddress(),
-                                                         {setType});
-    }
-    else
-    {
-        if (mApp.getOverlayManager().isPreferred(this))
-        {
-            mApp.getOverlayManager().getPeerManager().update(getAddress(),
-                                                             {markPreferred});
-        }
-        else
-        {
-            mApp.getOverlayManager().getPeerManager().update(getAddress(), {});
-        }
-    }
+    auto type = mApp.getOverlayManager().isPreferred(this)
+                    ? PeerManager::TypeUpdate::SET_PREFERRED
+                    : mRole == WE_CALLED_REMOTE
+                          ? PeerManager::TypeUpdate::SET_OUTBOUND
+                          : PeerManager::TypeUpdate::KEEP;
+    mApp.getOverlayManager().getPeerManager().update(getAddress(), type);
 }
 
 void
@@ -868,9 +853,8 @@ Peer::updatePeerRecordAfterAuthentication()
 
     if (mRole == WE_CALLED_REMOTE)
     {
-        using namespace PeerRecordModifiers;
-        mApp.getOverlayManager().getPeerManager().update(getAddress(),
-                                                         {resetBackOff});
+        mApp.getOverlayManager().getPeerManager().update(
+            getAddress(), PeerManager::BackOffUpdate::RESET);
     }
 
     CLOG(INFO, "Overlay") << "successful handshake with "
@@ -1101,7 +1085,7 @@ Peer::recvPeers(StellarMessage const& msg)
         }
         else
         {
-            mApp.getOverlayManager().getPeerManager().update(address, {});
+            mApp.getOverlayManager().getPeerManager().ensureExists(address);
         }
     }
 }

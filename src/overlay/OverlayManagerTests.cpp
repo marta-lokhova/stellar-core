@@ -67,8 +67,8 @@ class OverlayManagerStub : public OverlayManagerImpl
     {
         if (!getConnectedPeer(address))
         {
-            using namespace PeerRecordModifiers;
-            getPeerManager().update(address, {backOff});
+            getPeerManager().update(address,
+                                    PeerManager::BackOffUpdate::INCREASE);
 
             auto peerStub = std::make_shared<PeerStub>(mApp, address);
             addOutboundConnection(peerStub);
