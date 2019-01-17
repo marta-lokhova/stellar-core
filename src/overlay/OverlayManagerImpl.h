@@ -73,10 +73,10 @@ class OverlayManagerImpl : public OverlayManager
         }
     }
 
+    PeerManager mPeerManager;
     PeerDoor mDoor;
     PeerAuth mAuth;
     LoadManager mLoad;
-    PeerManager mPeerManager;
     bool mShuttingDown;
 
     medida::Meter& mMessagesBroadcast;
