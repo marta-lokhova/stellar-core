@@ -115,10 +115,8 @@ class OverlayManager
     // Return number of authenticated peers
     virtual int getAuthenticatedPeersCount() const = 0;
 
-    // Attempt to connect to a peer identified by string. The form of the string
-    // should be an IP address or hostname, optionally followed by a colon and
-    // a TCP port number.
-    virtual void connectTo(std::string const& addr) = 0;
+    // Attempt to connect to a peer identified by address.
+    virtual void connectTo(PeerBareAddress const& address) = 0;
 
     // returns the list of peers that sent us the item with hash `h`
     virtual std::set<Peer::pointer> getPeersKnows(Hash const& h) = 0;

@@ -237,18 +237,9 @@ OverlayManagerImpl::start()
 }
 
 void
-OverlayManagerImpl::connectTo(std::string const& peerStr)
+OverlayManagerImpl::connectTo(PeerBareAddress const& address)
 {
-    try
-    {
-        auto address = PeerBareAddress::resolve(peerStr, mApp);
-        getPeerManager().update(address, {});
-        connectToImpl(address, false);
-    }
-    catch (const std::runtime_error&)
-    {
-        CLOG(ERROR, "Overlay") << "Unable to add peer '" << peerStr << "'";
-    }
+    connectToImpl(address, false);
 }
 
 void
