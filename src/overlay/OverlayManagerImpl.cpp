@@ -10,6 +10,7 @@
 #include "main/Config.h"
 #include "overlay/PeerBareAddress.h"
 #include "overlay/PeerManager.h"
+#include "overlay/RandomPeerSource.h"
 #include "overlay/TCPPeer.h"
 #include "util/Logging.h"
 #include "util/Math.h"
@@ -213,6 +214,12 @@ OverlayManagerImpl::OverlayManagerImpl(Application& app)
     , mTimer(app)
     , mFloodGate(app)
 {
+    mPeerSources[PeerType::INBOUND] = std::make_unique<RandomPeerSource>(
+        mPeerManager, RandomPeerSource::nextAttemptCutoff(PeerType::INBOUND));
+    mPeerSources[PeerType::OUTBOUND] = std::make_unique<RandomPeerSource>(
+        mPeerManager, RandomPeerSource::nextAttemptCutoff(PeerType::OUTBOUND));
+    mPeerSources[PeerType::PREFERRED] = std::make_unique<RandomPeerSource>(
+        mPeerManager, RandomPeerSource::nextAttemptCutoff(PeerType::PREFERRED));
 }
 
 OverlayManagerImpl::~OverlayManagerImpl()
@@ -343,8 +350,7 @@ OverlayManagerImpl::getPeersToConnectTo(int maxNum, PeerType peerType)
     };
 
     // don't connect to too many peers at once
-    return mPeerManager.getRandomPeers(PeerManager::nextAttemptCutoff(peerType),
-                                       std::min(maxNum, 50), keep);
+    return mPeerSources[peerType]->getRandomPeers(std::min(maxNum, 50), keep);
 }
 
 void

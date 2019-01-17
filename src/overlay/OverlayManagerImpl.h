@@ -123,6 +123,8 @@ class OverlayManagerImpl : public OverlayManager
     bool isShuttingDown() const override;
 
   private:
+    std::map<PeerType, std::unique_ptr<RandomPeerSource>> mPeerSources;
+
     std::vector<PeerBareAddress> getPeersToConnectTo(int maxNum,
                                                      PeerType connectionType);
     virtual void connectToImpl(PeerBareAddress const& address,

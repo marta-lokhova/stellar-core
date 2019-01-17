@@ -347,25 +347,10 @@ Peer::sendPeers()
     newMsg.type(PEERS);
     uint32 maxPeerCount = std::min<uint32>(50, newMsg.peers().max_size());
 
-    auto keep = [&](PeerBareAddress const& address) {
-        return !address.isPrivate() && address != mAddress;
-    };
-
-    constexpr const auto MAX_FAILURES = 10;
-
     // send top peers we know about
-    auto peers = mApp.getOverlayManager().getPeerManager().getRandomPeers(
-        PeerManager::maxFailures(MAX_FAILURES, true), maxPeerCount, keep);
+    auto peers = mApp.getOverlayManager().getPeerManager().getPeersToSend(
+        maxPeerCount, mAddress);
     assert(peers.size() <= maxPeerCount);
-
-    auto inboundCount = maxPeerCount - peers.size();
-    if (inboundCount > 0)
-    {
-        auto inbound = mApp.getOverlayManager().getPeerManager().getRandomPeers(
-            PeerManager::maxFailures(MAX_FAILURES, false), inboundCount, keep);
-        std::copy(std::begin(inbound), std::end(inbound),
-                  std::back_inserter(peers));
-    }
 
     newMsg.peers().reserve(peers.size());
     for (auto const& address : peers)

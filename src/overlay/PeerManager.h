@@ -18,6 +18,7 @@ namespace stellar
 {
 
 class Database;
+class RandomPeerSource;
 
 enum class PeerType
 {
@@ -39,6 +40,14 @@ struct PeerRecord
 
 bool operator==(PeerRecord const& x, PeerRecord const& y);
 
+struct PeerQuery
+{
+    bool mUseNextAttempt;
+    int mMaxNumFailures;
+    optional<PeerType> mRequireExactType;
+    optional<bool> mRequireOutbound;
+};
+
 PeerAddress toXdr(PeerBareAddress const& address);
 
 /**
@@ -47,14 +56,6 @@ PeerAddress toXdr(PeerBareAddress const& address);
 class PeerManager
 {
   public:
-    struct PeerQuery
-    {
-        bool mNextAttempt;
-        int mMaxNumFailures;
-        optional<PeerType> mRequireExactType;
-        optional<bool> mRequireOutbound;
-    };
-
     enum class TypeUpdate
     {
         KEEP,
@@ -70,17 +71,10 @@ class PeerManager
         INCREASE
     };
 
-    static PeerQuery maxFailures(int maxFailures, bool outbound);
-    static PeerQuery nextAttemptCutoff(PeerType peerType);
-
     static void dropAll(Database& db);
     static void renameFlagsToType(Database& db);
 
     explicit PeerManager(Application& app);
-
-    std::vector<PeerBareAddress>
-    getRandomPeers(PeerQuery const& query, size_t size,
-                   std::function<bool(PeerBareAddress const&)> pred);
 
     /**
      * Ensure that given peer is stored in database.
@@ -118,16 +112,26 @@ class PeerManager
     void store(PeerBareAddress const& address, PeerRecord const& PeerRecord,
                bool inDatabase);
 
+    /**
+     * Load size random peers matching query from database.
+     */
+    std::vector<PeerBareAddress> loadRandomPeers(PeerQuery const& query,
+                                                 size_t size);
+
+    /**
+     * Get list of peers to send to peer with given address.
+     */
+    std::vector<PeerBareAddress> getPeersToSend(size_t size,
+                                                PeerBareAddress const& address);
+
   private:
     static const char* kSQLCreateWithFlagsStatement;
     static const char* kSQLCreateWithTypeStatement;
 
     Application& mApp;
+    std::unique_ptr<RandomPeerSource> mOutboundPeersToSend;
+    std::unique_ptr<RandomPeerSource> mInboundPeersToSend;
     size_t const mBatchSize;
-    std::map<PeerQuery, std::vector<PeerBareAddress>> mPeerCache;
-
-    std::vector<PeerBareAddress> loadRandomPeers(PeerQuery const& query,
-                                                 size_t size);
 
     size_t countPeers(std::string const& where,
                       std::function<void(soci::statement&)> const& bind);
@@ -138,7 +142,4 @@ class PeerManager
     void update(PeerRecord& peer, TypeUpdate type);
     void update(PeerRecord& peer, BackOffUpdate backOff, Application& app);
 };
-
-bool operator<(PeerManager::PeerQuery const& x,
-               PeerManager::PeerQuery const& y);
 }

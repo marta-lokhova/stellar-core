@@ -6,6 +6,7 @@
 #include "crypto/Random.h"
 #include "database/Database.h"
 #include "main/Application.h"
+#include "overlay/RandomPeerSource.h"
 #include "overlay/StellarXDR.h"
 #include "util/Logging.h"
 #include "util/Math.h"
@@ -75,47 +76,6 @@ toXdr(PeerBareAddress const& address)
     return result;
 }
 
-PeerManager::PeerQuery
-PeerManager::maxFailures(int maxFailures, bool requireOutobund)
-{
-    return {false, maxFailures, nullopt<PeerType>(),
-            make_optional<bool>(requireOutobund)};
-}
-
-PeerManager::PeerQuery
-PeerManager::nextAttemptCutoff(PeerType requireExactType)
-{
-    return {true, -1, make_optional<PeerType>(requireExactType),
-            nullopt<bool>()};
-}
-
-std::vector<PeerBareAddress>
-PeerManager::getRandomPeers(PeerQuery const& query, size_t size,
-                            std::function<bool(PeerBareAddress const&)> pred)
-{
-    auto& peers = mPeerCache[query];
-    if (peers.size() < size)
-    {
-        peers = loadRandomPeers(query, size);
-    }
-
-    auto result = std::vector<PeerBareAddress>{};
-    auto realSize = std::min(size, peers.size());
-
-    auto it = std::begin(peers);
-    auto end = std::end(peers);
-    for (; it != end && result.size() < realSize; it++)
-    {
-        if (pred(*it))
-        {
-            result.push_back(*it);
-        }
-    }
-
-    peers.erase(std::begin(peers), it);
-    return result;
-}
-
 std::vector<PeerBareAddress>
 PeerManager::loadRandomPeers(PeerQuery const& query, size_t size)
 {
@@ -127,7 +87,7 @@ PeerManager::loadRandomPeers(PeerQuery const& query, size_t size)
     // mApp.getDatabase().setCurrentTransactionReadOnly();
 
     std::vector<std::string> conditions;
-    if (query.mNextAttempt)
+    if (query.mUseNextAttempt)
     {
         conditions.push_back("nextattempt <= :nextattempt");
     }
@@ -164,7 +124,7 @@ PeerManager::loadRandomPeers(PeerQuery const& query, size_t size)
     int inboundType = static_cast<int>(PeerType::INBOUND);
 
     auto bindToStatement = [&](soci::statement& st) {
-        if (query.mNextAttempt)
+        if (query.mUseNextAttempt)
         {
             st.exchange(soci::use(nextAttempt));
         }
@@ -195,6 +155,25 @@ PeerManager::loadRandomPeers(PeerQuery const& query, size_t size)
 
     std::shuffle(std::begin(result), std::end(result), gRandomEngine);
     return result;
+}
+
+std::vector<PeerBareAddress>
+PeerManager::getPeersToSend(size_t size, PeerBareAddress const& address)
+{
+    auto keep = [&](PeerBareAddress const& pba) {
+        return !pba.isPrivate() && pba != address;
+    };
+
+    auto peers = mOutboundPeersToSend->getRandomPeers(size, keep);
+    if (peers.size() < size)
+    {
+        auto inbound =
+            mInboundPeersToSend->getRandomPeers(peers.size() - size, keep);
+        std::copy(std::begin(inbound), std::end(inbound),
+                  std::back_inserter(peers));
+    }
+
+    return peers;
 }
 
 std::pair<PeerRecord, bool>
@@ -405,8 +384,15 @@ PeerManager::update(PeerBareAddress const& address, TypeUpdate type,
 }
 
 constexpr const auto BATCH_SIZE = 1000;
+constexpr const auto MAX_FAILURES = 10;
 
-PeerManager::PeerManager(Application& app) : mApp(app), mBatchSize(BATCH_SIZE)
+PeerManager::PeerManager(Application& app)
+    : mApp(app)
+    , mOutboundPeersToSend(std::make_unique<RandomPeerSource>(
+          *this, RandomPeerSource::maxFailures(MAX_FAILURES, true)))
+    , mInboundPeersToSend(std::make_unique<RandomPeerSource>(
+          *this, RandomPeerSource::maxFailures(MAX_FAILURES, false)))
+    , mBatchSize(BATCH_SIZE)
 {
 }
 
@@ -501,36 +487,6 @@ PeerManager::renameFlagsToType(Database& db)
                        "FROM peers_old";
     db.getSession() << "DROP TABLE peers_old";
     db.getSession() << "CREATE INDEX typeindex ON peers(type)";
-}
-
-bool
-operator<(PeerManager::PeerQuery const& x, PeerManager::PeerQuery const& y)
-{
-    if (x.mNextAttempt < y.mNextAttempt)
-    {
-        return true;
-    }
-    if (x.mNextAttempt > y.mNextAttempt)
-    {
-        return false;
-    }
-    if (x.mMaxNumFailures < y.mMaxNumFailures)
-    {
-        return true;
-    }
-    if (x.mMaxNumFailures > y.mMaxNumFailures)
-    {
-        return false;
-    }
-    if (x.mRequireExactType < y.mRequireExactType)
-    {
-        return true;
-    }
-    if (x.mRequireExactType > y.mRequireExactType)
-    {
-        return false;
-    }
-    return x.mRequireOutbound < y.mRequireOutbound;
 }
 
 const char* PeerManager::kSQLCreateWithFlagsStatement =
