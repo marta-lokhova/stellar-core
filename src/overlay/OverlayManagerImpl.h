@@ -136,18 +136,11 @@ class OverlayManagerImpl : public OverlayManager
     bool isShuttingDown() const override;
 
   private:
-    enum class ConnectionType
-    {
-        TO_PROMOTE,
-        OUTBOUND,
-        PREFERRED
-    };
-
-    std::vector<PeerBareAddress>
-    getPeersToConnectTo(int maxNum, ConnectionType connectionType);
+    std::vector<PeerBareAddress> getPeersToConnectTo(int maxNum,
+                                                     PeerType connectionType);
     virtual void connectToImpl(PeerBareAddress const& address,
                                bool forceoutbound);
-    void connectTo(int maxNum, ConnectionType connectionType);
+    void connectTo(int maxNum, PeerType connectionType);
     void connectTo(std::vector<PeerBareAddress> const& peers,
                    bool forceoutbound);
 

@@ -318,8 +318,7 @@ OverlayManagerImpl::storeConfigPeers()
 }
 
 std::vector<PeerBareAddress>
-OverlayManagerImpl::getPeersToConnectTo(int maxNum,
-                                        ConnectionType connectionType)
+OverlayManagerImpl::getPeersToConnectTo(int maxNum, PeerType peerType)
 {
     assert(maxNum >= 0);
     if (maxNum == 0)
@@ -327,27 +326,23 @@ OverlayManagerImpl::getPeersToConnectTo(int maxNum,
         return {};
     }
 
-    auto preferred = connectionType >= ConnectionType::PREFERRED;
-    auto outbound = connectionType >= ConnectionType::OUTBOUND;
-
     auto keep = [&](PeerBareAddress const& address) {
         auto peer = getConnectedPeer(address);
-        auto promote =
-            peer && !outbound && (peer->getRole() == Peer::REMOTE_CALLED_US);
+        auto promote = peer && (peerType == PeerType::INBOUND) &&
+                       (peer->getRole() == Peer::REMOTE_CALLED_US);
         return !peer || promote;
     };
 
     // don't connect to too many peers at once
-    return mPeerManager.getRandomPeers(
-        PeerManager::nextAttemptCutoff(preferred, outbound),
-        std::min(maxNum, 50), keep);
+    return mPeerManager.getRandomPeers(PeerManager::nextAttemptCutoff(peerType),
+                                       std::min(maxNum, 50), keep);
 }
 
 void
-OverlayManagerImpl::connectTo(int maxNum, ConnectionType connectionType)
+OverlayManagerImpl::connectTo(int maxNum, PeerType peerType)
 {
-    connectTo(getPeersToConnectTo(maxNum, connectionType),
-              connectionType == ConnectionType::TO_PROMOTE);
+    connectTo(getPeersToConnectTo(maxNum, peerType),
+              peerType == PeerType::INBOUND);
 }
 
 void
@@ -369,15 +364,14 @@ OverlayManagerImpl::tick()
     mLoad.maybeShedExcessLoad(mApp);
 
     // try to replace all connections with preferred peers
-    connectTo(mApp.getConfig().TARGET_PEER_CONNECTIONS,
-              ConnectionType::PREFERRED);
+    connectTo(mApp.getConfig().TARGET_PEER_CONNECTIONS, PeerType::PREFERRED);
 
     // connect to non-preferred candidates from the database
     // when PREFERRED_PEER_ONLY is set and we connect to a non preferred_peer we
     // just end up dropping & backing off it during handshake (this allows for
     // preferred_peers to work for both ip based and key based preferred mode)
-    connectTo(missingAuthenticatedCount(), ConnectionType::OUTBOUND);
-    connectTo(missingAuthenticatedCount(), ConnectionType::TO_PROMOTE);
+    connectTo(missingAuthenticatedCount(), PeerType::OUTBOUND);
+    connectTo(missingAuthenticatedCount(), PeerType::INBOUND);
 
     mTimer.expires_from_now(
         std::chrono::seconds(mApp.getConfig().PEER_AUTHENTICATION_TIMEOUT + 1));

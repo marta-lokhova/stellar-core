@@ -785,30 +785,35 @@ TEST_CASE("inbounds nodes can be promoted to ouboundvalid", "[overlay]")
     nodes.push_back(simulation->addNode(vNode2SecretKey, qSet, &configs[1]));
     nodes.push_back(simulation->addNode(vNode3SecretKey, qSet, &configs[2]));
 
-    enum class PeerType
+    enum class TestPeerType
     {
         ANY,
         KNOWN,
         OUTBOUND
     };
 
-    auto getPeerType = [&](int i, int j) {
+    auto getTestPeerType = [&](int i, int j) {
         auto& node = nodes[i];
         auto peer =
             node->getOverlayManager().getPeerManager().load(addresses[j]);
-        return peer.second ? peer.first.mIsOutbound ? PeerType::OUTBOUND
-                                                    : PeerType::KNOWN
-                           : PeerType::ANY;
+        if (!peer.second)
+        {
+            return TestPeerType::ANY;
+        }
+
+        return peer.first.mType == static_cast<int>(PeerType::INBOUND)
+                   ? TestPeerType::KNOWN
+                   : TestPeerType::OUTBOUND;
     };
 
-    using ExpectedResultType = std::vector<std::vector<PeerType>>;
+    using ExpectedResultType = std::vector<std::vector<TestPeerType>>;
     auto peerTypesMatch = [&](ExpectedResultType expected) {
         for (auto i = 0; i < expected.size(); i++)
         {
             auto& node = nodes[i];
             for (auto j = 0; j < expected[i].size(); j++)
             {
-                if (expected[i][j] > getPeerType(i, j))
+                if (expected[i][j] > getTestPeerType(i, j))
                 {
                     return false;
                 }
@@ -823,9 +828,9 @@ TEST_CASE("inbounds nodes can be promoted to ouboundvalid", "[overlay]")
     simulation->crankUntil(
         [&] {
             return peerTypesMatch(
-                {{PeerType::ANY, PeerType::KNOWN, PeerType::ANY},
-                 {PeerType::ANY, PeerType::ANY, PeerType::ANY},
-                 {PeerType::KNOWN, PeerType::ANY, PeerType::ANY}});
+                {{TestPeerType::ANY, TestPeerType::KNOWN, TestPeerType::ANY},
+                 {TestPeerType::ANY, TestPeerType::ANY, TestPeerType::ANY},
+                 {TestPeerType::KNOWN, TestPeerType::ANY, TestPeerType::ANY}});
         },
         std::chrono::seconds(2), false);
 
@@ -833,9 +838,11 @@ TEST_CASE("inbounds nodes can be promoted to ouboundvalid", "[overlay]")
     simulation->crankUntil(
         [&] {
             return peerTypesMatch(
-                {{PeerType::ANY, PeerType::OUTBOUND, PeerType::KNOWN},
-                 {PeerType::KNOWN, PeerType::ANY, PeerType::ANY},
-                 {PeerType::OUTBOUND, PeerType::ANY, PeerType::ANY}});
+                {{TestPeerType::ANY, TestPeerType::OUTBOUND,
+                  TestPeerType::KNOWN},
+                 {TestPeerType::KNOWN, TestPeerType::ANY, TestPeerType::ANY},
+                 {TestPeerType::OUTBOUND, TestPeerType::ANY,
+                  TestPeerType::ANY}});
         },
         std::chrono::seconds(10), false);
 
@@ -843,9 +850,11 @@ TEST_CASE("inbounds nodes can be promoted to ouboundvalid", "[overlay]")
     simulation->crankUntil(
         [&] {
             return peerTypesMatch(
-                {{PeerType::ANY, PeerType::OUTBOUND, PeerType::OUTBOUND},
-                 {PeerType::OUTBOUND, PeerType::ANY, PeerType::ANY},
-                 {PeerType::OUTBOUND, PeerType::ANY, PeerType::ANY}});
+                {{TestPeerType::ANY, TestPeerType::OUTBOUND,
+                  TestPeerType::OUTBOUND},
+                 {TestPeerType::OUTBOUND, TestPeerType::ANY, TestPeerType::ANY},
+                 {TestPeerType::OUTBOUND, TestPeerType::ANY,
+                  TestPeerType::ANY}});
         },
         std::chrono::seconds(30), false);
 
@@ -853,9 +862,12 @@ TEST_CASE("inbounds nodes can be promoted to ouboundvalid", "[overlay]")
     simulation->crankUntil(
         [&] {
             return peerTypesMatch(
-                {{PeerType::ANY, PeerType::OUTBOUND, PeerType::OUTBOUND},
-                 {PeerType::OUTBOUND, PeerType::ANY, PeerType::OUTBOUND},
-                 {PeerType::OUTBOUND, PeerType::OUTBOUND, PeerType::ANY}});
+                {{TestPeerType::ANY, TestPeerType::OUTBOUND,
+                  TestPeerType::OUTBOUND},
+                 {TestPeerType::OUTBOUND, TestPeerType::ANY,
+                  TestPeerType::OUTBOUND},
+                 {TestPeerType::OUTBOUND, TestPeerType::OUTBOUND,
+                  TestPeerType::ANY}});
         },
         std::chrono::seconds(30), false);
 

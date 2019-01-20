@@ -41,40 +41,32 @@ TEST_CASE("toXdr", "[overlay][PeerManager]")
 
     SECTION("database roundtrip")
     {
-        auto test = [&](bool isPreferred, bool isOutbound) {
+        auto test = [&](PeerType peerType) {
             auto loadedPR = pm.load(address);
             REQUIRE(!loadedPR.second);
 
-            PeerRecord storedPr;
-            pm.update(address, {[&](Application&, PeerRecord& pr) {
-                          pr.mFlags = isPreferred ? 1 : 0;
-                          pr.mIsOutbound = isOutbound ? 1 : 0;
-                          storedPr = pr;
-                      }});
+            auto storedPr = loadedPR.first;
+            storedPr.mType = static_cast<int>(peerType);
+            pm.store(address, storedPr, false);
 
             auto actualPR = pm.load(address);
             REQUIRE(actualPR.second);
             REQUIRE(actualPR.first == storedPr);
         };
 
-        SECTION("not-preferred, not-outbound")
+        SECTION("inbound")
         {
-            test(false, false);
+            test(PeerType::INBOUND);
         }
 
-        SECTION("not-preferred, outbound")
+        SECTION("outbound")
         {
-            test(false, true);
+            test(PeerType::OUTBOUND);
         }
 
-        SECTION("preferred, not-outbound")
+        SECTION("preferred")
         {
-            test(true, false);
-        }
-
-        SECTION("preferred, outbound")
-        {
-            test(true, true);
+            test(PeerType::PREFERRED);
         }
     }
 }

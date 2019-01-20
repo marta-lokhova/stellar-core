@@ -40,11 +40,7 @@ operator==(PeerRecord const& x, PeerRecord const& y)
     {
         return false;
     }
-    if (x.mFlags != y.mFlags)
-    {
-        return false;
-    }
-    return x.mIsOutbound == y.mIsOutbound;
+    return x.mType == y.mType;
 }
 
 namespace PeerRecordModifiers
@@ -81,20 +77,19 @@ backOff(Application& app, PeerRecord& peer)
 void
 markPreferred(Application&, PeerRecord& peer)
 {
-    peer.mFlags |= PEER_RECORD_FLAGS_PREFERRED;
-    peer.mIsOutbound = true;
-}
-
-void
-unmarkPreferred(Application&, PeerRecord& peer)
-{
-    peer.mFlags &= ~PEER_RECORD_FLAGS_PREFERRED;
+    peer.mType = static_cast<int>(PeerType::PREFERRED);
 }
 
 void
 markOutbound(Application&, PeerRecord& peer)
 {
-    peer.mIsOutbound = true;
+    peer.mType = static_cast<int>(PeerType::OUTBOUND);
+}
+
+void
+markInbound(Application&, PeerRecord& peer)
+{
+    peer.mType = static_cast<int>(PeerType::INBOUND);
 }
 }
 
@@ -131,15 +126,17 @@ toXdr(PeerBareAddress const& address)
 }
 
 PeerManager::PeerQuery
-PeerManager::maxFailures(int maxFailures, bool outbound)
+PeerManager::maxFailures(int maxFailures, bool requireOutobund)
 {
-    return {false, maxFailures, nullopt<bool>(), outbound};
+    return {false, maxFailures, nullopt<PeerType>(),
+            make_optional<bool>(requireOutobund)};
 }
 
 PeerManager::PeerQuery
-PeerManager::nextAttemptCutoff(bool preferred, bool outbound)
+PeerManager::nextAttemptCutoff(PeerType requireExactType)
 {
-    return {true, -1, make_optional<bool>(preferred), outbound};
+    return {true, -1, make_optional<PeerType>(requireExactType),
+            nullopt<bool>()};
 }
 
 std::vector<PeerBareAddress>
@@ -179,34 +176,42 @@ PeerManager::loadRandomPeers(PeerQuery const& query, size_t size)
     // soci::transaction sqltx(mApp.getDatabase().getSession());
     // mApp.getDatabase().setCurrentTransactionReadOnly();
 
-    std::string where;
-    std::string clause = "WHERE";
+    std::vector<std::string> conditions;
     if (query.mNextAttempt)
     {
-        where += clause + " nextattempt <= :nextattempt ";
-        clause = "AND";
+        conditions.push_back("nextattempt <= :nextattempt");
     }
     if (query.mMaxNumFailures >= 0)
     {
-        where += clause + " numfailures <= :maxFailures ";
-        clause = "AND";
+        conditions.push_back("numfailures <= :maxFailures");
     }
-    if (query.mPreferred)
+    if (query.mRequireExactType)
     {
-        where += clause + " flags = :flags ";
-        clause = "AND";
+        conditions.push_back("type = :exactType");
     }
-    if (query.mOutbound >= 0)
+    if (query.mRequireOutbound)
     {
-        where += clause + " outbound = :outbound ";
+        if (*query.mRequireOutbound)
+        {
+            conditions.push_back("type != :inboundType");
+        }
+        else
+        {
+            conditions.push_back("type = :inboundType");
+        }
+    }
+    assert(!conditions.empty());
+    std::string where = conditions[0];
+    for (auto i = 1; i < conditions.size(); i++)
+    {
+        where += " AND " + conditions[i];
     }
 
     std::tm nextAttempt = VirtualClock::pointToTm(mApp.getClock().now());
     int maxNumFailures = query.mMaxNumFailures;
-    int outbound = query.mOutbound;
-    int preferred = query.mPreferred
-                        ? *query.mPreferred ? PEER_RECORD_FLAGS_PREFERRED : 0
-                        : 0;
+    int requireExactType = static_cast<int>(
+        query.mRequireExactType ? *query.mRequireExactType : PeerType::INBOUND);
+    int inboundType = static_cast<int>(PeerType::INBOUND);
 
     auto bindToStatement = [&](soci::statement& st) {
         if (query.mNextAttempt)
@@ -217,13 +222,13 @@ PeerManager::loadRandomPeers(PeerQuery const& query, size_t size)
         {
             st.exchange(soci::use(maxNumFailures));
         }
-        if (query.mPreferred)
+        if (query.mRequireExactType)
         {
-            st.exchange(soci::use(preferred));
+            st.exchange(soci::use(requireExactType));
         }
-        if (query.mOutbound >= 0)
+        if (query.mRequireOutbound)
         {
-            st.exchange(soci::use(outbound));
+            st.exchange(soci::use(inboundType));
         }
     };
 
@@ -251,13 +256,12 @@ PeerManager::load(PeerBareAddress const& address)
     try
     {
         auto prep = mApp.getDatabase().getPreparedStatement(
-            "SELECT numfailures, nextattempt, flags, outbound FROM peers "
+            "SELECT numfailures, nextattempt, type FROM peers "
             "WHERE ip = :v1 AND port = :v2");
         auto& st = prep.statement();
         st.exchange(into(result.mNumFailures));
         st.exchange(into(result.mNextAttempt));
-        st.exchange(into(result.mFlags));
-        st.exchange(into(result.mIsOutbound));
+        st.exchange(into(result.mType));
         std::string ip = address.getIP();
         st.exchange(use(ip));
         int port = address.getPort();
@@ -272,6 +276,7 @@ PeerManager::load(PeerBareAddress const& address)
             {
                 result.mNextAttempt =
                     VirtualClock::pointToTm(mApp.getClock().now());
+                result.mType = static_cast<int>(PeerType::INBOUND);
             }
         }
     }
@@ -295,16 +300,15 @@ PeerManager::store(PeerBareAddress const& address, PeerRecord const& peerRecord,
         query = "UPDATE peers SET "
                 "nextattempt = :v1, "
                 "numfailures = :v2, "
-                "flags = :v3, "
-                "outbound = :v4 "
-                "WHERE ip = :v5 AND port = :v6";
+                "type = :v3 "
+                "WHERE ip = :v4 AND port = :v5";
     }
     else
     {
         query = "INSERT INTO peers "
-                "(nextattempt, numfailures, flags, outbound, ip,  port) "
+                "(nextattempt, numfailures, type, ip,  port) "
                 "VALUES "
-                "(:v1,         :v2,         :v3,   :v4,      :v5, :v6)";
+                "(:v1,         :v2,        :v3,  :v4, :v5)";
     }
 
     try
@@ -313,8 +317,7 @@ PeerManager::store(PeerBareAddress const& address, PeerRecord const& peerRecord,
         auto& st = prep.statement();
         st.exchange(use(peerRecord.mNextAttempt));
         st.exchange(use(peerRecord.mNumFailures));
-        st.exchange(use(peerRecord.mFlags));
-        st.exchange(use(peerRecord.mIsOutbound));
+        st.exchange(use(peerRecord.mType));
         std::string ip = address.getIP();
         st.exchange(use(ip));
         int port = address.getPort();
@@ -363,7 +366,7 @@ PeerManager::countPeers(std::string const& where,
 
     try
     {
-        std::string sql = "SELECT COUNT(*) FROM peers " + where;
+        std::string sql = "SELECT COUNT(*) FROM peers WHERE " + where;
 
         auto prep = mApp.getDatabase().getPreparedStatement(sql);
         auto& st = prep.statement();
@@ -391,7 +394,7 @@ PeerManager::loadPeers(int limit, int offset, std::string const& where,
     try
     {
         std::string sql = "SELECT ip, port "
-                          "FROM peers " +
+                          "FROM peers WHERE " +
                           where + " LIMIT :limit OFFSET :offset";
 
         auto prep = mApp.getDatabase().getPreparedStatement(sql);
@@ -432,7 +435,20 @@ void
 PeerManager::dropAll(Database& db)
 {
     db.getSession() << "DROP TABLE IF EXISTS peers;";
-    db.getSession() << kSQLCreateStatement;
+    db.getSession() << kSQLCreateWithFlagsStatement;
+}
+
+void
+PeerManager::renameFlagsToType(Database& db)
+{
+    db.getSession() << "ALTER TABLE peers RENAME TO peers_old";
+    db.getSession() << kSQLCreateWithTypeStatement;
+    db.getSession() << "INSERT INTO peers "
+                       "(ip, port, nextattempt, numfailures, type) "
+                       "SELECT ip, port, nextattempt, numfailures, flags * 2 "
+                       "FROM peers_old";
+    db.getSession() << "DROP TABLE peers_old";
+    db.getSession() << "CREATE INDEX typeindex ON peers(type)";
 }
 
 bool
@@ -454,16 +470,34 @@ operator<(PeerManager::PeerQuery const& x, PeerManager::PeerQuery const& y)
     {
         return false;
     }
-    return x.mOutbound < y.mOutbound;
+    if (x.mRequireExactType < y.mRequireExactType)
+    {
+        return true;
+    }
+    if (x.mRequireExactType > y.mRequireExactType)
+    {
+        return false;
+    }
+    return x.mRequireOutbound < y.mRequireOutbound;
 }
 
-const char* PeerManager::kSQLCreateStatement =
+const char* PeerManager::kSQLCreateWithFlagsStatement =
     "CREATE TABLE peers ("
     "ip            VARCHAR(15) NOT NULL,"
     "port          INT DEFAULT 0 CHECK (port > 0 AND port <= 65535) NOT NULL,"
     "nextattempt   TIMESTAMP NOT NULL,"
     "numfailures   INT DEFAULT 0 CHECK (numfailures >= 0) NOT NULL,"
     "flags         INT NOT NULL,"
+    "PRIMARY KEY (ip, port)"
+    ");";
+
+const char* PeerManager::kSQLCreateWithTypeStatement =
+    "CREATE TABLE peers ("
+    "ip            VARCHAR(15) NOT NULL,"
+    "port          INT DEFAULT 0 CHECK (port > 0 AND port <= 65535) NOT NULL,"
+    "nextattempt   TIMESTAMP NOT NULL,"
+    "numfailures   INT DEFAULT 0 CHECK (numfailures >= 0) NOT NULL,"
+    "type          INT DEFAULT 0 NOT NULL,"
     "PRIMARY KEY (ip, port)"
     ");";
 }

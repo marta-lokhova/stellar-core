@@ -19,6 +19,14 @@ namespace stellar
 
 class Database;
 
+enum class PeerType
+{
+    INBOUND,
+    OUTBOUND,
+    PREFERRED,
+    COUNT
+};
+
 /**
  * Raw database record of peer data. Its key is PeerBareAddress.
  */
@@ -26,8 +34,7 @@ struct PeerRecord
 {
     std::tm mNextAttempt;
     int mNumFailures{0};
-    int mFlags{0};
-    int mIsOutbound{0};
+    int mType{0};
 };
 
 bool operator==(PeerRecord const& x, PeerRecord const& y);
@@ -39,8 +46,8 @@ namespace PeerRecordModifiers
 void resetBackOff(Application& app, PeerRecord& peer);
 void backOff(Application& app, PeerRecord& peer);
 void markPreferred(Application& app, PeerRecord& peer);
-void unmarkPreferred(Application& app, PeerRecord& peer);
 void markOutbound(Application& app, PeerRecord& peer);
+void markInbound(Application& app, PeerRecord& peer);
 }
 
 PeerAddress toXdr(PeerBareAddress const& address);
@@ -55,14 +62,15 @@ class PeerManager
     {
         bool mNextAttempt;
         int mMaxNumFailures;
-        optional<bool> mPreferred;
-        int mOutbound;
+        optional<PeerType> mRequireExactType;
+        optional<bool> mRequireOutbound;
     };
 
     static PeerQuery maxFailures(int maxFailures, bool outbound);
-    static PeerQuery nextAttemptCutoff(bool preferred, bool outbound);
+    static PeerQuery nextAttemptCutoff(PeerType peerType);
 
     static void dropAll(Database& db);
+    static void renameFlagsToType(Database& db);
 
     explicit PeerManager(Application& app);
 
@@ -94,7 +102,8 @@ class PeerManager
                bool inDatabase);
 
   private:
-    static const char* kSQLCreateStatement;
+    static const char* kSQLCreateWithFlagsStatement;
+    static const char* kSQLCreateWithTypeStatement;
 
     Application& mApp;
     size_t const mBatchSize;

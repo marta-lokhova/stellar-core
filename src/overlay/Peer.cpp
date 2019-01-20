@@ -839,18 +839,25 @@ Peer::updatePeerRecordAfterEcho()
     assert(!getAddress().isEmpty());
 
     using namespace PeerRecordModifiers;
-    auto setPreferred = mApp.getOverlayManager().isPreferred(this)
-                            ? markPreferred
-                            : unmarkPreferred;
     if (mRole == WE_CALLED_REMOTE)
     {
-        mApp.getOverlayManager().getPeerManager().update(
-            getAddress(), {setPreferred, markOutbound});
+        auto setType = mApp.getOverlayManager().isPreferred(this)
+                           ? markPreferred
+                           : markOutbound;
+        mApp.getOverlayManager().getPeerManager().update(getAddress(),
+                                                         {setType});
     }
     else
     {
-        mApp.getOverlayManager().getPeerManager().update(getAddress(),
-                                                         {setPreferred});
+        if (mApp.getOverlayManager().isPreferred(this))
+        {
+            mApp.getOverlayManager().getPeerManager().update(getAddress(),
+                                                             {markPreferred});
+        }
+        else
+        {
+            mApp.getOverlayManager().getPeerManager().update(getAddress(), {});
+        }
     }
 }
 
