@@ -232,8 +232,8 @@ PeerManager::load(PeerBareAddress const& address)
     }
     catch (soci_error& err)
     {
-        LOG(ERROR) << "PeerManager::load error: " << err.what() << " on "
-                   << address.toString();
+        CLOG(ERROR, "Overlay") << "PeerManager::load error: " << err.what()
+                               << " on " << address.toString();
     }
 
     return std::make_pair(result, inDatabase);
@@ -278,15 +278,15 @@ PeerManager::store(PeerBareAddress const& address, PeerRecord const& peerRecord,
             st.execute(true);
             if (st.get_affected_rows() != 1)
             {
-                LOG(ERROR) << "PeerManager::store failed on " +
-                                  address.toString();
+                CLOG(ERROR, "Overlay")
+                    << "PeerManager::store failed on " + address.toString();
             }
         }
     }
     catch (soci_error& err)
     {
-        LOG(ERROR) << "PeerManager::store error: " << err.what() << " on "
-                   << address.toString();
+        CLOG(ERROR, "Overlay") << "PeerManager::store error: " << err.what()
+                               << " on " << address.toString();
     }
 }
 
@@ -431,7 +431,7 @@ PeerManager::countPeers(std::string const& where,
     }
     catch (soci_error& err)
     {
-        LOG(ERROR) << "countPeers error: " << err.what();
+        CLOG(ERROR, "Overlay") << "countPeers error: " << err.what();
     }
 
     return count;
@@ -477,7 +477,7 @@ PeerManager::loadPeers(int limit, int offset, std::string const& where,
     }
     catch (soci_error& err)
     {
-        LOG(ERROR) << "loadPeers error: " << err.what();
+        CLOG(ERROR, "Overlay") << "loadPeers error: " << err.what();
     }
 
     return result;
