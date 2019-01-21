@@ -263,6 +263,20 @@ OverlayManagerImpl::connectToImpl(PeerBareAddress const& address,
     }
 }
 
+OverlayManagerImpl::PeersList&
+OverlayManagerImpl::getPeersList(Peer* peer)
+{
+    switch (peer->getRole())
+    {
+    case Peer::WE_CALLED_REMOTE:
+        return mOutboundPeers;
+    case Peer::REMOTE_CALLED_US:
+        return mInboundPeers;
+    default:
+        abort();
+    }
+}
+
 void
 OverlayManagerImpl::storePeerList(std::vector<std::string> const& list,
                                   bool setPreferred)
@@ -479,7 +493,7 @@ OverlayManagerImpl::removePeer(Peer* peer)
 bool
 OverlayManagerImpl::moveToAuthenticated(Peer::pointer peer)
 {
-    auto result = getPeersList(peer).moveToAuthenticated(peer);
+    auto result = getPeersList(peer.get()).moveToAuthenticated(peer);
     updateSizeCounters();
     return result;
 }
@@ -487,7 +501,7 @@ OverlayManagerImpl::moveToAuthenticated(Peer::pointer peer)
 bool
 OverlayManagerImpl::acceptAuthenticatedPeer(Peer::pointer peer)
 {
-    if (!getPeersList(peer).acceptAuthenticatedPeer(peer))
+    if (!getPeersList(peer.get()).acceptAuthenticatedPeer(peer))
     {
         mConnectionsRejected.Mark();
         return false;

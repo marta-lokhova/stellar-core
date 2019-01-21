@@ -58,20 +58,7 @@ class OverlayManagerImpl : public OverlayManager
     PeersList mInboundPeers;
     PeersList mOutboundPeers;
 
-    template <typename PeerT>
-    PeersList&
-    getPeersList(PeerT peer)
-    {
-        switch (peer->getRole())
-        {
-        case Peer::WE_CALLED_REMOTE:
-            return mOutboundPeers;
-        case Peer::REMOTE_CALLED_US:
-            return mInboundPeers;
-        default:
-            abort();
-        }
-    }
+    PeersList& getPeersList(Peer* peer);
 
     PeerManager mPeerManager;
     PeerDoor mDoor;
