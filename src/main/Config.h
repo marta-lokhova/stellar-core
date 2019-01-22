@@ -161,7 +161,8 @@ class Config : public std::enable_shared_from_this<Config>
     // overlay config
     unsigned short PEER_PORT;
     unsigned short TARGET_PEER_CONNECTIONS;
-    unsigned short MAX_ADDITIONAL_PEER_CONNECTIONS;
+    unsigned short MAX_PENDING_CONNECTIONS;
+    int MAX_ADDITIONAL_PEER_CONNECTIONS;
     unsigned short MAX_INBOUND_PENDING_CONNECTIONS;
     unsigned short MAX_OUTBOUND_PENDING_CONNECTIONS;
     unsigned short PEER_AUTHENTICATION_TIMEOUT;
@@ -222,6 +223,9 @@ class Config : public std::enable_shared_from_this<Config>
     Config();
 
     void load(std::string const& filename);
+
+    // fixes values of connection-relates settings
+    void adjust();
 
     std::string toShortString(PublicKey const& pk) const;
     std::string toStrKey(PublicKey const& pk, bool& isAlias) const;
