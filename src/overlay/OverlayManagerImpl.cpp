@@ -448,6 +448,13 @@ OverlayManagerImpl::addInboundConnection(Peer::pointer peer)
 
     if (mShuttingDown || !haveSpace)
     {
+        if (!mShuttingDown)
+        {
+            CLOG(DEBUG, "Overlay")
+                << "Peer rejected - all inbound connections taken: "
+                << peer->toString();
+        }
+
         mConnectionsRejected.Mark();
         peer->drop(Peer::DropMode::IGNORE_WRITE_QUEUE);
         return;
@@ -475,6 +482,13 @@ OverlayManagerImpl::addOutboundConnection(Peer::pointer peer)
     if (mShuttingDown || mOutboundPeers.mPending.size() >=
                              mApp.getConfig().MAX_OUTBOUND_PENDING_CONNECTIONS)
     {
+        if (!mShuttingDown)
+        {
+            CLOG(DEBUG, "Overlay")
+                << "Peer rejected - all outbound connections taken: "
+                << peer->toString();
+        }
+
         mConnectionsRejected.Mark();
         peer->drop(Peer::DropMode::IGNORE_WRITE_QUEUE);
         return;
