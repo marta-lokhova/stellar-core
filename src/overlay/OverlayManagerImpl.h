@@ -40,7 +40,15 @@ class OverlayManagerImpl : public OverlayManager
     struct PeersList
     {
         explicit PeersList(OverlayManagerImpl& overlayManager,
+                           medida::MetricsRegistry& metricsRegistry,
+                           std::string directionString,
+                           std::string cancelledName,
                            unsigned short maxAuthenticatedCount);
+
+        medida::Meter& mConnectionsAttempted;
+        medida::Meter& mConnectionsEstablished;
+        medida::Meter& mConnectionsDropped;
+        medida::Meter& mConnectionsCancelled;
 
         OverlayManagerImpl& mOverlayManager;
         unsigned short mMaxAuthenticatedCount;
@@ -67,10 +75,6 @@ class OverlayManagerImpl : public OverlayManager
     bool mShuttingDown;
 
     medida::Meter& mMessagesBroadcast;
-    medida::Meter& mConnectionsAttempted;
-    medida::Meter& mConnectionsEstablished;
-    medida::Meter& mConnectionsDropped;
-    medida::Meter& mConnectionsRejected;
     medida::Counter& mPendingPeersSize;
     medida::Counter& mAuthenticatedPeersSize;
 
