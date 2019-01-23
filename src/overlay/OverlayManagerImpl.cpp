@@ -261,7 +261,7 @@ OverlayManagerImpl::connectTo(PeerBareAddress const& address)
     connectToImpl(address, false);
 }
 
-void
+bool
 OverlayManagerImpl::connectToImpl(PeerBareAddress const& address,
                                   bool forceoutbound)
 {
@@ -270,13 +270,14 @@ OverlayManagerImpl::connectToImpl(PeerBareAddress const& address,
                                                     Peer::REMOTE_CALLED_US))
     {
         getPeerManager().update(address, PeerManager::BackOffUpdate::INCREASE);
-        addOutboundConnection(TCPPeer::initiate(mApp, address));
+        return addOutboundConnection(TCPPeer::initiate(mApp, address));
     }
     else
     {
         CLOG(ERROR, "Overlay")
             << "trying to connect to a node we're already connected to "
             << address.toString();
+        return false;
     }
 }
 
@@ -363,21 +364,26 @@ OverlayManagerImpl::getPeersToConnectTo(int maxNum, PeerType peerType)
     return mPeerSources[peerType]->getRandomPeers(std::min(maxNum, 50), keep);
 }
 
-void
+int
 OverlayManagerImpl::connectTo(int maxNum, PeerType peerType)
 {
-    connectTo(getPeersToConnectTo(maxNum, peerType),
-              peerType == PeerType::INBOUND);
+    return connectTo(getPeersToConnectTo(maxNum, peerType),
+                     peerType == PeerType::INBOUND);
 }
 
-void
+int
 OverlayManagerImpl::connectTo(std::vector<PeerBareAddress> const& peers,
                               bool forceoutbound)
 {
+    auto count = 0;
     for (auto& address : peers)
     {
-        connectToImpl(address, forceoutbound);
+        if (connectToImpl(address, forceoutbound))
+        {
+            count++;
+        }
     }
+    return count;
 }
 
 // called every 2 seconds
@@ -388,15 +394,38 @@ OverlayManagerImpl::tick()
 
     mLoad.maybeShedExcessLoad(mApp);
 
+    auto availablePendingSlots = availableOutboundPendingSlots();
+    auto availableAuthenticatedSlots = availableOutboundAuthenticatedSlots();
+
     // try to replace all connections with preferred peers
-    connectTo(mApp.getConfig().TARGET_PEER_CONNECTIONS, PeerType::PREFERRED);
+    auto pendingUsedByPreferred = connectTo(
+        mApp.getConfig().TARGET_PEER_CONNECTIONS, PeerType::PREFERRED);
+
+    assert(pendingUsedByPreferred <= availablePendingSlots);
+    availablePendingSlots -= pendingUsedByPreferred;
 
     // connect to non-preferred candidates from the database
     // when PREFERRED_PEER_ONLY is set and we connect to a non preferred_peer we
     // just end up dropping & backing off it during handshake (this allows for
     // preferred_peers to work for both ip based and key based preferred mode)
-    connectTo(missingAuthenticatedCount(), PeerType::OUTBOUND);
-    connectTo(missingAuthenticatedCount(), PeerType::INBOUND);
+    if (availablePendingSlots > 0 && availableAuthenticatedSlots > 0)
+    {
+        // try to leave at least one pending slot for peer promotion
+        auto outboundToConnect = availablePendingSlots > 1
+                                     ? std::min(availablePendingSlots - 1,
+                                                availableAuthenticatedSlots)
+                                     : 1;
+        auto pendingUsedByOutbound =
+            connectTo(availableAuthenticatedSlots, PeerType::OUTBOUND);
+        assert(pendingUsedByOutbound <= availablePendingSlots);
+        availablePendingSlots -= pendingUsedByOutbound;
+    }
+
+    // try to promote some peers from inbound to outbound state
+    if (availablePendingSlots > 0)
+    {
+        connectTo(availablePendingSlots, PeerType::INBOUND);
+    }
 
     mTimer.expires_from_now(
         std::chrono::seconds(mApp.getConfig().PEER_AUTHENTICATION_TIMEOUT + 1));
@@ -404,7 +433,22 @@ OverlayManagerImpl::tick()
 }
 
 int
-OverlayManagerImpl::missingAuthenticatedCount() const
+OverlayManagerImpl::availableOutboundPendingSlots() const
+{
+    if (mOutboundPeers.mPending.size() <
+        mApp.getConfig().MAX_OUTBOUND_PENDING_CONNECTIONS)
+    {
+        return mApp.getConfig().MAX_OUTBOUND_PENDING_CONNECTIONS -
+               mOutboundPeers.mPending.size();
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+int
+OverlayManagerImpl::availableOutboundAuthenticatedSlots() const
 {
     if (mOutboundPeers.mAuthenticated.size() <
         mApp.getConfig().TARGET_PEER_CONNECTIONS)
@@ -485,7 +529,7 @@ OverlayManagerImpl::isPossiblyPreferred(std::string const& ip)
         [&](PeerBareAddress const& address) { return address.getIP() == ip; });
 }
 
-void
+bool
 OverlayManagerImpl::addOutboundConnection(Peer::pointer peer)
 {
     assert(peer->getRole() == Peer::WE_CALLED_REMOTE);
@@ -503,12 +547,14 @@ OverlayManagerImpl::addOutboundConnection(Peer::pointer peer)
 
         mOutboundPeers.mConnectionsCancelled.Mark();
         peer->drop(Peer::DropMode::IGNORE_WRITE_QUEUE);
-        return;
+        return false;
     }
     CLOG(INFO, "Overlay") << "New connected peer " << peer->toString();
     mOutboundPeers.mConnectionsEstablished.Mark();
     mOutboundPeers.mPending.push_back(peer);
     updateSizeCounters();
+
+    return true;
 }
 
 void

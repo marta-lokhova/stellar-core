@@ -86,8 +86,8 @@ class OverlayManager
     // Add new pending inbound connection.
     virtual void addInboundConnection(Peer::pointer peer) = 0;
 
-    // Add new pending outbound connection.
-    virtual void addOutboundConnection(Peer::pointer peer) = 0;
+    // Add new pending outbound connection. Return true if connection was added.
+    virtual bool addOutboundConnection(Peer::pointer peer) = 0;
 
     // Remove peer from the in-memory set of connected peers. Can only be
     // called on peers in Peer::CLOSING state.

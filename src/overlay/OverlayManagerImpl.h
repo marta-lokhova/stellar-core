@@ -98,7 +98,7 @@ class OverlayManagerImpl : public OverlayManager
     void connectTo(PeerBareAddress const& address) override;
 
     void addInboundConnection(Peer::pointer peer) override;
-    void addOutboundConnection(Peer::pointer peer) override;
+    bool addOutboundConnection(Peer::pointer peer) override;
     void removePeer(Peer* peer) override;
     void storeConfigPeers();
 
@@ -131,15 +131,16 @@ class OverlayManagerImpl : public OverlayManager
 
     std::vector<PeerBareAddress> getPeersToConnectTo(int maxNum,
                                                      PeerType connectionType);
-    virtual void connectToImpl(PeerBareAddress const& address,
+    virtual bool connectToImpl(PeerBareAddress const& address,
                                bool forceoutbound);
-    void connectTo(int maxNum, PeerType connectionType);
-    void connectTo(std::vector<PeerBareAddress> const& peers,
-                   bool forceoutbound);
+    int connectTo(int maxNum, PeerType connectionType);
+    int connectTo(std::vector<PeerBareAddress> const& peers,
+                  bool forceoutbound);
 
     bool moveToAuthenticated(Peer::pointer peer);
 
-    int missingAuthenticatedCount() const;
+    int availableOutboundPendingSlots() const;
+    int availableOutboundAuthenticatedSlots() const;
 
     bool isPossiblyPreferred(std::string const& ip);
 
