@@ -631,10 +631,10 @@ TEST_CASE("connecting to saturated nodes", "[overlay][connections]")
     auto simulation =
         std::make_shared<Simulation>(Simulation::OVER_TCP, networkID);
 
-    auto getConfiguration = [](int id, unsigned short targetOubdoundConnections,
+    auto getConfiguration = [](int id, unsigned short targetOutboundConnections,
                                unsigned short maxInboundConnections) {
         auto cfg = getTestConfig(id);
-        cfg.TARGET_PEER_CONNECTIONS = targetOubdoundConnections;
+        cfg.TARGET_PEER_CONNECTIONS = targetOutboundConnections;
         cfg.MAX_ADDITIONAL_PEER_CONNECTIONS = maxInboundConnections;
         return cfg;
     };
