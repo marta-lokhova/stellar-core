@@ -1738,4 +1738,28 @@ LedgerTxnRoot::encodeHomeDomainsBase64()
 {
     mImpl->encodeHomeDomainsBase64();
 }
+
+std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
+LedgerTxnRoot::getNewestVersion(std::vector<LedgerKey> const& key)
+{
+    return mImpl->getNewestVersion(key);
+}
+
+std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
+LedgerTxnRoot::Impl::getNewestVersion(std::vector<LedgerKey> const& key)
+{
+    switch (key[0].type())
+    {
+    case ACCOUNT:
+        return bulkLoadAccounts(key);
+    case TRUSTLINE:
+        return bulkLoadTrustLines(key);
+    case OFFER:
+        return bulkLoadOffers(key);
+    case DATA:
+        return bulkLoadData(key);
+    default:
+        std::abort();
+    }
+}
 }

@@ -6,6 +6,7 @@
 #include "crypto/SecretKey.h"
 #include "database/Database.h"
 #include "ledger/LedgerTxnImpl.h"
+#include "ledger/SqliteUtils.h"
 #include "util/XDROperators.h"
 #include "util/types.h"
 
@@ -219,5 +220,149 @@ LedgerTxnRoot::Impl::dropTrustLines()
            "lastmodified INT             NOT NULL,"
            "PRIMARY KEY  (accountid, issuer, assetcode)"
            ");";
+}
+
+static LedgerEntry
+sqliteFetchTrustLine(sqlite3_stmt* st)
+{
+    LedgerEntry le;
+    le.data.type(TRUSTLINE);
+    auto& tl = le.data.trustLine();
+
+    sqliteRead(st, tl.accountID, 0);
+    sqliteReadAsset(st, tl.asset, 1, 2, 3);
+    sqliteRead(st, tl.limit, 4);
+    sqliteRead(st, tl.balance, 5);
+    sqliteRead(st, tl.flags, 6);
+    sqliteRead(st, le.lastModifiedLedgerSeq, 7);
+
+    Liabilities liabilities;
+    if (sqliteReadLiabilities(st, liabilities, 8, 9))
+    {
+        tl.ext.v(1);
+        tl.ext.v1().liabilities = liabilities;
+    }
+
+    return le;
+}
+
+static std::vector<LedgerEntry>
+sqliteSpecificBulkLoadTrustLines(
+    Database& db, std::vector<std::string> const& accountIDs,
+    std::vector<std::string> const& issuers,
+    std::vector<std::string> const& assetCodes)
+{
+    assert(accountIDs.size() == issuers.size());
+    assert(accountIDs.size() == assetCodes.size());
+
+    std::vector<const char*> cstrAccountIDs;
+    std::vector<const char*> cstrIssuers;
+    std::vector<const char*> cstrAssetCodes;
+    cstrAccountIDs.reserve(accountIDs.size());
+    cstrIssuers.reserve(issuers.size());
+    cstrAssetCodes.reserve(assetCodes.size());
+    for (size_t i = 0; i < accountIDs.size(); ++i)
+    {
+        cstrAccountIDs.emplace_back(accountIDs[i].c_str());
+        cstrIssuers.emplace_back(issuers[i].c_str());
+        cstrAssetCodes.emplace_back(assetCodes[i].c_str());
+    }
+
+    std::string sqlJoin =
+        "SELECT x.value, y.value, z.value FROM "
+        "(SELECT rowid, value FROM carray(?, ?, 'char*') ORDER BY rowid) AS x "
+        "INNER JOIN (SELECT rowid, value FROM carray(?, ?, 'char*') ORDER BY rowid) AS y ON x.rowid = y.rowid "
+        "INNER JOIN (SELECT rowid, value FROM carray(?, ?, 'char*') ORDER BY rowid) AS z ON x.rowid = z.rowid";
+    std::string sql = "WITH r AS (" + sqlJoin +
+        ") SELECT accountid, assettype, assetcode, issuer, tlimit, balance, "
+        "flags, lastmodified, buyingliabilities, sellingliabilities "
+        "FROM trustlines WHERE (accountid, issuer, assetcode) IN r";
+
+    auto prep = db.getPreparedStatement(sql);
+    auto sqliteStatement = dynamic_cast<soci::sqlite3_statement_backend*>(prep.statement().get_backend());
+    auto st = sqliteStatement->stmt_;
+
+    sqlite3_reset(st);
+    sqlite3_bind_pointer(st, 1, cstrAccountIDs.data(), "carray", 0);
+    sqlite3_bind_int(st, 2, cstrAccountIDs.size());
+    sqlite3_bind_pointer(st, 3, cstrIssuers.data(), "carray", 0);
+    sqlite3_bind_int(st, 4, cstrIssuers.size());
+    sqlite3_bind_pointer(st, 5, cstrAssetCodes.data(), "carray", 0);
+    sqlite3_bind_int(st, 6, cstrAssetCodes.size());
+
+    std::vector<LedgerEntry> res;
+    while (true)
+    {
+        int stepRes = sqlite3_step(st);
+        if (stepRes == SQLITE_DONE)
+        {
+            break;
+        }
+        else if (stepRes == SQLITE_ROW)
+        {
+            res.emplace_back(sqliteFetchTrustLine(st));
+        }
+        else
+        {
+            // TODO(jonjove): What to do?
+            std::abort();
+        }
+    }
+    return res;
+}
+
+std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
+LedgerTxnRoot::Impl::bulkLoadTrustLines(std::vector<LedgerKey> const& keys)
+{
+    std::vector<std::string> accountIDs;
+    std::vector<std::string> issuers;
+    std::vector<std::string> assetCodes;
+    accountIDs.reserve(keys.size());
+    issuers.reserve(keys.size());
+    assetCodes.reserve(keys.size());
+    for (auto const& k : keys)
+    {
+        assert(k.type() == TRUSTLINE);
+        accountIDs.emplace_back(KeyUtils::toStrKey(k.trustLine().accountID));
+
+        auto const& asset = k.trustLine().asset;
+        assert(asset.type() != ASSET_TYPE_NATIVE);
+        assetCodes.emplace_back();
+        if (asset.type() == ASSET_TYPE_CREDIT_ALPHANUM4)
+        {
+            assetCodeToStr(asset.alphaNum4().assetCode, assetCodes.back());
+            issuers.emplace_back(KeyUtils::toStrKey(asset.alphaNum4().issuer));
+        }
+        else if (asset.type() == ASSET_TYPE_CREDIT_ALPHANUM12)
+        {
+            assetCodeToStr(asset.alphaNum12().assetCode, assetCodes.back());
+            issuers.emplace_back(KeyUtils::toStrKey(asset.alphaNum12().issuer));
+        }
+    }
+
+    std::vector<LedgerEntry> entries;
+    if (mDatabase.isSqlite())
+    {
+        entries = sqliteSpecificBulkLoadTrustLines(
+            mDatabase, accountIDs, issuers, assetCodes);
+    }
+    else
+    {
+        std::abort();
+    }
+
+    std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>> res;
+    for (auto const& le : entries)
+    {
+        res.emplace(LedgerEntryKey(le), std::make_shared<LedgerEntry const>(le));
+    }
+    for (auto const& key : keys)
+    {
+        if (res.find(key) == res.end())
+        {
+            res.emplace(key, nullptr);
+        }
+    }
+    return res;
 }
 }

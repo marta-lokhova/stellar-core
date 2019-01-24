@@ -7,6 +7,7 @@
 #include "crypto/SignerKey.h"
 #include "database/Database.h"
 #include "ledger/LedgerTxnImpl.h"
+#include "ledger/SqliteUtils.h"
 #include "util/Decoder.h"
 #include "util/Logging.h"
 #include "util/XDROperators.h"
@@ -405,5 +406,134 @@ LedgerTxnRoot::Impl::encodeHomeDomainsBase64()
                 << "Wrote home domains for " << numUpdated << " accounts";
         }
     }
+}
+
+static LedgerEntry
+sqliteFetchAccount(sqlite3_stmt* st)
+{
+    LedgerEntry le;
+    le.data.type(ACCOUNT);
+    auto& ae = le.data.account();
+
+    sqliteRead(st, ae.accountID, 0);
+    sqliteRead(st, ae.balance, 1);
+    sqliteRead(st, ae.seqNum, 2);
+    sqliteRead(st, ae.numSubEntries, 3);
+    sqliteRead(st, ae.inflationDest, 4);
+
+    std::string homeDomain;
+    sqliteRead(st, homeDomain, 5);
+    decoder::decode_b64(homeDomain, ae.homeDomain);
+
+    std::string thresholds;
+    sqliteRead(st, thresholds, 6);
+    bn::decode_b64(thresholds.begin(), thresholds.end(), ae.thresholds.begin());
+
+    sqliteRead(st, ae.flags, 7);
+    sqliteRead(st, le.lastModifiedLedgerSeq, 8);
+
+    Liabilities liabilities;
+    if (sqliteReadLiabilities(st, liabilities, 9, 10))
+    {
+        ae.ext.v(1);
+        ae.ext.v1().liabilities = liabilities;
+    }
+
+    std::string signers;
+    if (sqliteRead(st, signers, 11, true))
+    {
+        std::vector<uint8_t> signersOpaque;
+        decoder::decode_b64(signers, signersOpaque);
+        xdr::xdr_from_opaque(signersOpaque, ae.signers);
+        assert(std::adjacent_find(ae.signers.begin(), ae.signers.end(),
+                                  [](Signer const& lhs, Signer const& rhs) {
+                                      return !(lhs.key < rhs.key);
+                                  }) == ae.signers.end());
+    }
+
+    return le;
+}
+
+static std::vector<LedgerEntry>
+sqliteSpecificBulkLoadAccounts(
+    Database& db, std::vector<std::string> const& accountIDs)
+{
+    std::vector<const char*> accountIDcstrs;
+    accountIDcstrs.reserve(accountIDs.size());
+    for (auto const& acc : accountIDs)
+    {
+        accountIDcstrs.emplace_back(acc.c_str());
+    }
+
+    std::string sql =
+        "SELECT accountid, balance, seqnum, numsubentries, "
+        "inflationdest, homedomain, thresholds, flags, lastmodified, "
+        "buyingliabilities, sellingliabilities, signers FROM accounts "
+        "WHERE accountid IN carray(?, ?, 'char*')";
+
+    auto prep = db.getPreparedStatement(sql);
+    auto sqliteStatement = dynamic_cast<soci::sqlite3_statement_backend*>(prep.statement().get_backend());
+    auto st = sqliteStatement->stmt_;
+
+    sqlite3_reset(st);
+    sqlite3_bind_pointer(st, 1, accountIDcstrs.data(), "carray", 0);
+    sqlite3_bind_int(st, 2, accountIDcstrs.size());
+
+    std::vector<LedgerEntry> res;
+    while (true)
+    {
+        int stepRes = sqlite3_step(st);
+        if (stepRes == SQLITE_DONE)
+        {
+            break;
+        }
+        else if (stepRes == SQLITE_ROW)
+        {
+            res.emplace_back(sqliteFetchAccount(st));
+        }
+        else
+        {
+            // TODO(jonjove): What to do?
+            std::abort();
+        }
+    }
+    return res;
+}
+
+std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
+LedgerTxnRoot::Impl::bulkLoadAccounts(std::vector<LedgerKey> const& keys)
+{
+    std::vector<std::string> accountIDs;
+    accountIDs.reserve(keys.size());
+    for (auto const& k : keys)
+    {
+        assert(k.type() == ACCOUNT);
+        accountIDs.emplace_back(KeyUtils::toStrKey(k.account().accountID));
+    }
+
+    std::vector<LedgerEntry> entries;
+    if (mDatabase.isSqlite())
+    {
+        entries = sqliteSpecificBulkLoadAccounts(mDatabase, accountIDs);
+    }
+    else
+    {
+        std::abort();
+    }
+
+    std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>> res;
+    for (auto const& le : entries)
+    {
+        res.emplace(LedgerEntryKey(le),
+                    std::make_shared<LedgerEntry const>(le));
+    }
+    for (auto const& key : keys)
+    {
+        if (res.find(key) == res.end())
+        {
+            res.emplace(key, nullptr);
+        }
+    }
+    return res;
 }
 }

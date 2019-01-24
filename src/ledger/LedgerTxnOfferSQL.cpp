@@ -6,6 +6,7 @@
 #include "crypto/SecretKey.h"
 #include "database/Database.h"
 #include "ledger/LedgerTxnImpl.h"
+#include "SqliteUtils.h"
 #include "util/XDROperators.h"
 #include "util/types.h"
 
@@ -506,5 +507,114 @@ LedgerTxnRoot::Impl::dropOffers()
     mDatabase.getSession()
         << "CREATE INDEX buyingissuerindex ON offers (buyingissuer);";
     mDatabase.getSession() << "CREATE INDEX priceindex ON offers (price);";
+}
+
+static LedgerEntry
+sqliteFetchOffer(sqlite3_stmt* st)
+{
+    LedgerEntry le;
+    le.data.type(OFFER);
+    auto& oe = le.data.offer();
+
+    sqliteRead(st, oe.sellerID, 0);
+    sqliteRead(st, oe.offerID, 1);
+    sqliteReadAsset(st, oe.selling, 2, 3, 4);
+    sqliteReadAsset(st, oe.buying, 5, 6, 7);
+    sqliteRead(st, oe.amount, 8);
+    sqliteRead(st, oe.price.n, 9);
+    sqliteRead(st, oe.price.d, 10);
+    sqliteRead(st, oe.flags, 11);
+    sqliteRead(st, le.lastModifiedLedgerSeq, 12);
+
+    return le;
+}
+
+static std::vector<LedgerEntry>
+sqliteSpecificBulkLoadOffers(
+    Database& db, std::vector<AccountID> const& sellerIDs,
+    std::vector<uint64_t> const& offerIDs)
+{
+    assert(sellerIDs.size() == offerIDs.size());
+    std::unordered_map<uint64_t, AccountID> sellerIDsByOfferID;
+    for (size_t i = 0; i < sellerIDs.size(); ++i)
+    {
+        sellerIDsByOfferID[offerIDs[i]] = sellerIDs[i];
+    }
+
+    std::string sql =
+        "SELECT sellerid, offerid, sellingassettype, sellingassetcode, "
+        "sellingissuer, buyingassettype, buyingassetcode, buyingissuer, "
+        "amount, pricen, priced, flags, lastmodified "
+        "FROM offers WHERE offerid IN carray(?, ?, 'int64')";
+
+    auto prep = db.getPreparedStatement(sql);
+    auto sqliteStatement = dynamic_cast<soci::sqlite3_statement_backend*>(prep.statement().get_backend());
+    auto st = sqliteStatement->stmt_;
+
+    sqlite3_reset(st);
+    sqlite3_bind_pointer(st, 1, (void*)offerIDs.data(), "carray", 0);
+    sqlite3_bind_int(st, 2, offerIDs.size());
+
+    std::vector<LedgerEntry> res;
+    while (true)
+    {
+        int stepRes = sqlite3_step(st);
+        if (stepRes == SQLITE_DONE)
+        {
+            break;
+        }
+        else if (stepRes == SQLITE_ROW)
+        {
+            res.emplace_back(sqliteFetchOffer(st));
+            auto& oe = res.back().data.offer();
+            assert(sellerIDsByOfferID[oe.offerID] == oe.sellerID);
+        }
+        else
+        {
+            // TODO(jonjove): What to do?
+            std::abort();
+        }
+    }
+    return res;
+}
+
+std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
+LedgerTxnRoot::Impl::bulkLoadOffers(std::vector<LedgerKey> const& keys)
+{
+    std::vector<AccountID> sellerIDs;
+    std::vector<uint64_t> offerIDs;
+    sellerIDs.reserve(keys.size());
+    offerIDs.reserve(keys.size());
+    for (auto const& k : keys)
+    {
+        assert(k.type() == OFFER);
+        sellerIDs.emplace_back(k.offer().sellerID);
+        offerIDs.emplace_back(k.offer().offerID);
+    }
+
+    std::vector<LedgerEntry> entries;
+    if (mDatabase.isSqlite())
+    {
+        entries = sqliteSpecificBulkLoadOffers(mDatabase, sellerIDs, offerIDs);
+    }
+    else
+    {
+        std::abort();
+    }
+
+    std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>> res;
+    for (auto const& le : entries)
+    {
+        res.emplace(LedgerEntryKey(le),
+                    std::make_shared<LedgerEntry const>(le));
+    }
+    for (auto const& key : keys)
+    {
+        if (res.find(key) == res.end())
+        {
+            res.emplace(key, nullptr);
+        }
+    }
+    return res;
 }
 }

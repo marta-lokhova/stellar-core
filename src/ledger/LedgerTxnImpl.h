@@ -343,6 +343,15 @@ class LedgerTxnRoot::Impl
     getFromBestOffersCache(Asset const& buying, Asset const& selling,
                            BestOffersCacheEntry& defaultValue) const;
 
+    std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
+    bulkLoadAccounts(std::vector<LedgerKey> const& keys);
+    std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
+    bulkLoadTrustLines(std::vector<LedgerKey> const& keys);
+    std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
+    bulkLoadOffers(std::vector<LedgerKey> const& keys);
+    std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
+    bulkLoadData(std::vector<LedgerKey> const& keys);
+
   public:
     // Constructor has the strong exception safety guarantee
     Impl(Database& db, size_t entryCacheSize, size_t bestOfferCacheSize);
@@ -412,6 +421,10 @@ class LedgerTxnRoot::Impl
     // - the entry cache may be, but is not guaranteed to be, cleared.
     std::shared_ptr<LedgerEntry const>
     getNewestVersion(LedgerKey const& key) const;
+
+    // TODO(jonjove): FOR TESTING ONLY
+    std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
+    getNewestVersion(std::vector<LedgerKey> const& key);
 
     // rollbackChild has the strong exception safety guarantee.
     void rollbackChild();

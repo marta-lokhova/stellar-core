@@ -534,6 +534,10 @@ class LedgerTxnRoot : public AbstractLedgerTxnParent
     std::shared_ptr<LedgerEntry const>
     getNewestVersion(LedgerKey const& key) const override;
 
+    // TODO(jonjove): FOR TESTING ONLY
+    std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
+    getNewestVersion(std::vector<LedgerKey> const& key);
+
     void rollbackChild() override;
 
     void writeSignersTableIntoAccountsTable();
