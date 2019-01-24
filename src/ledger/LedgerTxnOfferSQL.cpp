@@ -578,6 +578,91 @@ sqliteSpecificBulkLoadOffers(
     return res;
 }
 
+#ifdef USE_POSTGRES
+static std::vector<LedgerEntry>
+postgresSpecificBulkLoadOffers(
+    Database& db, std::vector<AccountID> const& sellerIDs,
+    std::vector<uint64_t> const& offerIDs)
+{
+    assert(sellerIDs.size() == offerIDs.size());
+    std::unordered_map<uint64_t, AccountID> sellerIDsByOfferID;
+    for (size_t i = 0; i < sellerIDs.size(); ++i)
+    {
+        sellerIDsByOfferID[offerIDs[i]] = sellerIDs[i];
+    }
+
+    std::string sellerID, sellingAssetCode, sellingIssuer, buyingAssetCode,
+        buyingIssuer;
+    int64_t amount;
+    uint64_t offerID;
+    uint32_t sellingAssetType, buyingAssetType, flags, lastModified;
+    Price price;
+    soci::indicator sellingAssetCodeIndicator, buyingAssetCodeIndicator,
+        sellingIssuerIndicator, buyingIssuerIndicator;
+
+    std::string strOfferIDs;
+    auto pg = dynamic_cast<soci::postgresql_session_backend*>(db.getSession().get_backend());
+    marshalToPGArray(pg->conn_, strOfferIDs, offerIDs);
+
+    std::string sql =
+        "WITH r AS (SELECT unnest(:v1::BIGINT[])) "
+        "SELECT sellerid, offerid, sellingassettype, sellingassetcode, "
+        "sellingissuer, buyingassettype, buyingassetcode, buyingissuer, "
+        "amount, pricen, priced, flags, lastmodified "
+        "FROM offers WHERE offerid IN (SELECT * FROM r)";
+    auto prep = db.getPreparedStatement(sql);
+    auto& st = prep.statement();
+    st.exchange(soci::use(strOfferIDs));
+
+    st.exchange(soci::into(sellerID));
+    st.exchange(soci::into(offerID));
+    st.exchange(soci::into(sellingAssetType));
+    st.exchange(soci::into(sellingAssetCode, sellingAssetCodeIndicator));
+    st.exchange(soci::into(sellingIssuer, sellingIssuerIndicator));
+    st.exchange(soci::into(buyingAssetType));
+    st.exchange(soci::into(buyingAssetCode, buyingAssetCodeIndicator));
+    st.exchange(soci::into(buyingIssuer, buyingIssuerIndicator));
+    st.exchange(soci::into(amount));
+    st.exchange(soci::into(price.n));
+    st.exchange(soci::into(price.d));
+    st.exchange(soci::into(flags));
+    st.exchange(soci::into(lastModified));
+    st.define_and_bind();
+    {
+        auto timer = db.getSelectTimer("offer");
+        st.execute(true);
+    }
+
+    std::vector<LedgerEntry> res;
+    while (st.got_data())
+    {
+        res.emplace_back();
+        auto& le = res.back();
+        le.data.type(OFFER);
+        auto& oe = le.data.offer();
+
+        oe.sellerID = KeyUtils::fromStrKey<PublicKey>(sellerID);
+        oe.offerID = offerID;
+        assert(sellerIDsByOfferID[oe.offerID] == oe.sellerID);
+
+        processAsset(oe.selling, (AssetType)sellingAssetType,
+                     sellingIssuer, sellingIssuerIndicator,
+                     sellingAssetCode, sellingAssetCodeIndicator);
+        processAsset(oe.buying, (AssetType)buyingAssetType, buyingIssuer,
+                     buyingIssuerIndicator, buyingAssetCode,
+                     buyingAssetCodeIndicator);
+
+        oe.amount = amount;
+        oe.price = price;
+        oe.flags = flags;
+        le.lastModifiedLedgerSeq = lastModified;
+
+        st.fetch();
+    }
+    return res;
+}
+#endif
+
 std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
 LedgerTxnRoot::Impl::bulkLoadOffers(std::vector<LedgerKey> const& keys)
 {
@@ -599,7 +684,11 @@ LedgerTxnRoot::Impl::bulkLoadOffers(std::vector<LedgerKey> const& keys)
     }
     else
     {
+#ifdef USE_POSTGRES
+        entries = postgresSpecificBulkLoadOffers(mDatabase, sellerIDs, offerIDs);
+#else
         std::abort();
+#endif
     }
 
     std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>> res;

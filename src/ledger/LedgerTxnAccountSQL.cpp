@@ -500,6 +500,108 @@ sqliteSpecificBulkLoadAccounts(
     return res;
 }
 
+#ifdef USE_POSTGRES
+static std::vector<LedgerEntry>
+postgresSpecificBulkLoadAccounts(
+    Database& db, std::vector<std::string> const& accountIDs)
+{
+    std::string accountID, inflationDest, homeDomain, thresholds, signers;
+    int64_t balance;
+    uint64_t seqNum;
+    uint32_t numSubEntries, flags, lastModified;
+    Liabilities liabilities;
+    soci::indicator inflationDestInd, signersInd, buyingLiabilitiesInd,
+        sellingLiabilitiesInd;
+
+    std::string strAccountIDs;
+    auto pg = dynamic_cast<soci::postgresql_session_backend*>(db.getSession().get_backend());
+    marshalToPGArray(pg->conn_, strAccountIDs, accountIDs);
+
+    std::string sql =
+        "WITH r AS (SELECT unnest(:v1::TEXT[])) "
+        "SELECT accountid, balance, seqnum, numsubentries, "
+        "inflationdest, homedomain, thresholds, flags, lastmodified, "
+        "buyingliabilities, sellingliabilities, signers FROM accounts "
+        "WHERE accountid IN (SELECT * FROM r)";
+
+    auto prep = db.getPreparedStatement(sql);
+    auto& st = prep.statement();
+    st.exchange(soci::use(strAccountIDs));
+    st.exchange(soci::into(accountID));
+    st.exchange(soci::into(balance));
+    st.exchange(soci::into(seqNum));
+    st.exchange(soci::into(numSubEntries));
+    st.exchange(soci::into(inflationDest, inflationDestInd));
+    st.exchange(soci::into(homeDomain));
+    st.exchange(soci::into(thresholds));
+    st.exchange(soci::into(flags));
+    st.exchange(soci::into(lastModified));
+    st.exchange(soci::into(liabilities.buying, buyingLiabilitiesInd));
+    st.exchange(soci::into(liabilities.selling, sellingLiabilitiesInd));
+    st.exchange(soci::into(signers, signersInd));
+    st.define_and_bind();
+    {
+        auto timer = db.getSelectTimer("account");
+        st.execute(true);
+    }
+
+    std::vector<LedgerEntry> res;
+    while (st.got_data())
+    {
+        res.emplace_back();
+        auto& le = res.back();
+        le.data.type(ACCOUNT);
+        auto& ae = le.data.account();
+
+        ae.accountID = KeyUtils::fromStrKey<PublicKey>(accountID);
+        ae.balance = balance;
+        ae.seqNum = seqNum;
+        ae.numSubEntries = numSubEntries;
+
+        if (inflationDestInd == soci::i_ok)
+        {
+            ae.inflationDest.activate() =
+                KeyUtils::fromStrKey<PublicKey>(inflationDest);
+        }
+
+        decoder::decode_b64(homeDomain, ae.homeDomain);
+
+        bn::decode_b64(thresholds.begin(), thresholds.end(),
+                       ae.thresholds.begin());
+
+        if (inflationDestInd == soci::i_ok)
+        {
+            ae.inflationDest.activate() =
+                KeyUtils::fromStrKey<PublicKey>(inflationDest);
+        }
+
+        ae.flags = flags;
+        le.lastModifiedLedgerSeq = lastModified;
+
+        assert(buyingLiabilitiesInd == sellingLiabilitiesInd);
+        if (buyingLiabilitiesInd == soci::i_ok)
+        {
+            ae.ext.v(1);
+            ae.ext.v1().liabilities = liabilities;
+        }
+
+        if (signersInd == soci::i_ok)
+        {
+            std::vector<uint8_t> signersOpaque;
+            decoder::decode_b64(signers, signersOpaque);
+            xdr::xdr_from_opaque(signersOpaque, ae.signers);
+            assert(std::adjacent_find(ae.signers.begin(), ae.signers.end(),
+                                      [](Signer const& lhs, Signer const& rhs) {
+                                          return !(lhs.key < rhs.key);
+                                      }) == ae.signers.end());
+        }
+
+        st.fetch();
+    }
+    return res;
+}
+#endif
+
 std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
 LedgerTxnRoot::Impl::bulkLoadAccounts(std::vector<LedgerKey> const& keys)
 {
@@ -518,7 +620,11 @@ LedgerTxnRoot::Impl::bulkLoadAccounts(std::vector<LedgerKey> const& keys)
     }
     else
     {
+#ifdef USE_POSTGRES
+        entries = postgresSpecificBulkLoadAccounts(mDatabase, accountIDs);
+#else
         std::abort();
+#endif
     }
 
     std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>> res;

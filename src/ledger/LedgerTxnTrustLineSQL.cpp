@@ -311,6 +311,97 @@ sqliteSpecificBulkLoadTrustLines(
     return res;
 }
 
+#ifdef USE_POSTGRES
+static std::vector<LedgerEntry>
+postgresSpecificBulkLoadTrustLines(
+    Database& db, std::vector<std::string> const& accountIDs,
+    std::vector<std::string> const& issuers,
+    std::vector<std::string> const& assetCodes)
+{
+    assert(accountIDs.size() == issuers.size());
+    assert(accountIDs.size() == assetCodes.size());
+
+    std::string accountID, assetCode, issuer;
+    int64_t balance, limit;
+    uint32_t assetType, flags, lastModified;
+    Liabilities liabilities;
+    soci::indicator buyingLiabilitiesInd, sellingLiabilitiesInd;
+
+    std::string strAccountIDs;
+    std::string strIssuers;
+    std::string strAssetCodes;
+    auto pg = dynamic_cast<soci::postgresql_session_backend*>(db.getSession().get_backend());
+    marshalToPGArray(pg->conn_, strAccountIDs, accountIDs);
+    marshalToPGArray(pg->conn_, strIssuers, issuers);
+    marshalToPGArray(pg->conn_, strAssetCodes, assetCodes);
+
+    auto prep = db.getPreparedStatement(
+        "WITH r AS (SELECT unnest(:v1::TEXT[]), unnest(:v2::TEXT[]), "
+        "unnest(:v3::TEXT[])) SELECT accountid, assettype, assetcode, issuer, "
+        "tlimit, balance, flags, lastmodified, buyingliabilities, "
+        "sellingliabilities FROM trustlines "
+        "WHERE (accountid, issuer, assetcode) IN (SELECT * FROM r)");
+    auto& st = prep.statement();
+    st.exchange(soci::use(strAccountIDs));
+    st.exchange(soci::use(strIssuers));
+    st.exchange(soci::use(strAssetCodes));
+    st.exchange(soci::into(accountID));
+    st.exchange(soci::into(assetType));
+    st.exchange(soci::into(assetCode));
+    st.exchange(soci::into(issuer));
+    st.exchange(soci::into(limit));
+    st.exchange(soci::into(balance));
+    st.exchange(soci::into(flags));
+    st.exchange(soci::into(lastModified));
+    st.exchange(soci::into(liabilities.buying, buyingLiabilitiesInd));
+    st.exchange(soci::into(liabilities.selling, sellingLiabilitiesInd));
+    st.define_and_bind();
+    {
+        auto timer = db.getSelectTimer("trust");
+        st.execute(true);
+    }
+
+    std::vector<LedgerEntry> res;
+    while (st.got_data())
+    {
+        res.emplace_back();
+        auto& le = res.back();
+        le.data.type(TRUSTLINE);
+        auto& tl = le.data.trustLine();
+
+        tl.accountID = KeyUtils::fromStrKey<PublicKey>(accountID);
+
+        assert(assetType != ASSET_TYPE_NATIVE);
+        tl.asset.type(static_cast<AssetType>(assetType));
+        if (assetType == ASSET_TYPE_CREDIT_ALPHANUM4)
+        {
+            tl.asset.alphaNum4().issuer = KeyUtils::fromStrKey<PublicKey>(issuer);
+            strToAssetCode(tl.asset.alphaNum4().assetCode, assetCode);
+        }
+        else
+        {
+            tl.asset.alphaNum12().issuer = KeyUtils::fromStrKey<PublicKey>(issuer);
+            strToAssetCode(tl.asset.alphaNum12().assetCode, assetCode);
+        }
+
+        tl.limit = limit;
+        tl.balance = balance;
+        tl.flags = flags;
+        le.lastModifiedLedgerSeq = lastModified;
+
+        assert(buyingLiabilitiesInd == sellingLiabilitiesInd);
+        if (buyingLiabilitiesInd == soci::i_ok)
+        {
+            tl.ext.v(1);
+            tl.ext.v1().liabilities = liabilities;
+        }
+
+        st.fetch();
+    }
+    return res;
+}
+#endif
+
 std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
 LedgerTxnRoot::Impl::bulkLoadTrustLines(std::vector<LedgerKey> const& keys)
 {
@@ -348,7 +439,12 @@ LedgerTxnRoot::Impl::bulkLoadTrustLines(std::vector<LedgerKey> const& keys)
     }
     else
     {
+#ifdef USE_POSTGRES
+        entries = postgresSpecificBulkLoadTrustLines(
+            mDatabase, accountIDs, issuers, assetCodes);
+#else
         std::abort();
+#endif
     }
 
     std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>> res;
