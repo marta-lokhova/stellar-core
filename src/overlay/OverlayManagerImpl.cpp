@@ -55,7 +55,7 @@ using namespace std;
 OverlayManagerImpl::PeersList::PeersList(
     OverlayManagerImpl& overlayManager,
     medida::MetricsRegistry& metricsRegistry, std::string directionString,
-    std::string cancelledName, unsigned short maxAuthenticatedCount)
+    std::string cancelledName, int maxAuthenticatedCount)
     : mConnectionsAttempted(metricsRegistry.NewMeter(
           {"overlay", directionString, "attempt"}, "connection"))
     , mConnectionsEstablished(metricsRegistry.NewMeter(
@@ -440,8 +440,9 @@ OverlayManagerImpl::availableOutboundPendingSlots() const
     if (mOutboundPeers.mPending.size() <
         mApp.getConfig().MAX_OUTBOUND_PENDING_CONNECTIONS)
     {
-        return mApp.getConfig().MAX_OUTBOUND_PENDING_CONNECTIONS -
-               mOutboundPeers.mPending.size();
+        return static_cast<int>(
+            mApp.getConfig().MAX_OUTBOUND_PENDING_CONNECTIONS -
+            mOutboundPeers.mPending.size());
     }
     else
     {
@@ -455,8 +456,8 @@ OverlayManagerImpl::availableOutboundAuthenticatedSlots() const
     if (mOutboundPeers.mAuthenticated.size() <
         mApp.getConfig().TARGET_PEER_CONNECTIONS)
     {
-        return mApp.getConfig().TARGET_PEER_CONNECTIONS -
-               mOutboundPeers.mAuthenticated.size();
+        return static_cast<int>(mApp.getConfig().TARGET_PEER_CONNECTIONS -
+                                mOutboundPeers.mAuthenticated.size());
     }
     else
     {
@@ -605,14 +606,15 @@ OverlayManagerImpl::getAuthenticatedPeers() const
 int
 OverlayManagerImpl::getPendingPeersCount() const
 {
-    return mInboundPeers.mPending.size() + mOutboundPeers.mPending.size();
+    return static_cast<int>(mInboundPeers.mPending.size() +
+                            mOutboundPeers.mPending.size());
 }
 
 int
 OverlayManagerImpl::getAuthenticatedPeersCount() const
 {
-    return mInboundPeers.mAuthenticated.size() +
-           mOutboundPeers.mAuthenticated.size();
+    return static_cast<int>(mInboundPeers.mAuthenticated.size() +
+                            mOutboundPeers.mAuthenticated.size());
 }
 
 bool

@@ -77,7 +77,7 @@ toXdr(PeerBareAddress const& address)
 }
 
 std::vector<PeerBareAddress>
-PeerManager::loadRandomPeers(PeerQuery const& query, size_t size)
+PeerManager::loadRandomPeers(PeerQuery const& query, int size)
 {
     // mBatchSize should always be bigger, so it should win anyway
     size = std::max(size, mBatchSize);
@@ -150,7 +150,7 @@ PeerManager::loadRandomPeers(PeerQuery const& query, size_t size)
     }
 
     auto maxOffset = count > size ? count - size : 0;
-    auto offset = rand_uniform<size_t>(0, maxOffset);
+    auto offset = rand_uniform<int>(0, maxOffset);
     result = loadPeers(size, offset, where, bindToStatement);
 
     std::shuffle(std::begin(result), std::end(result), gRandomEngine);
@@ -158,7 +158,7 @@ PeerManager::loadRandomPeers(PeerQuery const& query, size_t size)
 }
 
 std::vector<PeerBareAddress>
-PeerManager::getPeersToSend(size_t size, PeerBareAddress const& address)
+PeerManager::getPeersToSend(int size, PeerBareAddress const& address)
 {
     auto keep = [&](PeerBareAddress const& pba) {
         return !pba.isPrivate() && pba != address;
@@ -396,11 +396,11 @@ PeerManager::PeerManager(Application& app)
 {
 }
 
-size_t
+int
 PeerManager::countPeers(std::string const& where,
                         std::function<void(soci::statement&)> const& bind)
 {
-    size_t count = 0;
+    int count = 0;
 
     try
     {

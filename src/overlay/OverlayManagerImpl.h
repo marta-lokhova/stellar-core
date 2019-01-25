@@ -43,7 +43,7 @@ class OverlayManagerImpl : public OverlayManager
                            medida::MetricsRegistry& metricsRegistry,
                            std::string directionString,
                            std::string cancelledName,
-                           unsigned short maxAuthenticatedCount);
+                           int maxAuthenticatedCount);
 
         medida::Meter& mConnectionsAttempted;
         medida::Meter& mConnectionsEstablished;
@@ -51,7 +51,7 @@ class OverlayManagerImpl : public OverlayManager
         medida::Meter& mConnectionsCancelled;
 
         OverlayManagerImpl& mOverlayManager;
-        unsigned short mMaxAuthenticatedCount;
+        int mMaxAuthenticatedCount;
 
         std::vector<Peer::pointer> mPending;
         std::map<NodeID, Peer::pointer> mAuthenticated;

@@ -25,8 +25,7 @@ class RandomPeerSource
     explicit RandomPeerSource(PeerManager& peerManager, PeerQuery peerQuery);
 
     std::vector<PeerBareAddress>
-    getRandomPeers(size_t size,
-                   std::function<bool(PeerBareAddress const&)> pred);
+    getRandomPeers(int size, std::function<bool(PeerBareAddress const&)> pred);
 
   private:
     PeerManager& mPeerManager;

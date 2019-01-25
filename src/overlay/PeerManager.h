@@ -116,12 +116,12 @@ class PeerManager
      * Load size random peers matching query from database.
      */
     std::vector<PeerBareAddress> loadRandomPeers(PeerQuery const& query,
-                                                 size_t size);
+                                                 int size);
 
     /**
      * Get list of peers to send to peer with given address.
      */
-    std::vector<PeerBareAddress> getPeersToSend(size_t size,
+    std::vector<PeerBareAddress> getPeersToSend(int size,
                                                 PeerBareAddress const& address);
 
   private:
@@ -131,10 +131,10 @@ class PeerManager
     Application& mApp;
     std::unique_ptr<RandomPeerSource> mOutboundPeersToSend;
     std::unique_ptr<RandomPeerSource> mInboundPeersToSend;
-    size_t const mBatchSize;
+    int const mBatchSize;
 
-    size_t countPeers(std::string const& where,
-                      std::function<void(soci::statement&)> const& bind);
+    int countPeers(std::string const& where,
+                   std::function<void(soci::statement&)> const& bind);
     std::vector<PeerBareAddress>
     loadPeers(int limit, int offset, std::string const& where,
               std::function<void(soci::statement&)> const& bind);

@@ -45,7 +45,7 @@ RandomPeerSource::RandomPeerSource(PeerManager& peerManager,
 
 std::vector<PeerBareAddress>
 RandomPeerSource::getRandomPeers(
-    size_t size, std::function<bool(PeerBareAddress const&)> pred)
+    int size, std::function<bool(PeerBareAddress const&)> pred)
 {
     if (mPeerCache.size() < size)
     {
@@ -53,11 +53,9 @@ RandomPeerSource::getRandomPeers(
     }
 
     auto result = std::vector<PeerBareAddress>{};
-    auto realSize = std::min(size, mPeerCache.size());
-
     auto it = std::begin(mPeerCache);
     auto end = std::end(mPeerCache);
-    for (; it != end && result.size() < realSize; it++)
+    for (; it != end && result.size() < size; it++)
     {
         if (pred(*it))
         {
