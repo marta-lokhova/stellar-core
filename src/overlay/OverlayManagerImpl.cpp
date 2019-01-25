@@ -410,13 +410,15 @@ OverlayManagerImpl::tick()
     // preferred_peers to work for both ip based and key based preferred mode)
     if (availablePendingSlots > 0 && availableAuthenticatedSlots > 0)
     {
-        // try to leave at least one pending slot for peer promotion
-        auto outboundToConnect = availablePendingSlots > 1
-                                     ? std::min(availablePendingSlots - 1,
-                                                availableAuthenticatedSlots)
-                                     : 1;
+        // try to leave at least some pending slots for peer promotion
+        constexpr const auto RESERVED_FOR_PROMOTION = 1;
+        auto outboundToConnect =
+            availablePendingSlots > RESERVED_FOR_PROMOTION
+                ? std::min(availablePendingSlots - RESERVED_FOR_PROMOTION,
+                           availableAuthenticatedSlots)
+                : RESERVED_FOR_PROMOTION;
         auto pendingUsedByOutbound =
-            connectTo(availableAuthenticatedSlots, PeerType::OUTBOUND);
+            connectTo(outboundToConnect, PeerType::OUTBOUND);
         assert(pendingUsedByOutbound <= availablePendingSlots);
         availablePendingSlots -= pendingUsedByOutbound;
     }
