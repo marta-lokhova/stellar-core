@@ -810,7 +810,6 @@ TEST_CASE("inbounds nodes can be promoted to ouboundvalid", "[overlay]")
     auto peerTypesMatch = [&](ExpectedResultType expected) {
         for (auto i = 0; i < expected.size(); i++)
         {
-            auto& node = nodes[i];
             for (auto j = 0; j < expected[i].size(); j++)
             {
                 if (expected[i][j] > getTestPeerType(i, j))
