@@ -28,6 +28,14 @@ enum class PeerType
     COUNT
 };
 
+enum class PeerTypeFilter
+{
+    INBOUND_ONLY,
+    OUTBOUND_ONLY,
+    PREFERRED_ONLY,
+    ANY_OUTBOUND
+};
+
 /**
  * Raw database record of peer data. Its key is PeerBareAddress.
  */
@@ -44,8 +52,7 @@ struct PeerQuery
 {
     bool mUseNextAttempt;
     int mMaxNumFailures;
-    optional<PeerType> mRequireExactType;
-    optional<bool> mRequireOutbound;
+    PeerTypeFilter mTypeFilter;
 };
 
 PeerAddress toXdr(PeerBareAddress const& address);

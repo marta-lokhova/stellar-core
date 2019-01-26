@@ -26,15 +26,15 @@ using namespace soci;
 PeerQuery
 RandomPeerSource::maxFailures(int maxFailures, bool requireOutobund)
 {
-    return {false, maxFailures, nullopt<PeerType>(),
-            make_optional<bool>(requireOutobund)};
+    return {false, maxFailures,
+            requireOutobund ? PeerTypeFilter::ANY_OUTBOUND
+                            : PeerTypeFilter::INBOUND_ONLY};
 }
 
 PeerQuery
 RandomPeerSource::nextAttemptCutoff(PeerType requireExactType)
 {
-    return {true, -1, make_optional<PeerType>(requireExactType),
-            nullopt<bool>()};
+    return {true, -1, static_cast<PeerTypeFilter>(requireExactType)};
 }
 
 RandomPeerSource::RandomPeerSource(PeerManager& peerManager,

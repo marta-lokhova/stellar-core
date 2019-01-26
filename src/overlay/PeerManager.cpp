@@ -95,20 +95,13 @@ PeerManager::loadRandomPeers(PeerQuery const& query, int size)
     {
         conditions.push_back("numfailures <= :maxFailures");
     }
-    if (query.mRequireExactType)
+    if (query.mTypeFilter == PeerTypeFilter::ANY_OUTBOUND)
     {
-        conditions.push_back("type = :exactType");
+        conditions.push_back("type != :inboundType");
     }
-    if (query.mRequireOutbound)
+    else
     {
-        if (*query.mRequireOutbound)
-        {
-            conditions.push_back("type != :inboundType");
-        }
-        else
-        {
-            conditions.push_back("type = :inboundType");
-        }
+        conditions.push_back("type = :type");
     }
     assert(!conditions.empty());
     std::string where = conditions[0];
@@ -119,8 +112,7 @@ PeerManager::loadRandomPeers(PeerQuery const& query, int size)
 
     std::tm nextAttempt = VirtualClock::pointToTm(mApp.getClock().now());
     int maxNumFailures = query.mMaxNumFailures;
-    int requireExactType = static_cast<int>(
-        query.mRequireExactType ? *query.mRequireExactType : PeerType::INBOUND);
+    int exactType = static_cast<int>(query.mTypeFilter);
     int inboundType = static_cast<int>(PeerType::INBOUND);
 
     auto bindToStatement = [&](soci::statement& st) {
@@ -132,13 +124,13 @@ PeerManager::loadRandomPeers(PeerQuery const& query, int size)
         {
             st.exchange(soci::use(maxNumFailures));
         }
-        if (query.mRequireExactType)
-        {
-            st.exchange(soci::use(requireExactType));
-        }
-        if (query.mRequireOutbound)
+        if (query.mTypeFilter == PeerTypeFilter::ANY_OUTBOUND)
         {
             st.exchange(soci::use(inboundType));
+        }
+        else
+        {
+            st.exchange(soci::use(exactType));
         }
     };
 
