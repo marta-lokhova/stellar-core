@@ -138,6 +138,60 @@ class OverlayManagerTests
         REQUIRE(actual == fourPeers);
     }
 
+    void
+    test_getLatestPeerAddress_no_change()
+    {
+        OverlayManagerStub& pm = app->getOverlayManager();
+
+        // First add some peers to the List and cache
+        test_addPeerList();
+
+        // Now try to resolve IPs again; nothing should change
+        for (auto const& peer : fourPeers)
+        {
+            auto cached = pm.mKnownPreferredPeersCache.find(peer);
+            REQUIRE(cached != pm.mKnownPreferredPeersCache.end());
+            auto prev = cached->second;
+
+            auto newAddress = pm.getLatestPeerAddress(peer);
+            // Make sure cache didn't change
+            cached = pm.mKnownPreferredPeersCache.find(peer);
+            REQUIRE(cached != pm.mKnownPreferredPeersCache.end());
+            REQUIRE(cached->second == prev);
+        }
+    }
+
+    void
+    test_dropOldPeer()
+    {
+        OverlayManagerStub& pm = app->getOverlayManager();
+
+        // First add some peers to the List and cache
+        test_addPeerList();
+
+        auto oldAddress = pm.mKnownPreferredPeersCache[fourPeers[0]];
+        PeerBareAddress newAddress{"127.0.0.2", 2011};
+
+        // Now database should have changed
+        pm.getPeerManager().update(oldAddress, newAddress);
+
+        rowset<row> rs = app->getDatabase().getSession().prepare
+                         << "SELECT ip,port FROM peers ORDER BY nextattempt";
+        std::vector<string> actual;
+        for (auto it = rs.begin(); it != rs.end(); ++it)
+            actual.push_back(it->get<string>(0) + ":" +
+                             to_string(it->get<int>(1)));
+
+        REQUIRE(actual != fourPeers);
+        auto updated =
+            std::find(actual.begin(), actual.end(), newAddress.toString());
+        auto noUpdated =
+            std::find(actual.begin(), actual.end(), oldAddress.toString());
+
+        REQUIRE(updated != actual.end());
+        REQUIRE(noUpdated == actual.end());
+    }
+
     vector<int>
     sentCounts(OverlayManagerImpl& pm)
     {
@@ -190,5 +244,17 @@ TEST_CASE_METHOD(OverlayManagerTests, "addPeerList() adds", "[overlay]")
 TEST_CASE_METHOD(OverlayManagerTests, "broadcast() broadcasts", "[overlay]")
 {
     test_broadcast();
+}
+
+TEST_CASE_METHOD(OverlayManagerTests, "getLatestPeerAddress() no change",
+                 "[overlay]")
+{
+    test_getLatestPeerAddress_no_change();
+}
+
+TEST_CASE_METHOD(OverlayManagerTests, "dropOldPeer() replaces peer",
+                 "[overlay]")
+{
+    test_dropOldPeer();
 }
 }

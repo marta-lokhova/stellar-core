@@ -106,6 +106,12 @@ class PeerManager
                 BackOffUpdate backOff);
 
     /**
+     * Update IP and port of a given Peer.
+     */
+    void update(PeerBareAddress const& oldAddress,
+                PeerBareAddress const& newAddress);
+
+    /**
      * Load PeerRecord data for peer with given address. If not available in
      * database, create default one. Second value in pair is true when data
      * was loaded from database, false otherwise.
@@ -148,5 +154,8 @@ class PeerManager
 
     void update(PeerRecord& peer, TypeUpdate type);
     void update(PeerRecord& peer, BackOffUpdate backOff, Application& app);
+    void dropOldPeer(PeerBareAddress const& obsoleteAddress,
+                     PeerRecord const& prevPeerRecord,
+                     PeerBareAddress const& newAddress);
 };
 }

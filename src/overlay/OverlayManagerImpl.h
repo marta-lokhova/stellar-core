@@ -80,6 +80,7 @@ class OverlayManagerImpl : public OverlayManager
 
     void tick();
     VirtualTimer mTimer;
+    VirtualTimer mPeerIPTimer;
 
     void storePeerList(std::vector<std::string> const& list, bool setPreferred);
 
@@ -128,6 +129,7 @@ class OverlayManagerImpl : public OverlayManager
 
   private:
     std::map<PeerType, std::unique_ptr<RandomPeerSource>> mPeerSources;
+    std::unordered_map<std::string, PeerBareAddress> mKnownPreferredPeersCache;
 
     std::vector<PeerBareAddress> getPeersToConnectTo(int maxNum,
                                                      PeerType connectionType);
@@ -145,5 +147,9 @@ class OverlayManagerImpl : public OverlayManager
     bool isPossiblyPreferred(std::string const& ip);
 
     void updateSizeCounters();
+
+    PeerBareAddress getLatestPeerAddress(std::string const& peerStr);
+    void maybeRefreshPeerIPs();
+    static int const PEER_IP_RESOLVE_DELAY_S;
 };
 }

@@ -375,6 +375,79 @@ PeerManager::update(PeerBareAddress const& address, TypeUpdate type,
     store(address, peer.first, peer.second);
 }
 
+void
+PeerManager::update(PeerBareAddress const& oldAddress,
+                    PeerBareAddress const& newAddress)
+{
+    auto peer = load(oldAddress);
+    assert(peer.second);
+    dropOldPeer(oldAddress, peer.first, newAddress);
+}
+
+void
+PeerManager::dropOldPeer(PeerBareAddress const& obsoleteAddress,
+                         PeerRecord const& prevPeerRecord,
+                         PeerBareAddress const& newAddress)
+{
+    // TODO handle potential crash
+
+    soci::transaction tx(mApp.getDatabase().getSession());
+
+    // First, drop old record
+    {
+        std::string sql = "DELETE FROM peers WHERE ip = :v1 AND port = :v2";
+        auto prep = mApp.getDatabase().getPreparedStatement(sql);
+        auto& st = prep.statement();
+        std::string ip = obsoleteAddress.getIP();
+        st.exchange(use(ip));
+        int port = obsoleteAddress.getPort();
+        st.exchange(use(port));
+        st.define_and_bind();
+        {
+            auto timer = mApp.getDatabase().getDeleteTimer("peer");
+            st.execute(true);
+            if (st.get_affected_rows() != 1)
+            {
+                CLOG(ERROR, "Overlay")
+                    << "PeerManager::dropOldPeer failed on " +
+                           obsoleteAddress.toString();
+            }
+        }
+    }
+
+    // Now, insert updated address
+
+    // TODO, if `store` function properly throws or at least returns failure,
+    // could use that instead.
+    {
+        std::string sql = "INSERT INTO peers "
+                          "(nextattempt, numfailures, type, ip,  port) "
+                          "VALUES "
+                          "(:v1,         :v2,        :v3,  :v4, :v5)";
+        auto prep = mApp.getDatabase().getPreparedStatement(sql);
+        auto& st = prep.statement();
+        st.exchange(use(prevPeerRecord.mNextAttempt));
+        st.exchange(use(prevPeerRecord.mNumFailures));
+        st.exchange(use(prevPeerRecord.mType));
+        std::string ip = newAddress.getIP();
+        st.exchange(use(ip));
+        int port = newAddress.getPort();
+        st.exchange(use(port));
+        st.define_and_bind();
+        {
+            auto timer = mApp.getDatabase().getInsertTimer("peer");
+            st.execute(true);
+            if (st.get_affected_rows() != 1)
+            {
+                CLOG(ERROR, "Overlay")
+                    << "PeerManager::store failed on " + newAddress.toString();
+            }
+        }
+    }
+
+    tx.commit();
+}
+
 constexpr const auto BATCH_SIZE = 1000;
 constexpr const auto MAX_FAILURES = 10;
 

@@ -52,6 +52,8 @@ namespace stellar
 using namespace soci;
 using namespace std;
 
+int const OverlayManagerImpl::PEER_IP_RESOLVE_DELAY_S = 600;
+
 OverlayManagerImpl::PeersList::PeersList(
     OverlayManagerImpl& overlayManager,
     medida::MetricsRegistry& metricsRegistry, std::string directionString,
@@ -224,6 +226,7 @@ OverlayManagerImpl::OverlayManagerImpl(Application& app)
     , mAuthenticatedPeersSize(app.getMetrics().NewCounter(
           {"overlay", "connection", "authenticated"}))
     , mTimer(app)
+    , mPeerIPTimer(app)
     , mFloodGate(app)
 {
     mPeerSources[PeerType::INBOUND] = std::make_unique<RandomPeerSource>(
@@ -253,6 +256,40 @@ OverlayManagerImpl::start()
             },
             VirtualTimer::onFailureNoop);
     }
+
+    mPeerIPTimer.expires_from_now(
+        std::chrono::seconds(PEER_IP_RESOLVE_DELAY_S));
+}
+
+PeerBareAddress
+OverlayManagerImpl::getLatestPeerAddress(std::string const& peerStr)
+{
+    // Peer must be present in Peer cache (populated on startup)
+    auto cached = mKnownPreferredPeersCache.find(peerStr);
+    if (cached == mKnownPreferredPeersCache.end())
+    {
+        auto msg = peerStr + " must be present in Peer cache";
+        throw std::runtime_error(msg);
+    }
+
+    // Maybe update Peer's IP and port in cache and database
+    auto address = PeerBareAddress::resolve(peerStr, mApp);
+    auto storedAddress = cached->second;
+    if (storedAddress != address)
+    {
+        CLOG(INFO, "Overlay")
+            << "IP address for " << peerStr
+            << " has changed! Was: " << storedAddress.toString()
+            << ", now: " << address.toString();
+        getPeerManager().update(storedAddress, address);
+        mKnownPreferredPeersCache[peerStr] = address;
+    }
+    else
+    {
+        CLOG(TRACE, "Overlay")
+            << "IP address for " << peerStr << " did not change!";
+    }
+    return address;
 }
 
 void
@@ -309,6 +346,14 @@ OverlayManagerImpl::storePeerList(std::vector<std::string> const& list,
                                    : PeerManager::TypeUpdate::KEEP;
             getPeerManager().update(address, typeUpgrade,
                                     PeerManager::BackOffUpdate::RESET);
+            // Populate cache for the first time
+            if (mKnownPreferredPeersCache.find(peerStr) !=
+                mKnownPreferredPeersCache.end())
+            {
+                CLOG(WARNING, "Overlay")
+                    << peerStr << " already exists in known peers cache.";
+            }
+            mKnownPreferredPeersCache[peerStr] = address;
         }
         catch (std::runtime_error&)
         {
@@ -386,12 +431,33 @@ OverlayManagerImpl::connectTo(std::vector<PeerBareAddress> const& peers,
     return count;
 }
 
+void
+OverlayManagerImpl::maybeRefreshPeerIPs()
+{
+    if (mApp.timeNow() > VirtualClock::to_time_t(mPeerIPTimer.expiry_time()))
+    {
+        CLOG(TRACE, "Overlay")
+            << "Checking IPs for PREFERRED_PEERS and KNOWN_PEERS";
+        for (auto const& s : mApp.getConfig().PREFERRED_PEERS)
+        {
+            getLatestPeerAddress(s);
+        }
+        for (auto const& s : mApp.getConfig().KNOWN_PEERS)
+        {
+            getLatestPeerAddress(s);
+        }
+        mPeerIPTimer.expires_from_now(
+            std::chrono::seconds(PEER_IP_RESOLVE_DELAY_S));
+    }
+}
+
 // called every 2 seconds
 void
 OverlayManagerImpl::tick()
 {
     CLOG(TRACE, "Overlay") << "OverlayManagerImpl tick";
 
+    maybeRefreshPeerIPs();
     mLoad.maybeShedExcessLoad(mApp);
 
     auto availablePendingSlots = availableOutboundPendingSlots();
