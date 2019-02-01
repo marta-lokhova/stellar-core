@@ -39,6 +39,7 @@ class ManageOfferOpFrame : public OperationFrame
 
     bool doApply(Application& app, AbstractLedgerTxn& lsOuter) override;
     bool doCheckValid(Application& app, uint32_t ledgerVersion) override;
+    std::vector<LedgerKey> getLedgerKeysToPrefetch(Application& app) override;
 
     static ManageOfferResultCode
     getInnerCode(OperationResult const& res)

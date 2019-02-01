@@ -26,6 +26,116 @@ AbstractLedgerTxnParent::~AbstractLedgerTxnParent()
 {
 }
 
+// Implementation of AbstractPrefetcher -------------------------------------
+AbstractPrefetcher::~AbstractPrefetcher()
+{
+}
+
+// Implementation of Prefetcher ---------------------------------------------
+LedgerTxnRoot::Impl::Prefetcher::~Prefetcher()
+{
+}
+
+std::list<LedgerKey const>&
+LedgerTxnRoot::Impl::Prefetcher::getQueueByType(LedgerEntryType let)
+{
+    switch (let)
+    {
+    case ACCOUNT:
+        return mAccountsQueue;
+    case DATA:
+        return mDataQueue;
+    case OFFER:
+        return mOffersQueue;
+    case TRUSTLINE:
+        return mTrustlinesQueue;
+    default:
+        throw std::runtime_error("Unknown ledger entry type");
+    }
+}
+
+void
+LedgerTxnRoot::Impl::Prefetcher::queueForPrefetch(LedgerKey const& key,
+                                                  bool immediate)
+{
+    auto& queue = getQueueByType(key.type());
+    if (immediate)
+    {
+        queue.push_front(key);
+    }
+    else
+    {
+        queue.push_back(key);
+    }
+}
+
+void
+LedgerTxnRoot::Impl::Prefetcher::cancelPrefetch(LedgerKey const& key)
+{
+    auto& queue = getQueueByType(key.type());
+    auto toCancel = std::find(queue.begin(), queue.end(), key);
+    if (toCancel != queue.end())
+    {
+        queue.erase(toCancel);
+    }
+}
+
+void
+LedgerTxnRoot::Impl::Prefetcher::cancelAllPrefetches()
+{
+    mAccountsQueue.clear();
+    mDataQueue.clear();
+    mOffersQueue.clear();
+    mTrustlinesQueue.clear();
+}
+
+bool
+LedgerTxnRoot::Impl::Prefetcher::hasNextToPrefetch(LedgerEntryType type)
+{
+    auto const& queue = getQueueByType(type);
+    return !queue.empty();
+}
+
+LedgerKey
+LedgerTxnRoot::Impl::Prefetcher::getNextToPrefetch(LedgerEntryType type)
+{
+    auto& queue = getQueueByType(type);
+    if (!queue.empty())
+    {
+        auto front = queue.front();
+        queue.pop_front();
+        return front;
+    }
+    else
+    {
+        throw std::runtime_error("Nothing to prefetch");
+    }
+}
+
+std::pair<bool, std::shared_ptr<LedgerEntry const>>
+LedgerTxnRoot::Impl::Prefetcher::getPrefetched(LedgerKey const& key)
+{
+    auto entry = mCache.find(key);
+    if (entry != mCache.end())
+    {
+        return std::make_pair(true, entry->second);
+    }
+    return std::make_pair(false, nullptr);
+}
+
+void
+LedgerTxnRoot::Impl::Prefetcher::insertPrefetched(
+    LedgerKey const& key, std::shared_ptr<LedgerEntry const> entry)
+{
+    mCache[key] = entry;
+}
+
+void
+LedgerTxnRoot::Impl::Prefetcher::clearAllPrefetched()
+{
+    mCache.clear();
+}
+
 // Implementation of EntryIterator --------------------------------------------
 EntryIterator::EntryIterator(std::unique_ptr<AbstractImpl>&& impl)
     : mImpl(std::move(impl))
@@ -1138,6 +1248,7 @@ LedgerTxnRoot::Impl::Impl(Database& db, size_t entryCacheSize,
     , mEntryCache(entryCacheSize)
     , mBestOffersCache(bestOfferCacheSize)
     , mChild(nullptr)
+    , mPrefetcher(std::make_unique<Prefetcher>())
 {
 }
 
@@ -1188,6 +1299,9 @@ LedgerTxnRoot::commitChild(EntryIterator iter)
 void
 LedgerTxnRoot::Impl::commitChild(EntryIterator iter)
 {
+    // Cancel all pending prefetch loads
+    mPrefetcher->cancelAllPrefetches();
+
     // Assignment of xdrpp objects does not have the strong exception safety
     // guarantee, so use std::unique_ptr<...>::swap to achieve it
     auto childHeader = std::make_unique<LedgerHeader>(mChild->getHeader());
@@ -1233,6 +1347,7 @@ LedgerTxnRoot::Impl::commitChild(EntryIterator iter)
     // Clearing the cache does not throw
     mBestOffersCache.clear();
     mEntryCache.clear();
+    mPrefetcher->clearAllPrefetched();
 
     // std::unique_ptr<...>::reset does not throw
     mTransaction.reset();
@@ -1353,6 +1468,30 @@ std::unordered_map<LedgerKey, LedgerEntry>
 LedgerTxnRoot::getAllOffers()
 {
     return mImpl->getAllOffers();
+}
+
+void
+LedgerTxnRoot::prefetch(LedgerKey const& key)
+{
+    mImpl->prefetch(key);
+}
+
+void
+LedgerTxnRoot::prefetchNow(LedgerKey const& key)
+{
+    mImpl->prefetchNow(key);
+}
+
+void
+LedgerTxnRoot::cancelPrefetch(LedgerKey const& key)
+{
+    mImpl->cancelPrefetch(key);
+}
+
+void
+LedgerTxnRoot::cancelAllPrefetches()
+{
+    mImpl->cancelAllPrefetches();
 }
 
 std::unordered_map<LedgerKey, LedgerEntry>
@@ -1538,6 +1677,12 @@ LedgerTxnRoot::Impl::getNewestVersion(LedgerKey const& key) const
     if (mEntryCache.exists(cacheKey))
     {
         return getFromEntryCache(cacheKey);
+    }
+
+    auto prefetched = mPrefetcher->getPrefetched(key);
+    if (prefetched.first)
+    {
+        return prefetched.second;
     }
 
     std::shared_ptr<LedgerEntry const> entry;
@@ -1761,5 +1906,27 @@ LedgerTxnRoot::Impl::getNewestVersion(std::vector<LedgerKey> const& key)
     default:
         std::abort();
     }
+
+LedgerTxnRoot::Impl::prefetch(LedgerKey const& key)
+{
+    mPrefetcher->queueForPrefetch(key, false);
+}
+
+void
+LedgerTxnRoot::Impl::prefetchNow(LedgerKey const& key)
+{
+    mPrefetcher->queueForPrefetch(key, true);
+}
+
+void
+LedgerTxnRoot::Impl::cancelPrefetch(LedgerKey const& key)
+{
+    mPrefetcher->cancelPrefetch(key);
+}
+
+void
+LedgerTxnRoot::Impl::cancelAllPrefetches()
+{
+    mPrefetcher->cancelAllPrefetches();
 }
 }

@@ -96,4 +96,12 @@ ManageDataOpFrame::doCheckValid(Application& app, uint32_t ledgerVersion)
 
     return true;
 }
+
+std::vector<LedgerKey>
+ManageDataOpFrame::getLedgerKeysToPrefetch(Application& app)
+{
+    std::vector<LedgerKey> keys;
+    keys.push_back(stellar::getLedgerKey(getSourceID(), mManageData.dataName));
+    return keys;
+}
 }

@@ -286,4 +286,49 @@ PathPaymentOpFrame::doCheckValid(Application& app, uint32_t ledgerVersion)
     }
     return true;
 }
+
+std::vector<LedgerKey>
+PathPaymentOpFrame::getLedgerKeysToPrefetch(Application& app)
+{
+    std::vector<LedgerKey> keys;
+    keys.push_back(stellar::getLedgerKey(mPathPayment.destination));
+
+    std::vector<Asset> allAssets{mPathPayment.sendAsset,
+                                 mPathPayment.destAsset};
+    allAssets.insert(allAssets.end(), mPathPayment.path.begin(),
+                     mPathPayment.path.end());
+
+    for (auto const& asset : allAssets)
+    {
+        if (asset.type() == ASSET_TYPE_NATIVE)
+        {
+            continue;
+        }
+
+        auto issuer = getIssuer(asset);
+        bool destIsIssuer = issuer == mPathPayment.destination;
+        bool sourceIsIssuer = issuer == getSourceID();
+
+        if (!destIsIssuer && !sourceIsIssuer)
+        {
+            keys.push_back(stellar::getLedgerKey(issuer));
+        }
+        if (asset == mPathPayment.destAsset)
+        {
+            // These are *maybe* needed; For now, we load everything
+            if (!destIsIssuer)
+            {
+                keys.push_back(stellar::getLedgerKey(mPathPayment.destination,
+                                                     mPathPayment.destAsset));
+            }
+            if (!sourceIsIssuer)
+            {
+                keys.push_back(stellar::getLedgerKey(getSourceID(),
+                                                     mPathPayment.destAsset));
+            }
+        }
+    }
+
+    return keys;
+}
 }

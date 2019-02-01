@@ -25,6 +25,7 @@ class PaymentOpFrame : public OperationFrame
 
     bool doApply(Application& app, AbstractLedgerTxn& ltx) override;
     bool doCheckValid(Application& app, uint32_t ledgerVersion) override;
+    std::vector<LedgerKey> getLedgerKeysToPrefetch(Application& app) override;
 
     static PaymentResultCode
     getInnerCode(OperationResult const& res)
