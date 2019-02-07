@@ -603,7 +603,7 @@ postgresSpecificBulkLoadAccounts(
 #endif
 
 std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
-LedgerTxnRoot::Impl::bulkLoadAccounts(std::vector<LedgerKey> const& keys)
+LedgerTxnRoot::Impl::bulkLoadAccounts(std::vector<LedgerKey> const& keys) const
 {
     std::vector<std::string> accountIDs;
     accountIDs.reserve(keys.size());

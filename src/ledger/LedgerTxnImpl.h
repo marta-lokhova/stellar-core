@@ -355,13 +355,13 @@ class LedgerTxnRoot::Impl
                            BestOffersCacheEntry& defaultValue) const;
 
     std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
-    bulkLoadAccounts(std::vector<LedgerKey> const& keys);
+    bulkLoadAccounts(std::vector<LedgerKey> const& keys) const;
     std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
-    bulkLoadTrustLines(std::vector<LedgerKey> const& keys);
+    bulkLoadTrustLines(std::vector<LedgerKey> const& keys) const;
     std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
-    bulkLoadOffers(std::vector<LedgerKey> const& keys);
+    bulkLoadOffers(std::vector<LedgerKey> const& keys) const;
     std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
-    bulkLoadData(std::vector<LedgerKey> const& keys);
+    bulkLoadData(std::vector<LedgerKey> const& keys) const;
 
   public:
     // Constructor has the strong exception safety guarantee

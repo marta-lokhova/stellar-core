@@ -664,7 +664,7 @@ postgresSpecificBulkLoadOffers(
 #endif
 
 std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
-LedgerTxnRoot::Impl::bulkLoadOffers(std::vector<LedgerKey> const& keys)
+LedgerTxnRoot::Impl::bulkLoadOffers(std::vector<LedgerKey> const& keys) const
 {
     std::vector<AccountID> sellerIDs;
     std::vector<uint64_t> offerIDs;

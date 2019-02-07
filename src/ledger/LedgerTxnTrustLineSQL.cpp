@@ -403,7 +403,7 @@ postgresSpecificBulkLoadTrustLines(
 #endif
 
 std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>>
-LedgerTxnRoot::Impl::bulkLoadTrustLines(std::vector<LedgerKey> const& keys)
+LedgerTxnRoot::Impl::bulkLoadTrustLines(std::vector<LedgerKey> const& keys) const
 {
     std::vector<std::string> accountIDs;
     std::vector<std::string> issuers;
