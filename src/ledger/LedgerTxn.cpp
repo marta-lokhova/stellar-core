@@ -32,8 +32,17 @@ AbstractPrefetcher::~AbstractPrefetcher()
 }
 
 // Implementation of Prefetcher ---------------------------------------------
+LedgerTxnRoot::Impl::Prefetcher::Prefetcher(size_t batchSize) : mBatchSize(batchSize)
+{
+}
+
 LedgerTxnRoot::Impl::Prefetcher::~Prefetcher()
 {
+}
+
+size_t LedgerTxnRoot::Impl::Prefetcher::getBatchSize() const
+{
+    return mBatchSize;
 }
 
 std::list<LedgerKey const>&
@@ -127,13 +136,48 @@ void
 LedgerTxnRoot::Impl::Prefetcher::insertPrefetched(
     LedgerKey const& key, std::shared_ptr<LedgerEntry const> entry)
 {
+    if (mCache.find(key) != mCache.end())
+    {
+        LOG(WARNING) << "Prefetched key already exists in the prefetcher cache";
+        return;
+    }
+
+    assert(mPrefetchAccesses.find(key) == mPrefetchAccesses.end());
     mCache[key] = entry;
+    mPrefetchAccesses[key] = 0;
 }
 
 void
 LedgerTxnRoot::Impl::Prefetcher::clearAllPrefetched()
 {
+    for (auto const& a : mCache)
+    {
+        auto const& key = a.first;
+        auto num = mPrefetchAccesses[key];
+        LOG(INFO) << "LedgerKey " << tableFromLedgerEntryType(key.type()) << " accessed "
+                  << num << " times";
+        //TODO (mlo) For testing only
+        if (num == 0 && key.type() == ACCOUNT)
+        {
+            LOG(INFO) << "Account " << KeyUtils::toStrKey(key.account().accountID) << " not used";
+        }
+    }
+
+    for (auto const& a : mPrefetchMisses)
+    {
+        LOG(INFO) << "LedgerKey " << tableFromLedgerEntryType(a.first.type()) << " missed "
+                  << mPrefetchMisses[a.first] << " times";
+    }
+
     mCache.clear();
+    mPrefetchAccesses.clear();
+    mPrefetchMisses.clear();
+
+    if (mTotalHits > 0 || mTotalMisses > 0)
+    {
+        LOG(INFO) << "Prefetch cache overall hit rate: " << mTotalHits << "/" << (mTotalMisses + mTotalHits)
+                  << ", (" << (100 * mTotalHits / (mTotalHits + mTotalMisses)) << "%)";
+    }
 }
 
 // Implementation of EntryIterator --------------------------------------------
@@ -1236,19 +1280,19 @@ LedgerTxn::Impl::EntryIteratorImpl::key() const
 
 // Implementation of LedgerTxnRoot ------------------------------------------
 LedgerTxnRoot::LedgerTxnRoot(Database& db, size_t entryCacheSize,
-                             size_t bestOfferCacheSize)
-    : mImpl(std::make_unique<Impl>(db, entryCacheSize, bestOfferCacheSize))
+                             size_t bestOfferCacheSize, size_t prefetchBatchSize)
+    : mImpl(std::make_unique<Impl>(db, entryCacheSize, bestOfferCacheSize, prefetchBatchSize))
 {
 }
 
 LedgerTxnRoot::Impl::Impl(Database& db, size_t entryCacheSize,
-                          size_t bestOfferCacheSize)
+                          size_t bestOfferCacheSize, size_t prefetchBatchSize)
     : mDatabase(db)
     , mHeader(std::make_unique<LedgerHeader>())
     , mEntryCache(entryCacheSize)
     , mBestOffersCache(bestOfferCacheSize)
     , mChild(nullptr)
-    , mPrefetcher(std::make_unique<Prefetcher>())
+    , mPrefetcher(std::make_unique<Prefetcher>(prefetchBatchSize))
 {
 }
 
@@ -1682,7 +1726,36 @@ LedgerTxnRoot::Impl::getNewestVersion(LedgerKey const& key) const
     auto prefetched = mPrefetcher->getPrefetched(key);
     if (prefetched.first)
     {
+        mPrefetcher->mPrefetchAccesses[key] += 1;
+        mPrefetcher->mTotalHits++;
         return prefetched.second;
+    }
+    else
+    {
+        auto const& queue = mPrefetcher->getQueueByType(key.type());
+        if (std::find(queue.begin(), queue.end(), key) != queue.end())
+        {
+            // This is okay in the beginning of the batch, with cold cache
+            LOG(WARNING) << "LedgerKey is requested immediately, but is queued for prefetch";
+            mPrefetcher->mPrefetchMisses[key] += 1;
+            mPrefetcher->mTotalMisses++;
+        }
+    }
+
+    std::vector<LedgerKey> keysToPrefetch{key};
+    bool doPrefetch = false;
+    int count = 0;
+    while (count < mPrefetcher->getBatchSize() && mPrefetcher->hasNextToPrefetch(key.type()))
+    {
+        auto keyToPrefetch = mPrefetcher->getNextToPrefetch(key.type());
+        auto prefetched = mPrefetcher->getPrefetched(keyToPrefetch);
+        // Don't prefetch if the key is already in the cache
+        if (!(keyToPrefetch == key) && !prefetched.first)
+        {
+            doPrefetch = true;
+            keysToPrefetch.push_back(keyToPrefetch);
+            ++count;
+        }
     }
 
     std::shared_ptr<LedgerEntry const> entry;
@@ -1691,16 +1764,76 @@ LedgerTxnRoot::Impl::getNewestVersion(LedgerKey const& key) const
         switch (key.type())
         {
         case ACCOUNT:
-            entry = loadAccount(key);
+            if (!doPrefetch)
+            {
+                entry = loadAccount(key);
+            }
+            else
+            {
+                auto res = bulkLoadAccounts(keysToPrefetch);
+                entry = res[key];
+                for (auto const& pair : res)
+                {
+                    if (!(pair.first == key))
+                    {
+                        mPrefetcher->insertPrefetched(pair.first, pair.second);
+                    }
+                }
+            }
             break;
         case DATA:
-            entry = loadData(key);
+            if (!doPrefetch)
+            {
+                entry = loadData(key);
+            }
+            else
+            {
+                auto res = bulkLoadData(keysToPrefetch);
+                entry = res[key];
+                for (auto const& pair : res)
+                {
+                    if (!(pair.first == key))
+                    {
+                        mPrefetcher->insertPrefetched(pair.first, pair.second);
+                    }
+                }
+            }
             break;
         case OFFER:
-            entry = loadOffer(key);
+            if (!doPrefetch)
+            {
+                entry = loadOffer(key);
+            }
+            else
+            {
+                auto res = bulkLoadOffers(keysToPrefetch);
+                entry = res[key];
+                for (auto const& pair : res)
+                {
+                    if (!(pair.first == key))
+                    {
+                        mPrefetcher->insertPrefetched(pair.first, pair.second);
+                    }
+                }
+            }
             break;
         case TRUSTLINE:
-            entry = loadTrustLine(key);
+            if (!doPrefetch)
+            {
+                entry = loadTrustLine(key);
+            }
+            else
+            {
+                auto res = bulkLoadTrustLines(keysToPrefetch);
+                entry = res[key];
+                for (auto const& pair : res)
+                {
+                    if (!(pair.first == key))
+                    {
+                        mPrefetcher->insertPrefetched(pair.first, pair.second);
+                    }
+                }
+            }
             break;
         default:
             throw std::runtime_error("Unknown key type");

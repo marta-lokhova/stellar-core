@@ -516,7 +516,7 @@ class LedgerTxnRoot : public AbstractLedgerTxnParent
 
   public:
     explicit LedgerTxnRoot(Database& db, size_t entryCacheSize = 4096,
-                           size_t bestOfferCacheSize = 64);
+                           size_t bestOfferCacheSize = 64, size_t prefetchBatchSize = 100);
 
     virtual ~LedgerTxnRoot();
 

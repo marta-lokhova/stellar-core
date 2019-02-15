@@ -110,6 +110,8 @@ LedgerManagerImpl::LedgerManagerImpl(Application& app)
     : mApp(app)
     , mTransactionApply(
           app.getMetrics().NewTimer({"ledger", "transaction", "apply"}))
+    , mTransactionSetApply(
+            app.getMetrics().NewTimer({"ledger", "transaction-set", "apply"}))
     , mTransactionCount(
           app.getMetrics().NewHistogram({"ledger", "transaction", "count"}))
     , mOperationCount(
@@ -944,19 +946,23 @@ void
 LedgerManagerImpl::prefetchTransactionData(
     std::vector<TransactionFramePtr>& txs)
 {
-    auto& root = mApp.getLedgerTxnRoot();
-    for (auto const& tx : txs)
+    if (mApp.getConfig().PREFETCH_BATCH_SIZE > 0)
     {
-        stellar::prefetchAccount(root, tx->getSourceID());
-        for (auto const& op : tx->getOperations())
+        auto& root = mApp.getLedgerTxnRoot();
+        for (auto const& tx : txs)
         {
-            if (!(tx->getSourceID() == op->getSourceID()))
+            stellar::prefetchAccount(root, tx->getSourceID());
+
+            for (auto const& op : tx->getOperations())
             {
-                stellar::prefetchAccount(root, op->getSourceID());
-            }
-            for (auto const& key : op->getLedgerKeysToPrefetch(mApp))
-            {
-                root.prefetch(key);
+                if (!(tx->getSourceID() == op->getSourceID()))
+                {
+                    stellar::prefetchAccount(root, op->getSourceID());
+                }
+                for (auto const& key : op->getLedgerKeysToPrefetch(mApp))
+                {
+                    root.prefetch(key);
+                }
             }
         }
     }
@@ -985,8 +991,10 @@ LedgerManagerImpl::applyTransactions(std::vector<TransactionFramePtr>& txs,
                                         numTxs, numOps);
     }
 
+    // Request some prefetches
     prefetchTransactionData(txs);
 
+    auto txSetTime = mTransactionSetApply.TimeScope();
     for (auto tx : txs)
     {
         auto txTime = mTransactionApply.TimeScope();
@@ -1026,6 +1034,34 @@ LedgerManagerImpl::applyTransactions(std::vector<TransactionFramePtr>& txs,
         tx->storeTransaction(mApp.getDatabase(), ledgerSeq, tm, ++index,
                              txResultSet);
     }
+
+    txSetTime.Stop();
+    logApplicationMetrics(ltx, txs.size());
+}
+
+void
+LedgerManagerImpl::logApplicationMetrics(AbstractLedgerTxn& ltx, size_t txSetSize)
+{
+    auto ledgerSeq = ltx.loadHeader().current().ledgerSeq;
+
+    // Report
+    LOG(INFO) << "Ledger: " << ledgerSeq << ", TxSet of size " << txSetSize
+              << ", AVG application time per tx: " << mTransactionApply.mean()
+              << " ± " << mTransactionApply.std_dev();
+
+    LOG(INFO) << "Ledger: " << ledgerSeq << ", TxSet of size " << txSetSize
+              << ", MIN application time per tx: " << mTransactionApply.min()
+              << ", MAX " << mTransactionApply.max()
+              << ", 75th percentile: " << mTransactionApply.GetSnapshot().get75thPercentile();
+
+    LOG(INFO) << "Ledger: " << ledgerSeq << ", TxSet of size " << txSetSize
+              << ", AVG application time per txset: " << mTransactionSetApply.mean()
+              << " ± " << mTransactionSetApply.std_dev();
+
+    LOG(INFO) << "Ledger: " << ledgerSeq << ", TxSet of size " << txSetSize
+              << ", MIN application time per txset: " << mTransactionSetApply.min()
+              << ", MAX " << mTransactionSetApply.max()
+              << ", 75th percentile: " << mTransactionSetApply.GetSnapshot().get75thPercentile();
 }
 
 void

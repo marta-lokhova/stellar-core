@@ -365,7 +365,7 @@ class LedgerTxnRoot::Impl
 
   public:
     // Constructor has the strong exception safety guarantee
-    Impl(Database& db, size_t entryCacheSize, size_t bestOfferCacheSize);
+    Impl(Database& db, size_t entryCacheSize, size_t bestOfferCacheSize, size_t prefetchBatchSize);
 
     ~Impl();
 
@@ -471,6 +471,8 @@ class LedgerTxnRoot::Impl
 class LedgerTxnRoot::Impl::Prefetcher : public AbstractPrefetcher
 {
   public:
+    explicit Prefetcher(size_t batchSize);
+
     virtual ~Prefetcher();
 
     void queueForPrefetch(LedgerKey const& key, bool immediate) override;
@@ -492,6 +494,17 @@ class LedgerTxnRoot::Impl::Prefetcher : public AbstractPrefetcher
 
     void clearAllPrefetched();
 
+    size_t getBatchSize() const;
+
+    // TODO (mlo) public for testing
+    std::list<LedgerKey const>& getQueueByType(LedgerEntryType let);
+
+    // TODO (mlo) For testing only
+    std::unordered_map<LedgerKey, uint32_t> mPrefetchAccesses;
+    std::unordered_map<LedgerKey, uint32_t> mPrefetchMisses;
+    uint32_t mTotalHits{0};
+    uint32_t mTotalMisses{0};
+
   private:
     std::list<LedgerKey const> mAccountsQueue;
     std::list<LedgerKey const> mTrustlinesQueue;
@@ -499,8 +512,8 @@ class LedgerTxnRoot::Impl::Prefetcher : public AbstractPrefetcher
     std::list<LedgerKey const> mDataQueue;
 
     std::unordered_map<LedgerKey, std::shared_ptr<LedgerEntry const>> mCache;
+    size_t mBatchSize;
 
-    std::list<LedgerKey const>& getQueueByType(LedgerEntryType let);
 };
 
 #ifdef USE_POSTGRES

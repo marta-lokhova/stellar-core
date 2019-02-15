@@ -85,6 +85,7 @@ class OperationFrame
         return mOperation;
     }
 
+    // TODO this should likely be std::set
     virtual std::vector<LedgerKey> getLedgerKeysToPrefetch(Application& app);
 };
 }

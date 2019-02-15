@@ -39,6 +39,8 @@ class LedgerManagerImpl : public LedgerManager
 
     Application& mApp;
     medida::Timer& mTransactionApply;
+    medida::Timer& mTransactionSetApply;
+
     medida::Histogram& mTransactionCount;
     medida::Histogram& mOperationCount;
     medida::Counter& mInternalErrorCount;
@@ -90,6 +92,8 @@ class LedgerManagerImpl : public LedgerManager
     void setState(State s);
     void setCatchupState(CatchupState s);
 
+    // TODO (mlo) Testing only
+    void logApplicationMetrics(AbstractLedgerTxn& ltx, size_t txSetSize);
   public:
     LedgerManagerImpl(Application& app);
 
