@@ -85,7 +85,7 @@ TEST_CASE("HistoryArchiveState get_put", "[history]")
             "test");
     REQUIRE(archive);
 
-    has.resolveAllFutures();
+    has.resolveAllFutures(catchupSimulation.getApp());
 
     auto& wm = catchupSimulation.getApp().getWorkScheduler();
     auto put = wm.executeWork<PutHistoryArchiveStateWork>(has, archive);
@@ -287,7 +287,7 @@ TEST_CASE("Ledger chain verification", "[ledgerheaderverification]")
 TEST_CASE("History publish", "[history]")
 {
     CatchupSimulation catchupSimulation{};
-    auto checkpointLedger = catchupSimulation.getLastCheckpointLedger(1);
+    auto checkpointLedger = catchupSimulation.getLastCheckpointLedger(100);
     catchupSimulation.ensureOfflineCatchupPossible(checkpointLedger);
 }
 
@@ -645,7 +645,7 @@ TEST_CASE("Repair missing buckets via history",
     // necessarily _published_ anywhere.
     HistoryArchiveState has(checkpointLedger + 1,
                             catchupSimulation.getBucketListAtLastPublish());
-    has.resolveAllFutures();
+    has.resolveAllFutures(catchupSimulation.getApp());
     auto state = has.toString();
 
     auto cfg = getTestConfig(1);
@@ -680,7 +680,7 @@ TEST_CASE("Repair missing buckets fails", "[history][historybucketrepair]")
     // necessarily _published_ anywhere.
     HistoryArchiveState has(checkpointLedger + 1,
                             catchupSimulation.getBucketListAtLastPublish());
-    has.resolveAllFutures();
+    has.resolveAllFutures(catchupSimulation.getApp());
     auto state = has.toString();
 
     // Delete buckets from the archive before proceding.

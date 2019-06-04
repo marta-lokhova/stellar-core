@@ -94,6 +94,7 @@ BucketManagerImpl::BucketManagerImpl(Application& app)
     , mBucketSnapMerge(app.getMetrics().NewTimer({"bucket", "snap", "merge"}))
     , mSharedBucketsSize(
           app.getMetrics().NewCounter({"bucket", "memory", "shared"}))
+    , mBucketList(app)
 
 {
 }
@@ -508,10 +509,13 @@ void
 BucketManagerImpl::assumeState(HistoryArchiveState const& has,
                                uint32_t maxProtocolVersion)
 {
+    std::shared_ptr<Bucket> prevSnap;
+
     for (uint32_t i = 0; i < BucketList::kNumLevels; ++i)
     {
         auto curr = getBucketByHash(hexToBin256(has.currentBuckets.at(i).curr));
         auto snap = getBucketByHash(hexToBin256(has.currentBuckets.at(i).snap));
+
         if (!(curr && snap))
         {
             throw std::runtime_error(
@@ -519,7 +523,16 @@ BucketManagerImpl::assumeState(HistoryArchiveState const& has,
         }
         mBucketList.getLevel(i).setCurr(curr);
         mBucketList.getLevel(i).setSnap(snap);
-        mBucketList.getLevel(i).setNext(has.currentBuckets.at(i).next);
+
+        std::vector<std::shared_ptr<Bucket>> shadows;
+        for (auto const& shadowHash : has.currentBuckets.at(i).shadows)
+        {
+            LOG(INFO) << "Using shadow " << shadowHash << " prev SNap" << (prevSnap ? " empty " : prevSnap->getFilename());
+            shadows.push_back(getBucketByHash(hexToBin256(shadowHash)));
+        }
+
+        mBucketList.getLevel(i).setNext(has.currentLedger, prevSnap, shadows, maxProtocolVersion);
+        prevSnap = snap;
     }
 
     mBucketList.restartMerges(mApp, maxProtocolVersion);

@@ -136,7 +136,7 @@ TEST_CASE("bucket list", "[bucket][bucketlist]")
     {
         for_versions_with_differing_bucket_logic(cfg, [&](Config const& cfg) {
             Application::pointer app = createTestApplication(clock, cfg);
-            BucketList bl;
+            BucketList bl(*app);
             autocheck::generator<std::vector<LedgerKey>> deadGen;
             CLOG(DEBUG, "Bucket") << "Adding batches to bucket list";
             for (uint32_t i = 1;
@@ -178,7 +178,7 @@ TEST_CASE("bucket list shadowing", "[bucket][bucketlist]")
     Config const& cfg = getTestConfig();
     for_versions_with_differing_bucket_logic(cfg, [&](Config const& cfg) {
         Application::pointer app = createTestApplication(clock, cfg);
-        BucketList bl;
+        BucketList bl(*app);
 
         // Alice and Bob change in every iteration.
         auto alice = LedgerTestUtils::generateValidAccountEntry(5);
@@ -258,7 +258,7 @@ TEST_CASE("bucket tombstones expire at bottom level",
 
     for_versions_with_differing_bucket_logic(cfg, [&](Config const& cfg) {
         Application::pointer app = createTestApplication(clock, cfg);
-        BucketList bl;
+        BucketList bl(*app);
         BucketManager& bm = app->getBucketManager();
         autocheck::generator<std::vector<LedgerKey>> deadGen;
         auto& mergeTimer = bm.getMergeTimer();
@@ -292,7 +292,7 @@ TEST_CASE("bucket tombstones expire at bottom level",
                     auto& next = bl.getLevel(k).getNext();
                     if (next.isLive())
                     {
-                        next.resolve();
+                        next.resolve(*app);
                     }
                 }
                 n = mergeTimer.count() - n;
@@ -320,7 +320,7 @@ TEST_CASE("bucket tombstones mutually-annihilate init entries",
 
     for_versions_with_differing_bucket_logic(cfg, [&](Config const& cfg) {
         Application::pointer app = createTestApplication(clock, cfg);
-        BucketList bl;
+        BucketList bl(*app);
         auto vers = getAppLedgerVersion(app);
         autocheck::generator<bool> flip;
         std::deque<LedgerEntry> entriesToModify;
@@ -363,7 +363,7 @@ TEST_CASE("bucket tombstones mutually-annihilate init entries",
                 auto& next = bl.getLevel(k).getNext();
                 if (next.isLive())
                 {
-                    next.resolve();
+                    next.resolve(*app);
                 }
             }
         }
@@ -394,7 +394,7 @@ TEST_CASE("single entry bubbling up", "[bucket][bucketlist][bucketbubble]")
     {
         for_versions_with_differing_bucket_logic(cfg, [&](Config const& cfg) {
             Application::pointer app = createTestApplication(clock, cfg);
-            BucketList bl;
+            BucketList bl(*app);
             std::vector<stellar::LedgerKey> emptySet;
             std::vector<stellar::LedgerEntry> emptySetEntry;
 

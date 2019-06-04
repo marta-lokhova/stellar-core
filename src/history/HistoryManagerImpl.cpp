@@ -287,6 +287,36 @@ HistoryManagerImpl::takeSnapshotAndPublish(HistoryArchiveState const& has)
     CLOG(DEBUG, "History") << "Activating publish for ledger " << ledgerSeq;
     auto snap = std::make_shared<StateSnapshot>(mApp, has);
 
+    snap->makeLive();
+
+    // This is just for logging/monitoring
+    for (size_t i = BucketList::kNumLevels - 1; i != 0; --i)
+    {
+        auto level = snap->mLocalState.currentBuckets[i];
+        std::string a, b;
+        if (level.next.isMerging())
+        {
+            std::tie(a, b) = level.next.getInputHashes();
+            Hash h;
+            auto emptyHash = binToHex(h);
+            bool emptyIsOk = true;
+            if (a == emptyHash)
+            {
+                // Prove that current ledger number is within a snap
+                uint32_t nextChangeLedger =
+                        (has.currentLedger /  BucketList::levelHalf(i-1) *  BucketList::levelHalf(i-1)) + BucketList::levelHalf(i - 1);
+                 emptyIsOk = BucketList::levelShouldSpill(nextChangeLedger, i);
+
+            }
+            auto everythingOk = (a == level.curr || emptyIsOk) && b == snap->mLocalState.currentBuckets[i - 1].snap;
+            assert(everythingOk);
+            LOG(INFO) << "LEVEL " << i << " everything MATCH: " << (everythingOk ? "yes" : "no");
+            LOG(INFO) << "Bucket info BEFORE PUBLISH: current inputs curr=" << a
+                      << ", level_curr=" << level.curr << ", snap=" << b
+                      << ", level_snap=" << snap->mLocalState.currentBuckets[i - 1].snap;
+        }
+    }
+
     // Phase 1: resolve futures in snapshot
     auto resolveFutures = std::make_shared<ResolveSnapshotWork>(mApp, snap);
     // Phase 2: write snapshot files

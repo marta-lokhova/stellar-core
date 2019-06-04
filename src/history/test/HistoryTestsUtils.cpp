@@ -409,6 +409,7 @@ CatchupSimulation::CatchupSimulation(VirtualClock::Mode mode,
     , mAppPtr(createTestApplication(
           mClock, mHistoryConfigurator->configure(mCfg, true)))
     , mApp(*mAppPtr)
+    , mBucketListAtLastPublish(*mAppPtr)
 {
     CHECK(mApp.getHistoryArchiveManager().initializeHistoryArchive("test"));
     mApp.start();
@@ -520,8 +521,8 @@ CatchupSimulation::ensureLedgerAvailable(uint32_t targetLedger)
         auto seq = mApp.getLedgerManager().getLastClosedLedgerNum() + 1;
         if (seq == hm.nextCheckpointLedger(seq))
         {
-            mBucketListAtLastPublish =
-                getApp().getBucketManager().getBucketList();
+//            mBucketListAtLastPublish =
+//                getApp().getBucketManager().getBucketList();
         }
     }
 }

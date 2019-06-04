@@ -369,7 +369,8 @@ TEST_CASE("bucketmanager ownership", "[bucket][bucketmanager]")
 class StopAndRestartBucketMergesTest
 {
     static void
-    resolveAllMerges(BucketList& bl)
+    // TODO dont need second param, just use app
+    resolveAllMerges(Application& app, BucketList& bl)
     {
         for (uint32 i = 0; i < BucketList::kNumLevels; ++i)
         {
@@ -377,7 +378,7 @@ class StopAndRestartBucketMergesTest
             auto& next = level.getNext();
             if (next.isMerging())
             {
-                next.resolve();
+                next.resolve(app);
             }
         }
     }
@@ -589,7 +590,7 @@ class StopAndRestartBucketMergesTest
             BucketManager& bm = app.getBucketManager();
             BucketList& bl = bm.getBucketList();
             // Complete those merges we're about to inspect.
-            resolveAllMerges(bl);
+            resolveAllMerges(app, bl);
 
             mMergeCounters = bm.readMergeCounters();
             mLedgerHeaderHash = lm.getLastClosedLedgerHeader().hash;
@@ -873,7 +874,7 @@ class StopAndRestartBucketMergesTest
             lm.setNextLedgerEntryBatchForBucketTesting(
                 mInitEntryBatches[i - 2], mLiveEntryBatches[i - 2],
                 mDeadEntryBatches[i - 2]);
-            resolveAllMerges(app->getBucketManager().getBucketList());
+            resolveAllMerges(*app, app->getBucketManager().getBucketList());
             auto countersBeforeClose =
                 app->getBucketManager().readMergeCounters();
             closeLedger(*app);

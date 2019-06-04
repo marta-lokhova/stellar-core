@@ -84,25 +84,45 @@ HistoryArchiveState::futuresAllResolved() const
 }
 
 void
-HistoryArchiveState::resolveAllFutures()
+HistoryArchiveState::resolveAllFutures(Application& app, bool log)
 {
+    // Log current state of bucketlist
+    // Then force resolve all (not just ready) futures
+//    if (log)
+//    {
+//        for (size_t i = BucketList::kNumLevels - 1; i != 0; --i)
+//        {
+//            auto level = currentBuckets[i];
+//            std::string a, b;
+//            if (level.next.isMerging())
+//            {
+//                std::tie(a, b) = level.next.getInputHashes();
+//                auto everythingOk = a == level.curr && b == currentBuckets[i - 1].snap;
+//                LOG(INFO) << "LEVEL " << i << "everything MATCH: " << (everythingOk ? "yes" : "no");
+//                LOG(INFO) << "Bucket info BEFORE PUBLISH: current inputs curr=" << a
+//                          << ", level_curr=" << level.curr << ", snap=" << b
+//                          << ", level_snap=" << currentBuckets[i - 1].snap;
+//            }
+//        }
+//    }
+
     for (auto& level : currentBuckets)
     {
         if (level.next.isMerging())
         {
-            level.next.resolve();
+            level.next.resolve(app);
         }
     }
 }
 
 void
-HistoryArchiveState::resolveAnyReadyFutures()
+HistoryArchiveState::resolveAnyReadyFutures(Application& app)
 {
     for (auto& level : currentBuckets)
     {
         if (level.next.isMerging() && level.next.mergeComplete())
         {
-            level.next.resolve();
+            level.next.resolve(app);
         }
     }
 }
@@ -110,7 +130,7 @@ HistoryArchiveState::resolveAnyReadyFutures()
 void
 HistoryArchiveState::save(std::string const& outFile) const
 {
-    assert(futuresAllResolved());
+//    assert(futuresAllResolved());
     std::ofstream out(outFile);
     cereal::JSONOutputArchive ar(out);
     serialize(ar);
@@ -213,36 +233,46 @@ HistoryArchiveState::getBucketListHash()
 }
 
 std::vector<std::string>
-HistoryArchiveState::differingBuckets(HistoryArchiveState const& other) const
+HistoryArchiveState::differingBuckets(Application& app, HistoryArchiveState const& other) const
 {
-    assert(futuresAllResolved());
+//    assert(futuresAllResolved());
     std::set<std::string> inhibit;
     uint256 zero;
     inhibit.insert(binToHex(zero));
     for (auto b : other.currentBuckets)
     {
         inhibit.insert(b.curr);
-        if (b.next.isLive())
+        // Remember shadows instead of outputs
+        for (auto const& shadow :b.next.getShadows())
         {
-            b.next.resolve();
+            inhibit.insert(binToHex(shadow->getHash()));
         }
-        if (b.next.hasOutputHash())
-        {
-            inhibit.insert(b.next.getOutputHash());
-        }
+//        if (b.next.isLive())
+//        {
+//            b.next.resolve(app);
+//        }
+//        if (b.next.hasOutputHash())
+//        {
+//            inhibit.insert(b.next.getOutputHash());
+//        }
         inhibit.insert(b.snap);
     }
     std::vector<std::string> ret;
     for (size_t i = BucketList::kNumLevels; i != 0; --i)
     {
-        auto s = currentBuckets[i - 1].snap;
-        auto n = s;
-        if (currentBuckets[i - 1].next.hasOutputHash())
+        std::vector<std::string> bs;
+
+        bs.push_back(currentBuckets[i - 1].snap);
+
+        for (auto s : currentBuckets[i - 1].shadows)
         {
-            n = currentBuckets[i - 1].next.getOutputHash();
+            LOG(INFO) << "SHADOWS " << s;
+           bs.push_back(s);
         }
+
         auto c = currentBuckets[i - 1].curr;
-        auto bs = {s, n, c};
+        bs.push_back(c);
+
         for (auto const& j : bs)
         {
             if (inhibit.find(j) == inhibit.end())
@@ -293,6 +323,12 @@ HistoryArchiveState::HistoryArchiveState(uint32_t ledgerSeq,
         b.curr = binToHex(level.getCurr()->getHash());
         b.next = level.getNext();
         b.snap = binToHex(level.getSnap()->getHash());
+        std::vector<std::string> shadows;
+        for (auto const& s: level.getNext().getShadows())
+        {
+            shadows.push_back(binToHex(s->getHash()));
+        }
+        b.shadows = shadows;
         currentBuckets.push_back(b);
     }
 }

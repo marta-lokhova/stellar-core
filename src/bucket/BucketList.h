@@ -307,15 +307,16 @@ class BucketLevel
     FutureBucket mNextCurr;
     std::shared_ptr<Bucket> mCurr;
     std::shared_ptr<Bucket> mSnap;
+    Application& mApp;
 
   public:
-    BucketLevel(uint32_t i);
+    BucketLevel(uint32_t i, Application& app);
     uint256 getHash() const;
     FutureBucket const& getNext() const;
     FutureBucket& getNext();
     std::shared_ptr<Bucket> getCurr() const;
     std::shared_ptr<Bucket> getSnap() const;
-    void setNext(FutureBucket const& fb);
+    void setNext(uint32_t ledgerSeq, std::shared_ptr<Bucket> snap, std::vector<std::shared_ptr<Bucket>> shadows, uint32_t maxProtocolVersion);
     void setCurr(std::shared_ptr<Bucket>);
     void setSnap(std::shared_ptr<Bucket>);
     void commit();
@@ -387,7 +388,7 @@ class BucketList
 
     // Create a new BucketList with every `kNumLevels` levels, each with
     // an empty bucket in `curr` and `snap`.
-    BucketList();
+    BucketList(Application& app);
 
     // Return level `i` of the BucketList.
     BucketLevel const& getLevel(uint32_t i) const;

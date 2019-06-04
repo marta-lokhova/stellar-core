@@ -12,6 +12,7 @@
 #include "bucket/FutureBucket.h"
 #include "crypto/Hex.h"
 #include "main/Application.h"
+#include "util/Fs.h"
 #include "util/LogSlowExecution.h"
 #include "util/Logging.h"
 
@@ -25,11 +26,15 @@ FutureBucket::FutureBucket(Application& app,
                            std::shared_ptr<Bucket> const& snap,
                            std::vector<std::shared_ptr<Bucket>> const& shadows,
                            uint32_t maxProtocolVersion, bool keepDeadEntries,
-                           bool countMergeEvents)
+                           bool countMergeEvents, int level)
     : mState(FB_LIVE_INPUTS)
     , mInputCurrBucket(curr)
     , mInputSnapBucket(snap)
     , mInputShadowBuckets(shadows)
+    , mLevel(level)
+    , mMaxProtocol(maxProtocolVersion)
+    , mKeepDeadEntries(keepDeadEntries)
+    , mCountMergeEvents(countMergeEvents)
 {
     // Constructed with a bunch of inputs, _immediately_ commence merging
     // them; there's no valid state for have-inputs-but-not-merging, the
@@ -42,7 +47,8 @@ FutureBucket::FutureBucket(Application& app,
     {
         mInputShadowBucketHashes.push_back(binToHex(b->getHash()));
     }
-    startMerge(app, maxProtocolVersion, keepDeadEntries, countMergeEvents);
+    // We will force merge later on publish
+//    startMerge(app, maxProtocolVersion, keepDeadEntries, countMergeEvents);
 }
 
 void
@@ -115,7 +121,7 @@ FutureBucket::checkState() const
     case FB_LIVE_INPUTS:
         assert(mInputSnapBucket);
         assert(mInputCurrBucket);
-        assert(mOutputBucket.valid());
+//        assert(mOutputBucket.valid());
         assert(mOutputBucketHash.empty());
         checkHashesMatch();
         break;
@@ -207,8 +213,13 @@ FutureBucket::mergeComplete() const
 }
 
 std::shared_ptr<Bucket>
-FutureBucket::resolve()
+FutureBucket::resolve(Application& app)
 {
+    if (!mOutputBucket.valid())
+    {
+        startMerge(app, mMaxProtocol, mKeepDeadEntries, mCountMergeEvents);
+    }
+
     checkState();
     assert(isLive());
     clearInputs();
@@ -275,21 +286,39 @@ FutureBucket::startMerge(Application& app, uint32_t maxProtocolVersion,
 
     BucketManager& bm = app.getBucketManager();
 
+    auto level = this->mLevel;
     using task_t = std::packaged_task<std::shared_ptr<Bucket>()>;
-    std::shared_ptr<task_t> task =
-        std::make_shared<task_t>([curr, snap, &bm, shadows, maxProtocolVersion,
-                                  keepDeadEntries, countMergeEvents]() {
+    std::shared_ptr<task_t> task = std::make_shared<task_t>(
+        [level, &app, curr, snap, &bm, shadows, maxProtocolVersion,
+         keepDeadEntries, countMergeEvents]() {
             CLOG(TRACE, "Bucket")
                 << "Worker merging curr=" << hexAbbrev(curr->getHash())
                 << " with snap=" << hexAbbrev(snap->getHash());
 
+            auto start = app.getClock().now();
             auto res =
                 Bucket::merge(bm, maxProtocolVersion, curr, snap, shadows,
                               keepDeadEntries, countMergeEvents);
 
+            auto end = app.getClock().now();
+
+            size_t shadowsSize = 0;
+            for (auto const& s : shadows)
+            {
+                shadowsSize += fs::size(s->getFilename());
+            }
+
             CLOG(TRACE, "Bucket")
-                << "Worker finished merging curr=" << hexAbbrev(curr->getHash())
-                << " with snap=" << hexAbbrev(snap->getHash());
+                << "LEVEL " << level
+                << " curr=" << hexAbbrev(curr->getHash()) << " FILESIZE "
+                << fs::size(curr->getFilename())
+                << " snap=" << hexAbbrev(snap->getHash()) << " FILESIZE "
+                << fs::size(snap->getFilename()) << " TOOK "
+                << std::chrono::duration_cast<std::chrono::milliseconds>(
+                       end - start)
+                       .count()
+                << " milliseconds. Resulting bucket SIZE was "
+                << fs::size(res->getFilename()) << " SHADOWS size was " << shadowsSize;
 
             return res;
         });
@@ -324,12 +353,12 @@ FutureBucket::makeLive(Application& app, uint32_t maxProtocolVersion,
         {
             auto b = bm.getBucketByHash(hexToBin256(h));
             assert(b);
-            CLOG(DEBUG, "Bucket") << "Reconstituting shadow " << h;
+            CLOG(INFO, "Bucket") << "Reconstituting shadow " << h;
             mInputShadowBuckets.push_back(b);
         }
         mState = FB_LIVE_INPUTS;
-        startMerge(app, maxProtocolVersion, keepDeadEntries,
-                   /*countMergeEvents=*/true);
+//        startMerge(app, maxProtocolVersion, keepDeadEntries,
+//                   /*countMergeEvents=*/true);
         assert(isLive());
     }
 }
@@ -355,5 +384,17 @@ FutureBucket::getHashes() const
         hashes.push_back(mOutputBucketHash);
     }
     return hashes;
+}
+
+    std::pair<std::string, std::string>
+    FutureBucket::getInputHashes() const
+{
+    return std::make_pair<std::string>(binToHex(mInputCurrBucket->getHash()), binToHex(mInputSnapBucket->getHash()));
+}
+
+std::vector<std::shared_ptr<Bucket>>
+FutureBucket::getShadows() const
+{
+    return mInputShadowBuckets;
 }
 }

@@ -124,7 +124,7 @@ CatchupWork::downloadApplyBuckets()
         << "Catchup queued up downloading, verifying and applying of buckets";
 
     std::vector<std::string> hashes =
-        mApplyBucketsRemoteState.differingBuckets(mLocalState);
+        mApplyBucketsRemoteState.differingBuckets(mApp, mLocalState);
     auto getBuckets = std::make_shared<DownloadBucketsWork>(
         mApp, mBuckets, hashes, *mDownloadDir);
 

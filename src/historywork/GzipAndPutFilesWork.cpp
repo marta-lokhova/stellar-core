@@ -34,7 +34,7 @@ GzipAndPutFilesWork::doWork()
             mSnapshot->mSCPHistorySnapFile};
 
         std::vector<std::string> bucketsToSend =
-            mSnapshot->mLocalState.differingBuckets(mRemoteState);
+            mSnapshot->mLocalState.differingBuckets(mApp, mRemoteState);
 
         for (auto const& hash : bucketsToSend)
         {

@@ -18,10 +18,11 @@
 namespace stellar
 {
 
-BucketLevel::BucketLevel(uint32_t i)
+BucketLevel::BucketLevel(uint32_t i, Application& app)
     : mLevel(i)
     , mCurr(std::make_shared<Bucket>())
     , mSnap(std::make_shared<Bucket>())
+    , mApp(app)
 {
 }
 
@@ -47,9 +48,27 @@ BucketLevel::getNext()
 }
 
 void
-BucketLevel::setNext(FutureBucket const& fb)
+BucketLevel::setNext(uint32_t ledgerSeq, std::shared_ptr<Bucket> snap, std::vector<std::shared_ptr<Bucket>> shadows, uint32_t maxProtocolVersion)
 {
-    mNextCurr = fb;
+//    mNextCurr = fb;
+
+    // We reconstruct next based on the current state of the bucketlist
+    if (mLevel == 0)
+    {
+        return;
+    }
+
+    // Before the last spill
+    auto correctLedger = ledgerSeq / BucketList::levelHalf(mLevel - 1) * BucketList::levelHalf(mLevel - 1);
+    uint32_t nextChangeLedger =
+            correctLedger + BucketList::levelHalf(mLevel - 1);
+    auto clearCurr = BucketList::levelShouldSpill(nextChangeLedger, mLevel);
+
+    auto curr = clearCurr ? std::make_shared<Bucket>() : mCurr;
+
+    bool keepDeadEntries = BucketList::keepDeadEntries(mLevel);
+    bool countMergeEvents = !mApp.getConfig().ARTIFICIALLY_REDUCE_MERGE_COUNTS_FOR_TESTING;
+    mNextCurr = FutureBucket(mApp, curr, snap, shadows, maxProtocolVersion, keepDeadEntries, countMergeEvents, mLevel);
 }
 
 std::shared_ptr<Bucket>
@@ -82,7 +101,7 @@ BucketLevel::commit()
 {
     if (mNextCurr.isLive())
     {
-        setCurr(mNextCurr.resolve());
+        setCurr(mNextCurr.resolve(mApp));
         // CLOG(DEBUG, "Bucket") << "level " << mLevel << " set mCurr to "
         //            << mCurr->getEntries().size() << " elements";
     }
@@ -142,6 +161,7 @@ BucketLevel::prepare(Application& app, uint32_t currLedger,
     // from a snap of its own.  Eg. level 1 at ledger 6 (2 away from 8, its next
     // snap), or level 2 at ledger 24 (8 away from 32, its next snap). See
     // diagram above.
+
     if (mLevel != 0)
     {
         uint32_t nextChangeLedger =
@@ -154,9 +174,10 @@ BucketLevel::prepare(Application& app, uint32_t currLedger,
         }
     }
 
-    mNextCurr =
-        FutureBucket(app, curr, snap, shadows, currLedgerProtocol,
-                     BucketList::keepDeadEntries(mLevel), countMergeEvents);
+    mNextCurr = FutureBucket(app, curr, snap, shadows, currLedgerProtocol,
+                             BucketList::keepDeadEntries(mLevel),
+                             countMergeEvents, mLevel);
+
     assert(mNextCurr.isMerging());
 }
 
@@ -546,11 +567,11 @@ BucketList::restartMerges(Application& app, uint32_t maxProtocolVersion)
 
 BucketListDepth BucketList::kNumLevels = 11;
 
-BucketList::BucketList()
+BucketList::BucketList(Application& app)
 {
     for (uint32_t i = 0; i < kNumLevels; ++i)
     {
-        mLevels.push_back(BucketLevel(i));
+        mLevels.push_back(BucketLevel(i, app));
     }
 }
 }

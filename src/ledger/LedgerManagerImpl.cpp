@@ -1119,10 +1119,10 @@ LedgerManagerImpl::storeCurrentLedger(LedgerHeader const& header)
     // fewer buckets for the user to accidentally delete from their buckets
     // dir. But we support the option of not-doing so, only for the sake of
     // testing. Note: this is nonblocking in any case.
-    if (!mApp.getConfig().ARTIFICIALLY_PESSIMIZE_MERGES_FOR_TESTING)
-    {
-        has.resolveAnyReadyFutures();
-    }
+//    if (!mApp.getConfig().ARTIFICIALLY_PESSIMIZE_MERGES_FOR_TESTING)
+//    {
+//        has.resolveAnyReadyFutures();
+//    }
 
     mApp.getPersistentState().setState(PersistentState::kHistoryArchiveState,
                                        has.toString());

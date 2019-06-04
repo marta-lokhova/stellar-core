@@ -35,19 +35,20 @@ struct HistoryStateBucket
     std::string curr;
     FutureBucket next;
     std::string snap;
+    std::vector<std::string> shadows;
 
     template <class Archive>
     void
     serialize(Archive& ar) const
     {
-        ar(CEREAL_NVP(curr), CEREAL_NVP(next), CEREAL_NVP(snap));
+        ar(CEREAL_NVP(curr), CEREAL_NVP(next), CEREAL_NVP(snap), CEREAL_NVP(shadows));
     }
 
     template <class Archive>
     void
     serialize(Archive& ar)
     {
-        ar(CEREAL_NVP(curr), CEREAL_NVP(next), CEREAL_NVP(snap));
+        ar(CEREAL_NVP(curr), CEREAL_NVP(next), CEREAL_NVP(snap), CEREAL_NVP(shadows));
     }
 };
 
@@ -87,7 +88,7 @@ struct HistoryArchiveState
     // and with snap buckets occurring before curr buckets. Zero-buckets are
     // omitted.
     std::vector<std::string>
-    differingBuckets(HistoryArchiveState const& other) const;
+    differingBuckets(Application& app, HistoryArchiveState const& other) const;
 
     // Return vector of all buckets referenced by this state.
     std::vector<std::string> allBuckets() const;
@@ -118,13 +119,13 @@ struct HistoryArchiveState
 
     // Resolve all futures, filling in the 'next' bucket hashes of each level.
     // NB: this may block the calling thread, careful!
-    void resolveAllFutures();
+    void resolveAllFutures(Application& app, bool log = false);
 
     // Resolve any futures that are ready, filling in the 'next' bucket hashes
     // of each resolved level.  NB: this will not block the calling thread, may
     // slightly improve the resolved-ness of the FutureBuckets such that a nicer
     // value is available for saving and reloading (fewer captured shadows).
-    void resolveAnyReadyFutures();
+    void resolveAnyReadyFutures(Application& app);
 
     void save(std::string const& outFile) const;
     void load(std::string const& inFile);

@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <main/Config.h>
 
 namespace stellar
 {
@@ -80,16 +81,24 @@ class FutureBucket
     void clearOutput();
     void setLiveOutput(std::shared_ptr<Bucket> b);
 
+    int mLevel;
+    uint32_t mMaxProtocol{Config::CURRENT_LEDGER_PROTOCOL_VERSION};
+    bool mKeepDeadEntries{false};
+    bool mCountMergeEvents{false};
+
   public:
     FutureBucket(Application& app, std::shared_ptr<Bucket> const& curr,
                  std::shared_ptr<Bucket> const& snap,
                  std::vector<std::shared_ptr<Bucket>> const& shadows,
                  uint32_t maxProtocolVersion, bool keepDeadEntries,
-                 bool countMergeEvents);
+                 bool countMergeEvents, int level = 99);
 
     FutureBucket() = default;
     FutureBucket(FutureBucket const& other) = default;
     FutureBucket& operator=(FutureBucket const& other) = default;
+
+    // Get shadows
+    std::vector<std::shared_ptr<Bucket>> getShadows() const;
 
     // Clear all live values and hashes.
     void clear();
@@ -114,7 +123,7 @@ class FutureBucket
     bool mergeComplete() const;
 
     // Precondition: isLive(); waits-for and resolves to merged bucket.
-    std::shared_ptr<Bucket> resolve();
+    std::shared_ptr<Bucket> resolve(Application& app);
 
     // Precondition: !isLive(); transitions from FB_HASH_FOO to FB_LIVE_FOO
     void makeLive(Application& app, uint32_t maxProtocolVersion,
@@ -122,6 +131,8 @@ class FutureBucket
 
     // Return all hashes referenced by this future.
     std::vector<std::string> getHashes() const;
+
+    std::pair<std::string, std::string> getInputHashes() const;
 
     template <class Archive>
     void
