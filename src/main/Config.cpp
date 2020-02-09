@@ -196,6 +196,8 @@ Config::Config() : NODE_SEED(SecretKey::random())
     FLOOD_TX_PERIOD_MS = 200;
     FLOOD_ARB_TX_BASE_ALLOWANCE = 5;
     FLOOD_ARB_TX_DAMPING_FACTOR = 0.8;
+    FLOOD_TX_LAZY_PROBABILITY = 1.0;
+    FLOOD_SCP_LAZY_PROBABILITY = 1.0;
 
     MAX_BATCH_WRITE_COUNT = 1024;
     MAX_BATCH_WRITE_BYTES = 1 * 1024 * 1024;
@@ -1129,6 +1131,26 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                 {
                     throw std::invalid_argument(
                         "bad value for FLOOD_OP_RATE_PER_LEDGER");
+                }
+            }
+            else if (item.first == "FLOOD_TX_LAZY_PROBABILITY")
+            {
+                FLOOD_TX_LAZY_PROBABILITY = readDouble(item);
+                if (FLOOD_TX_LAZY_PROBABILITY < 0.0 ||
+                    FLOOD_TX_LAZY_PROBABILITY > 1.0)
+                {
+                    throw std::invalid_argument(
+                        "bad value for FLOOD_TX_LAZY_PROBABILITY");
+                }
+            }
+            else if (item.first == "FLOOD_SCP_LAZY_PROBABILITY")
+            {
+                FLOOD_SCP_LAZY_PROBABILITY = readDouble(item);
+                if (FLOOD_SCP_LAZY_PROBABILITY < 0.0 ||
+                    FLOOD_SCP_LAZY_PROBABILITY > 1.0)
+                {
+                    throw std::invalid_argument(
+                        "bad value for FLOOD_SCP_LAZY_PROBABILITY");
                 }
             }
             else if (item.first == "FLOOD_TX_PERIOD_MS")
