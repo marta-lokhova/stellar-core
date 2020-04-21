@@ -1264,3 +1264,142 @@ TEST_CASE("Catchup failure recovery with buffered checkpoint",
     // 3. Catchup to 191, and then externalize 194 to start catchup
     CHECK(catchupSimulation.catchupOnline(app, checkpointLedger, 1, 191, 3));
 }
+
+TEST_CASE("Change ordering of buffered ledgers after checkpoint",
+          "[history][catchup]")
+{
+    CatchupSimulation catchupSimulation{};
+
+    auto app = catchupSimulation.createCatchupApplication(
+        std::numeric_limits<uint32_t>::max(), Config::TESTDB_IN_MEMORY_SQLITE,
+        "app2");
+
+    auto checkpointLedger = catchupSimulation.getLastCheckpointLedger(1);
+    catchupSimulation.ensureOnlineCatchupPossible(checkpointLedger, 15);
+
+    // randomize externalize order of buffered ledgers
+    REQUIRE(
+        catchupSimulation.catchupOnline(app, checkpointLedger, 10, 0, 0, true));
+}
+
+TEST_CASE("Introduce and fix gap without starting catchup",
+          "[history][catchup]")
+{
+    CatchupSimulation catchupSimulation{};
+
+    auto app = catchupSimulation.createCatchupApplication(
+        std::numeric_limits<uint32_t>::max(), Config::TESTDB_IN_MEMORY_SQLITE,
+        "app2");
+
+    auto checkpointLedger = catchupSimulation.getLastCheckpointLedger(1);
+    catchupSimulation.ensureOnlineCatchupPossible(checkpointLedger, 15);
+    REQUIRE(catchupSimulation.catchupOnline(app, checkpointLedger, 5));
+
+    auto& lm = app->getLedgerManager();
+    auto& cm = app->getCatchupManager();
+    auto& herder = static_cast<HerderImpl&>(app->getHerder());
+
+    auto nextLedger = lm.getLastClosedLedgerNum() + 1;
+
+    // introduce 2 gaps (+1 and +4 are missing)
+    catchupSimulation.externalizeLedger(herder, nextLedger);
+    catchupSimulation.externalizeLedger(herder, nextLedger + 2);
+    catchupSimulation.externalizeLedger(herder, nextLedger + 3);
+    catchupSimulation.externalizeLedger(herder, nextLedger + 5);
+    REQUIRE(!lm.isSynced());
+    REQUIRE(cm.hasBufferedLedger());
+
+    // Fill in gap. This will put ledger manager back in sync, but we'll still
+    // have buffered ledgers because there's another gap
+    catchupSimulation.externalizeLedger(herder, nextLedger + 1);
+    REQUIRE(lm.isSynced());
+    REQUIRE(cm.hasBufferedLedger());
+    REQUIRE(cm.getBufferedLedger().getLedgerSeq() == nextLedger + 5);
+
+    // Fill in the second gap. All buffered ledgers should be applied
+    catchupSimulation.externalizeLedger(herder, nextLedger + 4);
+    REQUIRE(lm.isSynced());
+    REQUIRE(!cm.hasBufferedLedger());
+    REQUIRE(!cm.isCatchupInitialized());
+    REQUIRE(lm.getLastClosedLedgerNum() == nextLedger + 5);
+}
+
+TEST_CASE("Receive trigger and checkpoint ledger out of order",
+          "[history][catchup]")
+{
+    CatchupSimulation catchupSimulation{};
+
+    auto app = catchupSimulation.createCatchupApplication(
+        std::numeric_limits<uint32_t>::max(), Config::TESTDB_IN_MEMORY_SQLITE,
+        "app2");
+
+    auto& lm = app->getLedgerManager();
+    auto& cm = app->getCatchupManager();
+    auto& herder = static_cast<HerderImpl&>(app->getHerder());
+
+    auto checkpointLedger = catchupSimulation.getLastCheckpointLedger(1);
+    catchupSimulation.ensureOnlineCatchupPossible(checkpointLedger, 60);
+    REQUIRE(catchupSimulation.catchupOnline(app, checkpointLedger, 60));
+
+    REQUIRE(app->getLedgerManager().getLastClosedLedgerNum() == 126);
+
+    // Now generate a little more history
+    checkpointLedger = catchupSimulation.getLastCheckpointLedger(2);
+    catchupSimulation.ensureOnlineCatchupPossible(checkpointLedger, 5);
+
+    // introduce a gap (checkpoint ledger is missing) and then fill it in
+    catchupSimulation.externalizeLedger(herder, checkpointLedger + 1);
+    catchupSimulation.externalizeLedger(herder, checkpointLedger);
+
+    REQUIRE(lm.isSynced());
+    REQUIRE(!cm.hasBufferedLedger());
+    REQUIRE(!cm.isCatchupInitialized());
+    REQUIRE(app->getLedgerManager().getLastClosedLedgerNum() ==
+            checkpointLedger + 1);
+}
+
+TEST_CASE("Externalize gap while catchup work is running", "[history][catchup]")
+{
+    CatchupSimulation catchupSimulation{};
+
+    auto app = catchupSimulation.createCatchupApplication(
+        std::numeric_limits<uint32_t>::max(), Config::TESTDB_IN_MEMORY_SQLITE,
+        "app2");
+
+    auto checkpointLedger = catchupSimulation.getLastCheckpointLedger(1);
+    catchupSimulation.ensureOnlineCatchupPossible(checkpointLedger, 60);
+    REQUIRE(catchupSimulation.catchupOnline(app, checkpointLedger, 60));
+
+    auto lcl = app->getLedgerManager().getLastClosedLedgerNum();
+    REQUIRE(lcl == 126);
+
+    // Now generate a little more history
+    checkpointLedger = catchupSimulation.getLastCheckpointLedger(2);
+    catchupSimulation.ensureOnlineCatchupPossible(checkpointLedger, 10);
+
+    // lcl is 126, so start catchup by skipping 127. Once catchup starts,
+    // externalize 127. This ledger will be ignored because catchup is running
+    REQUIRE(
+        catchupSimulation.catchupOnline(app, lcl + 2, 5, 0, 0, false, {127}));
+}
+
+TEST_CASE("Out of order checkpoint triggers catchup", "[history][catchup]")
+{
+    CatchupSimulation catchupSimulation{};
+
+    auto app = catchupSimulation.createCatchupApplication(
+        std::numeric_limits<uint32_t>::max(), Config::TESTDB_IN_MEMORY_SQLITE,
+        "app2");
+
+    auto& herder = static_cast<HerderImpl&>(app->getHerder());
+
+    auto checkpointLedger = catchupSimulation.getLastCheckpointLedger(1);
+    catchupSimulation.ensureOnlineCatchupPossible(checkpointLedger, 10);
+
+    // externalize trigger ledger
+    catchupSimulation.externalizeLedger(herder, checkpointLedger + 1);
+
+    // catchup should still trigger even though trigger ledger was seen before
+    // checkpoint
+    REQUIRE(catchupSimulation.catchupOnline(app, checkpointLedger, 5));
+}
