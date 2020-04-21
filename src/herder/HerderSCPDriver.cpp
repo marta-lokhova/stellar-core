@@ -764,18 +764,6 @@ HerderSCPDriver::valueExternalized(uint64_t slotIndex, Value const& value)
         it = mSCPTimers.erase(it);
     }
 
-    if (slotIndex <= mApp.getHerder().getCurrentLedgerSeq())
-    {
-        // externalize may trigger on older slots:
-        //  * when the current instance starts up
-        //  * when getting back in sync (a gap potentially opened)
-        // in both cases it's safe to just ignore those as we're already
-        // tracking a more recent state
-        CLOG(DEBUG, "Herder")
-            << "Ignoring old ledger externalize " << slotIndex;
-        return;
-    }
-
     StellarValue b;
     try
     {
@@ -790,6 +778,21 @@ HerderSCPDriver::valueExternalized(uint64_t slotIndex, Value const& value)
         CLOG(ERROR, "Herder") << REPORT_INTERNAL_BUG;
         // no point in continuing as 'b' contains garbage at this point
         abort();
+    }
+
+    // externalize may trigger on older slots:
+    //  * when the current instance starts up
+    //  * when getting back in sync (a gap potentially opened)
+    // in both cases it's safe to not proceed with the rest of the function
+    // as we're already tracking a more recent state
+    // Yet, still deliver externalize events to LedgerManager so it
+    // can process catchup state, if needed
+    if (slotIndex <= mApp.getHerder().getCurrentLedgerSeq())
+    {
+        TxSetFramePtr externalizedSet = mPendingEnvelopes.getTxSet(b.txSetHash);
+        LedgerCloseData ledgerData(slotIndex, externalizedSet, b);
+        mLedgerManager.valueExternalized(ledgerData);
+        return;
     }
 
     // log information from older ledger to increase the chances that
