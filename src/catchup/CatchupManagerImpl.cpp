@@ -57,13 +57,11 @@ CatchupManagerImpl::processLedger(LedgerCloseData const& ledgerData)
     uint32_t lastReceivedLedgerSeq = ledgerData.getLedgerSeq();
 
     // 1. CatchupWork is not running yet
-    // 2. We've seen out of sync ledgers
-    // 3. The ledger just received is equal to lcl
+    // 2. The ledger just received is equal to lcl
     // then it's possible we're back in sync and we can attempt to apply
     // mSyncingLedgers
-    if (!mCatchupWork && !mSyncingLedgers.empty() &&
-        lastReceivedLedgerSeq ==
-            mApp.getLedgerManager().getLastClosedLedgerNum())
+    if (!mCatchupWork && lastReceivedLedgerSeq ==
+                             mApp.getLedgerManager().getLastClosedLedgerNum())
     {
         tryApplySyncingLedgers();
         return;
@@ -76,8 +74,9 @@ CatchupManagerImpl::processLedger(LedgerCloseData const& ledgerData)
         return;
     }
 
-    // For the rest of this method: we know LCL has fallen behind the network,
-    // we only need to decide whether to start the CatchupWork state machine.
+    // For the rest of this method: we know LCL has fallen behind the network
+    // and we must buffer this ledger, we only need to decide whether to start
+    // the CatchupWork state machine.
     //
     // Assuming we fell out of sync at ledger K, we wait for the first ledger L
     // of the checkpoint following K to start catchup. When we
@@ -106,38 +105,51 @@ CatchupManagerImpl::processLedger(LedgerCloseData const& ledgerData)
     // in case the ledgers we're missing are received.
     addToSyncingLedgers(ledgerData);
 
-    // Finally we wait some number of ledgers beyond the buffered checkpoint
-    // ledger before we trigger the CatchupWork. This could be any number,
-    // for the sake of simplicity at the moment it's set to one ledger
+    // Keep track of the smallest buffered checkpoint.
+    auto& hm = mApp.getHistoryManager();
+    if (hm.isFirstLedgerInCheckpoint(lastReceivedLedgerSeq))
+    {
+        if (!mSmallestBufferedCheckpoint ||
+            *mSmallestBufferedCheckpoint > lastReceivedLedgerSeq)
+        {
+            mSmallestBufferedCheckpoint =
+                make_optional<uint32_t>(lastReceivedLedgerSeq);
+        }
+    }
+
+    // Finally we wait some number of ledgers beyond the smallest buffered
+    // checkpoint ledger before we trigger the CatchupWork. This could be any
+    // number, for the sake of simplicity at the moment it's set to one ledger
     // after the first buffered one. Since we can receive out of order ledgers,
-    // we make sure that we have the corresponding checkpoint for the largest
-    // buffered ledger
+    // we just check for any ledger larger than the checkpoint
 
     std::string message;
-    auto& hm = mApp.getHistoryManager();
 
     uint32_t lastLedgerInBuffer = mSyncingLedgers.crbegin()->first;
-    uint32_t firstLedgerInCheckpoint =
-        hm.firstLedgerInCheckpointContaining(lastLedgerInBuffer);
-
-    auto it = mSyncingLedgers.find(firstLedgerInCheckpoint);
-    if (it != mSyncingLedgers.end() &&
-        !hm.isFirstLedgerInCheckpoint(lastLedgerInBuffer))
+    if (mSmallestBufferedCheckpoint &&
+        *mSmallestBufferedCheckpoint < lastLedgerInBuffer)
     {
         message = fmt::format("Starting catchup after ensuring checkpoint "
                               "ledger {} was closed on network",
                               lastLedgerInBuffer);
 
-        // We only need ledgers starting from the found checkpoint. We can
+        // We only need ledgers starting from the checkpoint. We can
         // remove all ledgers before this
+        auto it = mSyncingLedgers.find(*mSmallestBufferedCheckpoint);
+        assert(it != mSyncingLedgers.end());
         mSyncingLedgers.erase(mSyncingLedgers.begin(), it);
+
         startOnlineCatchup();
+
+        // Reset when we start catchup. If catchup fails, trimSyncingLedgers
+        // will set this again if a checkpoint still exists in mSyncingLedgers
+        mSmallestBufferedCheckpoint.reset();
     }
     else
     {
         uint32_t requiredFirstLedgerInCheckpoint =
-            hm.isFirstLedgerInCheckpoint(lastLedgerInBuffer)
-                ? lastLedgerInBuffer
+            mSmallestBufferedCheckpoint
+                ? *mSmallestBufferedCheckpoint
                 : hm.firstLedgerAfterCheckpointContaining(lastLedgerInBuffer);
 
         uint32_t catchupTriggerLedger =
@@ -312,6 +324,8 @@ CatchupManagerImpl::trimSyncingLedgers()
     {
         if (hm.isFirstLedgerInCheckpoint(rit->second.getLedgerSeq()))
         {
+            mSmallestBufferedCheckpoint =
+                make_optional<uint32_t>(rit->second.getLedgerSeq());
             break;
         }
         ++rit;

@@ -29,6 +29,10 @@ class CatchupManagerImpl : public CatchupManager
     std::map<uint32_t, LedgerCloseData> mSyncingLedgers;
     medida::Counter& mSyncingLedgersSize;
 
+    // keeps track of the smallest buffered checkpoint so we know when to start
+    // catchup work
+    optional<uint32_t> mSmallestBufferedCheckpoint;
+
     void addToSyncingLedgers(LedgerCloseData const& ledgerData);
     void startOnlineCatchup();
     void trimSyncingLedgers();
