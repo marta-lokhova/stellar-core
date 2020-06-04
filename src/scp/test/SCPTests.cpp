@@ -2381,8 +2381,8 @@ TEST_CASE("ballot protocol core3", "[scp][ballotprotocol]")
     // no timer is set
     REQUIRE(!scp.hasBallotTimer());
 
-    Value const& aValue = zValue;
-    Value const& bValue = xValue;
+    Value const& aValue = xValue;
+    Value const& bValue = zValue;
 
     SCPBallot A1(1, aValue);
     SCPBallot B1(1, bValue);
@@ -2407,12 +2407,37 @@ TEST_CASE("ballot protocol core3", "[scp][ballotprotocol]")
     SCPBallot B3 = B2;
     B3.counter++;
 
-    REQUIRE(scp.bumpState(0, aValue));
-    REQUIRE(scp.mEnvs.size() == 1);
-    REQUIRE(!scp.hasBallotTimer());
+    SECTION("third party timing")
+    {
+        SIMULATION_CREATE_NODE(TP);
+        TestSCP scpTP(vTPSecretKey.getPublicKey(), qSet);
+        scpTP.storeQuorumSet(std::make_shared<SCPQuorumSet>(qSet));
+        uint256 qSetHashTP = scpTP.mSCP.getLocalNode()->getQuorumSetHash();
+
+        scpTP.receiveEnvelope(
+                makePrepare(v1SecretKey, qSetHash, 0, B2, &A2, 0, 1, &B1));
+        scpTP.receiveEnvelope(
+                makePrepare(v2SecretKey, qSetHash, 0, B1, &B1, 1, 1));
+
+        REQUIRE(scpTP.mEnvs.size() == 1);
+        verifyPrepare(scpTP.mEnvs[0], vTPSecretKey, qSetHashTP, 0, B1, &B1, 1,
+                      1);
+
+        scpTP.receiveEnvelope(
+                makePrepare(v0SecretKey, qSetHash, 0, B2, &A2, 0, 1, &B1));
+
+        REQUIRE(scpTP.mEnvs.size() == 2);
+        verifyPrepare(scpTP.mEnvs[1], vTPSecretKey, qSetHashTP, 0, A2, &A2, 2,
+                      2, &B2);
+    }
+
 
     SECTION("prepared B1 (quorum votes B1)")
     {
+        REQUIRE(scp.bumpState(0, aValue));
+        REQUIRE(scp.mEnvs.size() == 1);
+        REQUIRE(!scp.hasBallotTimer());
+
         scp.bumpTimerOffset();
         recvQuorumChecks(makePrepareGen(qSetHash, B1), true, true);
         REQUIRE(scp.mEnvs.size() == 2);
