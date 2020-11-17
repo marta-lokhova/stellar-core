@@ -59,6 +59,7 @@ Peer::Peer(Application& app, PeerRole role)
     , mLastWrite(app.getClock().now())
     , mEnqueueTimeOfLastWrite(app.getClock().now())
     , mPeerMetrics(app.getClock().now())
+    , mTask(app, "batch-background-process", 100)
 {
     mPingSentTime = PING_NOT_SENT;
     mLastPing = std::chrono::hours(24); // some default very high value
@@ -470,20 +471,30 @@ Peer::sendMessage(StellarMessage const& msg, bool log)
 
     AuthenticatedMessage amsg;
     amsg.v0().message = msg;
+    auto prepareMsg =
+        [ macKey = mSendMacKey, seq = mSendMacSeq, msg ]()->HmacSha256Mac
+    {
+        return hmacSha256(macKey, xdr::xdr_to_opaque(seq, msg));
+    };
+
     if (msg.type() != HELLO && msg.type() != ERROR_MSG)
     {
-        ZoneNamedN(hmacZone, "message HMAC", true);
         amsg.v0().sequence = mSendMacSeq;
-        amsg.v0().mac =
-            hmacSha256(mSendMacKey, xdr::xdr_to_opaque(mSendMacSeq, msg));
+        if (mApp.hasHighPriorityThreads())
+        {
+            mTask.addTask(prepareMsg, mSendMacSeq);
+        }
+        else
+        {
+            amsg.v0().mac =
+                hmacSha256(mSendMacKey, xdr::xdr_to_opaque(mSendMacSeq, msg));
+        }
         ++mSendMacSeq;
     }
-    xdr::msg_ptr xdrBytes;
-    {
-        ZoneNamedN(xdrZone, "XDR serialize", true);
-        xdrBytes = xdr::xdr_to_msg(amsg);
-    }
-    this->sendMessage(std::move(xdrBytes));
+
+    // TODO: it is not ideal that we might pass a half-populated
+    // AuthenticatedMessage here
+    this->sendMessage(amsg);
 }
 
 void

@@ -163,7 +163,8 @@ Config::Config() : NODE_SEED(SecretKey::random())
     // for it.
     //
     // Worst case = 10 concurrent merges + 1 quorum intersection calculation.
-    WORKER_THREADS = 11;
+    LOW_PRIORITY_WORKER_THREADS = 11;
+    HIGH_PRIORITY_WORKER_THREADS = 6;
     MAX_CONCURRENT_SUBPROCESSES = 16;
     NODE_IS_VALIDATOR = false;
     QUORUM_INTERSECTION_CHECKER = true;
@@ -904,7 +905,12 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
             }
             else if (item.first == "WORKER_THREADS")
             {
-                WORKER_THREADS = readInt<int>(item, 1, 1000);
+                LOW_PRIORITY_WORKER_THREADS = readInt<int>(item, 1, 1000);
+            }
+            else if (item.first == "HIGH_PRIORITY_WORKER_THREADS")
+            {
+                // TODO: allow auto-detect
+                HIGH_PRIORITY_WORKER_THREADS = readInt<int>(item, 0, 1000);
             }
             else if (item.first == "MAX_CONCURRENT_SUBPROCESSES")
             {

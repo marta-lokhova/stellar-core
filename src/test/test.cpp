@@ -188,7 +188,7 @@ getTestConfig(int instanceNumber, Config::TestDbMode mode)
         // disable maintenance
         thisConfig.AUTOMATIC_MAINTENANCE_COUNT = 0;
         // only spin up a small number of worker threads
-        thisConfig.WORKER_THREADS = 2;
+        thisConfig.LOW_PRIORITY_WORKER_THREADS = 2;
         thisConfig.QUORUM_INTERSECTION_CHECKER = false;
     }
     return *cfgs[instanceNumber];

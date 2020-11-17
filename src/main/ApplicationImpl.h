@@ -56,6 +56,7 @@ class ApplicationImpl : public Application
     virtual void syncOwnMetrics() override;
     virtual void syncAllMetrics() override;
     virtual void clearMetrics(std::string const& domain) override;
+    virtual bool hasHighPriorityThreads() override;
     virtual TmpDirManager& getTmpDirManager() override;
     virtual LedgerManager& getLedgerManager() override;
     virtual BucketManager& getBucketManager() override;
@@ -79,7 +80,8 @@ class ApplicationImpl : public Application
     virtual void postOnMainThread(std::function<void()>&& f, std::string&& name,
                                   Scheduler::ActionType type) override;
     virtual void postOnBackgroundThread(std::function<void()>&& f,
-                                        std::string jobName) override;
+                                        std::string jobName,
+                                        TaskPriority priority) override;
 
     virtual void start() override;
 
@@ -139,9 +141,10 @@ class ApplicationImpl : public Application
     // The fields must be destructed in the reverse order because all worker
     // threads must be joined and destroyed before we start tearing down
     // subsystems.
-
     asio::io_context mWorkerIOContext;
+    optional<asio::io_context> mHighPriorityWorkerIOContext;
     std::unique_ptr<asio::io_context::work> mWork;
+    std::unique_ptr<asio::io_context::work> mHighPriorityWork;
 
     std::unique_ptr<Database> mDatabase;
     std::unique_ptr<OverlayManager> mOverlayManager;

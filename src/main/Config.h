@@ -335,8 +335,11 @@ class Config : public std::enable_shared_from_this<Config>
     // totally insensitive to overloading.
     uint32_t MINIMUM_IDLE_PERCENT;
 
-    // thread-management config
-    int WORKER_THREADS;
+    // thread-management config (low priority)
+    int LOW_PRIORITY_WORKER_THREADS;
+
+    // thread-management config (high priority)
+    int HIGH_PRIORITY_WORKER_THREADS;
 
     // process-management config
     int MAX_CONCURRENT_SUBPROCESSES;

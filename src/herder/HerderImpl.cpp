@@ -1531,7 +1531,8 @@ HerderImpl::checkAndMaybeReanalyzeQuorumMap()
                     "QuorumIntersectionChecker interrupted");
             }
         };
-        mApp.postOnBackgroundThread(worker, "QuorumIntersectionChecker");
+        mApp.postOnBackgroundThread(worker, "QuorumIntersectionChecker",
+                                    Application::TaskPriority::LOW);
     }
 }
 

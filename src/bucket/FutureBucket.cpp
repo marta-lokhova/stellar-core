@@ -399,7 +399,8 @@ FutureBucket::startMerge(Application& app, uint32_t maxProtocolVersion,
     mOutputBucketFuture = task->get_future().share();
     bm.putMergeFuture(mk, mOutputBucketFuture);
     app.postOnBackgroundThread(bind(&task_t::operator(), task),
-                               "FutureBucket: merge");
+                               "FutureBucket: merge",
+                               Application::TaskPriority::LOW);
     checkState();
 }
 

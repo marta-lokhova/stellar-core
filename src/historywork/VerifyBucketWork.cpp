@@ -144,7 +144,7 @@ VerifyBucketWork::spawnVerifier()
                 },
                 "VerifyBucket: finish");
         },
-        "VerifyBucket: start in background");
+        "VerifyBucket: start in background", Application::TaskPriority::LOW);
 }
 
 void

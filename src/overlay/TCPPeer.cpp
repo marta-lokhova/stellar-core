@@ -5,6 +5,7 @@
 #include "overlay/TCPPeer.h"
 #include "crypto/CryptoError.h"
 #include "crypto/Curve25519.h"
+#include "crypto/SHA.h"
 #include "database/Database.h"
 #include "main/Application.h"
 #include "main/Config.h"
@@ -140,7 +141,7 @@ TCPPeer::getIP() const
 }
 
 void
-TCPPeer::sendMessage(xdr::msg_ptr&& xdrBytes)
+TCPPeer::sendMessage(AuthenticatedMessage const& msg)
 {
     if (mState == CLOSING)
     {
@@ -152,10 +153,13 @@ TCPPeer::sendMessage(xdr::msg_ptr&& xdrBytes)
 
     assertThreadIsMain();
 
-    TimestampedMessage msg;
-    msg.mEnqueuedTime = mApp.getClock().now();
-    msg.mMessage = std::move(xdrBytes);
-    mWriteQueue.emplace_back(std::move(msg));
+    // Queue up messages before we finish producing HMAC sigs
+    TimestampedMessage tsMsg;
+    tsMsg.mMessage = msg;
+    tsMsg.mEnqueuedTime = mApp.getClock().now();
+
+    // emplace without the HMAC sig, not XDR serialized, resolve later
+    mWriteQueue.emplace_back(std::move(tsMsg));
 
     if (!mWriting)
     {
@@ -261,11 +265,40 @@ TCPPeer::messageSender()
     size_t maxQueueSize = mApp.getConfig().MAX_BATCH_WRITE_COUNT;
     assert(maxQueueSize > 0);
     size_t const maxTotalBytes = mApp.getConfig().MAX_BATCH_WRITE_BYTES;
+
+    // We are throttled here by how fast async_write writes
     for (auto& tsm : mWriteQueue)
     {
+        // If we had some work offloaded to the background threads,
+        // this is the latest we get get its results.
+        if (mApp.hasHighPriorityThreads())
+        {
+            if (tsm.mMessage.v0().message.type() != HELLO &&
+                tsm.mMessage.v0().message.type() != ERROR_MSG)
+            {
+                auto it = mDone.find(tsm.mMessage.v0().sequence);
+                if (it != mDone.end())
+                {
+                    tsm.mMessage.v0().mac = it->second;
+                }
+                else
+                {
+                    mDone = mTask.getResult();
+                    assert(mDone.find(tsm.mMessage.v0().sequence) !=
+                           mDone.end());
+                    tsm.mMessage.v0().mac = mDone[tsm.mMessage.v0().sequence];
+                }
+            }
+        }
+
+        {
+            ZoneNamedN(xdrZone, "XDR serialize", true);
+            tsm.mMessageXDR = xdr::xdr_to_msg(tsm.mMessage);
+        }
+
         tsm.mIssuedTime = now;
-        size_t sz = tsm.mMessage->raw_size();
-        mWriteBuffers.emplace_back(tsm.mMessage->raw_data(), sz);
+        size_t sz = tsm.mMessageXDR->raw_size();
+        mWriteBuffers.emplace_back(tsm.mMessageXDR->raw_data(), sz);
         expected_length += sz;
         mEnqueueTimeOfLastWrite = tsm.mEnqueuedTime;
         // check if we reached any limit

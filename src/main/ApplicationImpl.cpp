@@ -68,7 +68,7 @@ namespace stellar
 ApplicationImpl::ApplicationImpl(VirtualClock& clock, Config const& cfg)
     : mVirtualClock(clock)
     , mConfig(cfg)
-    , mWorkerIOContext(mConfig.WORKER_THREADS)
+    , mWorkerIOContext(mConfig.LOW_PRIORITY_WORKER_THREADS)
     , mWork(std::make_unique<asio::io_context::work>(mWorkerIOContext))
     , mWorkerThreads()
     , mStopSignals(clock.getIOContext(), SIGINT)
@@ -89,6 +89,14 @@ ApplicationImpl::ApplicationImpl(VirtualClock& clock, Config const& cfg)
 #ifdef SIGTERM
     mStopSignals.add(SIGTERM);
 #endif
+
+    if (mConfig.HIGH_PRIORITY_WORKER_THREADS > 0)
+    {
+        mHighPriorityWorkerIOContext = make_optional<asio::io_service>(
+            mConfig.HIGH_PRIORITY_WORKER_THREADS);
+        mHighPriorityWork = std::make_unique<asio::io_context::work>(
+            *mHighPriorityWorkerIOContext);
+    }
 
     std::srand(static_cast<uint32>(clock.now().time_since_epoch().count()));
 
@@ -119,16 +127,27 @@ ApplicationImpl::ApplicationImpl(VirtualClock& clock, Config const& cfg)
         }
     });
 
-    auto t = mConfig.WORKER_THREADS;
-    LOG(DEBUG) << "Application constructing "
-               << "(worker threads: " << t << ")";
-    while (t--)
+    auto l = mConfig.LOW_PRIORITY_WORKER_THREADS;
+    auto h = mConfig.HIGH_PRIORITY_WORKER_THREADS;
+    LOG(INFO) << "Application constructing "
+              << "(worker threads: " << (l + h) << ")";
+    while (l--)
     {
         auto thread = std::thread{[this]() {
             runCurrentThreadWithLowPriority();
             mWorkerIOContext.run();
         }};
         mWorkerThreads.emplace_back(std::move(thread));
+    }
+
+    if (h > 0)
+    {
+        while (h--)
+        {
+            auto thread =
+                std::thread{[this]() { mHighPriorityWorkerIOContext->run(); }};
+            mWorkerThreads.emplace_back(std::move(thread));
+        }
     }
 }
 
@@ -547,6 +566,12 @@ ApplicationImpl::joinAllThreads()
     {
         mWork.reset();
     }
+
+    if (mHighPriorityWork)
+    {
+        mHighPriorityWork.reset();
+    }
+
     LOG(DEBUG) << "Joining " << mWorkerThreads.size() << " worker threads";
     for (auto& w : mWorkerThreads)
     {
@@ -906,6 +931,12 @@ ApplicationImpl::clearMetrics(std::string const& domain)
     }
 }
 
+bool
+ApplicationImpl::hasHighPriorityThreads()
+{
+    return static_cast<bool>(mHighPriorityWorkerIOContext);
+}
+
 TmpDirManager&
 ApplicationImpl::getTmpDirManager()
 {
@@ -1035,14 +1066,34 @@ ApplicationImpl::postOnMainThread(std::function<void()>&& f, std::string&& name,
 
 void
 ApplicationImpl::postOnBackgroundThread(std::function<void()>&& f,
-                                        std::string jobName)
+                                        std::string jobName,
+                                        TaskPriority priority)
 {
     LogSlowExecution isSlow{std::move(jobName), LogSlowExecution::Mode::MANUAL,
                             "executed after"};
-    asio::post(getWorkerIOContext(), [ this, f = std::move(f), isSlow ]() {
-        mPostOnBackgroundThreadDelay.Update(isSlow.checkElapsedTime());
-        f();
-    });
+
+    switch (priority)
+    {
+    case Application::TaskPriority::LOW:
+        asio::post(getWorkerIOContext(), [ this, f = std::move(f), isSlow ]() {
+            mPostOnBackgroundThreadDelay.Update(isSlow.checkElapsedTime());
+            f();
+        });
+        break;
+    case Application::TaskPriority::HIGH:
+        if (mHighPriorityWorkerIOContext)
+        {
+            asio::post(*mHighPriorityWorkerIOContext,
+                       [ this, f = std::move(f), isSlow ]() {
+                           mPostOnBackgroundThreadDelay.Update(
+                               isSlow.checkElapsedTime());
+                           f();
+                       });
+        }
+        break;
+    default:
+        abort();
+    }
 }
 
 void

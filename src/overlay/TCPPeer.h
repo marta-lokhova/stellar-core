@@ -38,8 +38,9 @@ class TCPPeer : public Peer
     bool mShutdownScheduled{false};
 
     void recvMessage();
-    void sendMessage(xdr::msg_ptr&& xdrBytes) override;
+    void sendMessage(AuthenticatedMessage const& msg) override;
 
+    std::unordered_map<uint32_t, HmacSha256Mac> mDone;
     void messageSender();
 
     size_t getIncomingMsgLength();

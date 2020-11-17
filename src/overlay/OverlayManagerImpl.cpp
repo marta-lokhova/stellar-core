@@ -414,7 +414,8 @@ OverlayManagerImpl::triggerPeerResolution()
 
     mResolvedPeers = task->get_future();
     mApp.postOnBackgroundThread(bind(&task_t::operator(), task),
-                                "OverlayManager: resolve peer IPs");
+                                "OverlayManager: resolve peer IPs",
+                                Application::TaskPriority::LOW);
 }
 
 std::vector<PeerBareAddress>

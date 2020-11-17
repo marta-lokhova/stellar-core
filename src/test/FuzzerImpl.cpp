@@ -33,7 +33,7 @@ getFuzzConfig(int instanceNumber)
     cfg.ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING = false;
     cfg.ARTIFICIALLY_SET_CLOSE_TIME_FOR_TESTING = UINT32_MAX;
     cfg.PUBLIC_HTTP_PORT = false;
-    cfg.WORKER_THREADS = 1;
+    cfg.LOW_PRIORITY_WORKER_THREADS = 1;
     cfg.QUORUM_INTERSECTION_CHECKER = false;
     cfg.PREFERRED_PEERS_ONLY = false;
     cfg.RUN_STANDALONE = true;

@@ -160,6 +160,12 @@ class Application
         APP_NUM_STATE
     };
 
+    enum class TaskPriority
+    {
+        LOW,
+        HIGH
+    };
+
     virtual ~Application(){};
 
     virtual void initialize(bool createNewDB) = 0;
@@ -195,6 +201,9 @@ class Application
     // Clear all metrics
     virtual void clearMetrics(std::string const& domain) = 0;
 
+    // See if it's possible to offload some work in the background
+    virtual bool hasHighPriorityThreads() = 0;
+
     // Get references to each of the "subsystem" objects.
     virtual TmpDirManager& getTmpDirManager() = 0;
     virtual LedgerManager& getLedgerManager() = 0;
@@ -224,7 +233,8 @@ class Application
         std::function<void()>&& f, std::string&& name,
         Scheduler::ActionType type = Scheduler::ActionType::NORMAL_ACTION) = 0;
     virtual void postOnBackgroundThread(std::function<void()>&& f,
-                                        std::string jobName) = 0;
+                                        std::string jobName,
+                                        TaskPriority priority) = 0;
 
     // Perform actions necessary to transition from BOOTING_STATE to other
     // states. In particular: either reload or reinitialize the database, and

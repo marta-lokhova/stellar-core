@@ -50,7 +50,7 @@ class PeerStub : public Peer
     {
     }
     virtual void
-    sendMessage(xdr::msg_ptr&& xdrBytes) override
+    sendMessage(AuthenticatedMessage const& msg) override
     {
         sent++;
     }

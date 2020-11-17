@@ -80,7 +80,8 @@ VerifyTxResultsWork::onRun()
         }
     };
 
-    mApp.postOnBackgroundThread(verify, "VerifyTxResults: start in background");
+    mApp.postOnBackgroundThread(verify, "VerifyTxResults: start in background",
+                                Application::TaskPriority::LOW);
     return State::WORK_WAITING;
 }
 

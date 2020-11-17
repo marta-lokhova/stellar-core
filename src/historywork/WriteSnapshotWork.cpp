@@ -70,7 +70,8 @@ WriteSnapshotWork::onRun()
     // NB: we post in both cases as to share the logic
     if (mApp.getDatabase().canUsePool())
     {
-        mApp.postOnBackgroundThread(work, "WriteSnapshotWork: bgstart");
+        mApp.postOnBackgroundThread(work, "WriteSnapshotWork: bgstart",
+                                    Application::TaskPriority::LOW);
     }
     else
     {

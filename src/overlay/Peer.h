@@ -8,6 +8,7 @@
 #include "database/Database.h"
 #include "overlay/PeerBareAddress.h"
 #include "overlay/StellarXDR.h"
+#include "util/BackgroundTask.h"
 #include "util/NonCopyable.h"
 #include "util/Timer.h"
 #include "xdrpp/message.h"
@@ -54,6 +55,9 @@ class Peer : public std::enable_shared_from_this<Peer>,
 
   public:
     typedef std::shared_ptr<Peer> pointer;
+
+    // TODO: this shouldn't be public (used in tests)
+    void recvGetTxSet(StellarMessage const& msg);
 
     enum PeerState
     {
@@ -109,7 +113,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
         VirtualClock::time_point mIssuedTime;
         VirtualClock::time_point mCompletedTime;
         void recordWriteTiming(OverlayMetrics& metrics);
-        xdr::msg_ptr mMessage;
+        xdr::msg_ptr mMessageXDR;
+        AuthenticatedMessage mMessage;
     };
 
   protected:
@@ -146,6 +151,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
 
     PeerMetrics mPeerMetrics;
 
+    BackgroundTask<uint32_t, HmacSha256Mac> mTask;
+
     OverlayMetrics& getOverlayMetrics();
 
     bool shouldAbort() const;
@@ -165,7 +172,6 @@ class Peer : public std::enable_shared_from_this<Peer>,
     void recvSurveyRequestMessage(StellarMessage const& msg);
     void recvSurveyResponseMessage(StellarMessage const& msg);
 
-    void recvGetTxSet(StellarMessage const& msg);
     void recvTxSet(StellarMessage const& msg);
     void recvTransaction(StellarMessage const& msg);
     void recvGetSCPQuorumSet(StellarMessage const& msg);
@@ -187,7 +193,7 @@ class Peer : public std::enable_shared_from_this<Peer>,
     // put in a reused/non-owned buffer without having to buffer/queue
     // messages somewhere else. The async write request will point _into_
     // this owned buffer. This is really the best we can do.
-    virtual void sendMessage(xdr::msg_ptr&& xdrBytes) = 0;
+    virtual void sendMessage(AuthenticatedMessage const& msg) = 0;
     virtual void
     connected()
     {

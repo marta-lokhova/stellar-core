@@ -4,6 +4,7 @@
 
 #include "overlay/test/LoopbackPeer.h"
 #include "crypto/Random.h"
+#include "crypto/SHA.h"
 #include "main/Application.h"
 #include "medida/meter.h"
 #include "medida/timer.h"
@@ -45,7 +46,7 @@ LoopbackPeer::getAuthCert()
 }
 
 void
-LoopbackPeer::sendMessage(xdr::msg_ptr&& msg)
+LoopbackPeer::sendMessage(AuthenticatedMessage const& msg)
 {
     if (mRemote.expired())
     {
@@ -62,10 +63,16 @@ LoopbackPeer::sendMessage(xdr::msg_ptr&& msg)
     }
 
     // CLOG(TRACE, "Overlay") << "LoopbackPeer queueing message";
-    TimestampedMessage tsm;
-    tsm.mMessage = std::move(msg);
-    tsm.mEnqueuedTime = mApp.getClock().now();
-    mOutQueue.emplace_back(std::move(tsm));
+    TimestampedMessage tsMsg;
+
+    auto msgCopy = msg;
+    msgCopy.v0().mac = hmacSha256(
+        mSendMacKey, xdr::xdr_to_opaque(msg.v0().sequence, msg.v0().message));
+    tsMsg.mMessageXDR = xdr::xdr_to_msg(msgCopy);
+    tsMsg.mMessage = msgCopy;
+    tsMsg.mEnqueuedTime = mApp.getClock().now();
+    mOutQueue.emplace_back(std::move(tsMsg));
+
     // Possibly flush some queued messages if queue's full.
     while (mOutQueue.size() > mMaxQueueDepth && !mCorked)
     {
@@ -152,11 +159,12 @@ damageMessage(default_random_engine& gen, xdr::msg_ptr& msg)
 static Peer::TimestampedMessage
 duplicateMessage(Peer::TimestampedMessage const& msg)
 {
-    xdr::msg_ptr m2 = xdr::message_t::alloc(msg.mMessage->size());
-    memcpy(m2->raw_data(), msg.mMessage->raw_data(), msg.mMessage->raw_size());
+    xdr::msg_ptr m2 = xdr::message_t::alloc(msg.mMessageXDR->size());
+    memcpy(m2->raw_data(), msg.mMessageXDR->raw_data(),
+           msg.mMessageXDR->raw_size());
     Peer::TimestampedMessage msg2;
     msg2.mEnqueuedTime = msg.mEnqueuedTime;
-    msg2.mMessage = std::move(m2);
+    msg2.mMessageXDR = std::move(m2);
     return msg2;
 }
 
@@ -216,7 +224,7 @@ LoopbackPeer::deliverOne()
         if (mDamageProb(gRandomEngine))
         {
             CLOG(INFO, "Overlay") << "LoopbackPeer damaged message";
-            if (damageMessage(gRandomEngine, msg.mMessage))
+            if (damageMessage(gRandomEngine, msg.mMessageXDR))
                 mStats.messagesDamaged++;
         }
 
@@ -228,7 +236,7 @@ LoopbackPeer::deliverOne()
             return;
         }
 
-        size_t nBytes = msg.mMessage->raw_size();
+        size_t nBytes = msg.mMessageXDR->raw_size();
         mStats.bytesDelivered += nBytes;
 
         mEnqueueTimeOfLastWrite = msg.mEnqueuedTime;
@@ -240,7 +248,7 @@ LoopbackPeer::deliverOne()
         if (remote)
         {
             // move msg to remote's in queue
-            remote->mInQueue.emplace(std::move(msg.mMessage));
+            remote->mInQueue.emplace(std::move(msg.mMessageXDR));
             remote->getApp().postOnMainThread(
                 [remW = mRemote]() {
                     auto remS = remW.lock();
@@ -282,7 +290,7 @@ LoopbackPeer::getBytesQueued() const
     size_t t = 0;
     for (auto const& m : mOutQueue)
     {
-        t += m.mMessage->raw_size();
+        t += m.mMessageXDR->raw_size();
     }
     return t;
 }
