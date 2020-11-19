@@ -3,6 +3,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "fmt/format.h"
+#include "herder/HerderImpl.h"
 #include "ledger/LedgerManager.h"
 #include "lib/catch.hpp"
 #include "main/Application.h"
@@ -60,7 +61,7 @@ TEST_CASE("TCPPeer can communicate", "[overlay][acceptance]")
 
 TEST_CASE("write queue benchmark", "[overlay][!hide]")
 {
-    auto test = [&](bool background, int batch) {
+    auto test = [&](bool background) {
         Hash networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
         Simulation::pointer s =
             std::make_shared<Simulation>(Simulation::OVER_TCP, networkID);
@@ -129,22 +130,44 @@ TEST_CASE("write queue benchmark", "[overlay][!hide]")
             return result;
         };
 
-        auto transactions = makeTransactions(lcl.hash, 999);
-        n1->getHerder().recvTxSet(transactions->getContentsHash(),
-                                  *transactions);
+        auto transactions = makeTransactions(lcl.hash, 100);
 
-        int numMesssages = 100000;
+        auto herder1 = static_cast<HerderImpl*>(&n0->getHerder());
+        herder1->getPendingEnvelopes().addTxSet(transactions->getContentsHash(),
+                                                lcl.header.ledgerSeq,
+                                                transactions);
+
+        auto herder2 = static_cast<HerderImpl*>(&n1->getHerder());
+        herder2->getPendingEnvelopes().addTxSet(transactions->getContentsHash(),
+                                                lcl.header.ledgerSeq,
+                                                transactions);
+
+        int numMesssages = 10000;
         StellarMessage newMsg;
         newMsg.type(GET_TX_SET);
         newMsg.txSetHash() = transactions->getContentsHash();
 
         while (numMesssages > 0)
         {
-            n1->postOnMainThread(
+            n0->postOnMainThread(
                 [&]() {
-                    for (int i = 0; i < batch; i++)
+                    for (int i = 0; i < 100; i++)
                     {
                         p1->recvGetTxSet(newMsg);
+                        if (--numMesssages <= 0)
+                        {
+                            break;
+                        }
+                    }
+                },
+                "message batch");
+            // symmetrically post write tasks so that we
+            // have a lot of inbound traffic
+            n1->postOnMainThread(
+                [&]() {
+                    for (int i = 0; i < 100; i++)
+                    {
+                        p0->recvGetTxSet(newMsg);
                         if (--numMesssages <= 0)
                         {
                             break;
@@ -155,50 +178,35 @@ TEST_CASE("write queue benchmark", "[overlay][!hide]")
             s->crankForAtLeast(std::chrono::milliseconds(10), false);
         }
 
+        s->crankForAtLeast(std::chrono::seconds(5), false);
+
+        // Outbound metrics
         auto& m1 =
             n0->getMetrics().NewMeter({"overlay", "async", "write"}, "call");
         auto& m2 = n0->getMetrics().NewMeter({"overlay", "message", "write"},
                                              "message");
 
+        // Inbound metrics
+        auto& m3 = n0->getMetrics().NewTimer({"overlay", "recv", "txset"});
+
         std::string type = background ? "BACKGROUND" : "MAIN";
 
+        LOG(ERROR) << fmt::format("{}: total calls {}, rate (calls) {}", type,
+                                  m1.count(), m1.one_minute_rate());
+        LOG(ERROR) << fmt::format("{}: total messages {}, rate (messages) {}",
+                                  type, m2.count(), m2.one_minute_rate());
         LOG(ERROR) << fmt::format(
-            "{}: batch {}, total calls {}, rate (calls) {}", type, batch,
-            m1.count(), m1.one_minute_rate());
-        LOG(ERROR) << fmt::format(
-            "{}: batch {}, total messages {}, rate (messages) {}", type, batch,
-            m2.count(), m2.one_minute_rate());
+            "{}: total tx sets recv {}, rate (tx sets) {}", type, m3.count(),
+            m3.one_minute_rate());
     };
 
     SECTION("background")
     {
-        SECTION("batch is 100")
-        {
-            test(true, 100);
-        }
-        SECTION("batch is 500")
-        {
-            test(true, 500);
-        }
-        SECTION("batch is 1000")
-        {
-            test(true, 1000);
-        }
+        test(true);
     }
-    SECTION("main thread")
+    SECTION("main")
     {
-        SECTION("batch is 100")
-        {
-            test(false, 100);
-        }
-        SECTION("batch is 500")
-        {
-            test(false, 500);
-        }
-        SECTION("batch is 1000")
-        {
-            test(false, 1000);
-        }
+        test(false);
     }
 }
 }
