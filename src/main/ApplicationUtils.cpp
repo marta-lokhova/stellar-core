@@ -7,6 +7,7 @@
 #include "bucket/BucketManager.h"
 #include "catchup/ApplyBucketsWork.h"
 #include "catchup/CatchupConfiguration.h"
+#include "catchup/VerifyHASRange.h"
 #include "database/Database.h"
 #include "herder/Herder.h"
 #include "history/HistoryArchive.h"

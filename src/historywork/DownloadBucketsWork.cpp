@@ -3,7 +3,10 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "historywork/DownloadBucketsWork.h"
+#include "bucket/BucketManager.h"
 #include "catchup/CatchupManager.h"
+#include "crypto/Hex.h"
+#include "crypto/Random.h"
 #include "history/FileTransferInfo.h"
 #include "history/HistoryArchive.h"
 #include "historywork/GetAndUnzipRemoteFileWork.h"
@@ -68,6 +71,18 @@ DownloadBucketsWork::yieldMoreWork()
     }
 
     auto hash = *mNextBucketIter;
+    auto b = mApp.getBucketManager().getBucketByHash(hexToBin256(hash));
+    if (b && !isZero(b->getHash()))
+    {
+        // Bucket already exists;
+        std::string hex = binToHex(randomBytes(8));
+        ++mNextBucketIter;
+        mBuckets[hash] = b;
+        return std::make_shared<WorkSequence>(
+            mApp, "skip-bucket-" + hex,
+            std::vector<std::shared_ptr<BasicWork>>());
+    }
+
     FileTransferInfo ft(mDownloadDir, HISTORY_FILE_TYPE_BUCKET, hash);
     auto w1 = std::make_shared<GetAndUnzipRemoteFileWork>(mApp, ft, mArchive);
 

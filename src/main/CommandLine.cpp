@@ -21,6 +21,7 @@
 #include "util/optional.h"
 #include "util/types.h"
 
+#include "catchup/VerifyHASRange.h"
 #include "historywork/BatchDownloadWork.h"
 #include "historywork/WriteVerifiedCheckpointHashesWork.h"
 #include "src/catchup/simulation/TxSimApplyTransactionsWork.h"
@@ -583,6 +584,52 @@ CommandLine::writeToStream(std::string const& exeName, std::ostream& os) const
         os << row << std::endl;
     }
 }
+}
+
+int
+runVerifyHas(CommandLineArgs const& args)
+{
+    uint32_t start;
+    uint32_t end;
+    CommandLine::ConfigOption configOption;
+
+    auto endAtLedgerParser = [](uint32_t& endLedger) {
+        return clara::Opt{endLedger, "LEDGER"}["--end-at-ledger"]("end");
+    };
+
+    return runWithHelp(
+        args,
+        {configurationParser(configOption), startAtLedgerParser(start),
+         endAtLedgerParser(end)},
+        [&] {
+            auto config = configOption.getConfig();
+            config.RUN_STANDALONE = true;
+            config.MANUAL_CLOSE = true;
+            VirtualClock clock(VirtualClock::REAL_TIME);
+
+            auto app = Application::create(clock, config);
+            app->start();
+
+            auto checkpointStart =
+                app->getHistoryManager().checkpointContainingLedger(start);
+            auto checkpointEnd =
+                app->getHistoryManager().checkpointContainingLedger(end);
+
+            auto range =
+                CheckpointRange::inclusive(checkpointStart, checkpointEnd, 64);
+            auto w =
+                app->getWorkScheduler().scheduleWork<VerifyHASRange>(range);
+
+            while (clock.crank(true))
+            {
+                if (w->isDone())
+                {
+                    break;
+                }
+            }
+
+            return 0;
+        });
 }
 
 int
@@ -1456,6 +1503,7 @@ handleCommandLine(int argc, char* const* argv)
           "execute catchup from history archives without connecting to "
           "network",
           runCatchup},
+         {"verify-has", "has", runVerifyHas},
          {"check-quorum", "check quorum intersection of last network activity",
           runCheckQuorum},
          {"verify-checkpoints", "write verified checkpoint ledger hashes",
