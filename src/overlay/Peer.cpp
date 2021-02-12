@@ -1160,38 +1160,6 @@ Peer::recvHello(Hello const& elo)
 
     updatePeerRecordAfterEcho();
 
-    auto const& authenticated =
-        mApp.getOverlayManager().getAuthenticatedPeers();
-    auto authenticatedIt = authenticated.find(mPeerID);
-    // no need to self-check here as this one cannot be in authenticated yet
-    if (authenticatedIt != std::end(authenticated))
-    {
-        if (&(authenticatedIt->second->mPeerID) != &mPeerID)
-        {
-            sendErrorAndDrop(ERR_CONF,
-                             "already-connected peer: " +
-                                 mApp.getConfig().toShortString(mPeerID),
-                             dropMode);
-            return;
-        }
-    }
-
-    for (auto const& p : mApp.getOverlayManager().getPendingPeers())
-    {
-        if (&(p->mPeerID) == &mPeerID)
-        {
-            continue;
-        }
-        if (p->getPeerID() == mPeerID)
-        {
-            sendErrorAndDrop(ERR_CONF,
-                             "already-connected peer: " +
-                                 mApp.getConfig().toShortString(mPeerID),
-                             dropMode);
-            return;
-        }
-    }
-
     if (mRole == WE_CALLED_REMOTE)
     {
         sendAuth();
@@ -1226,6 +1194,45 @@ Peer::recvAuth(StellarMessage const& msg)
 
     updatePeerRecordAfterAuthentication();
 
+    // Let the connection fully authenticate before possibly rejecting it.
+    // First, check if this peer is already connected
+    auto const& authenticated =
+        mApp.getOverlayManager().getAuthenticatedPeers();
+    auto authenticatedIt = authenticated.find(mPeerID);
+    auto dropMode = mRole == REMOTE_CALLED_US
+                        ? Peer::DropMode::FLUSH_WRITE_QUEUE
+                        : Peer::DropMode::IGNORE_WRITE_QUEUE;
+
+    // no need to self-check here as this one cannot be in authenticated yet
+    if (authenticatedIt != std::end(authenticated))
+    {
+        if (&(authenticatedIt->second->mPeerID) != &mPeerID)
+        {
+            sendErrorAndDrop(ERR_CONF,
+                             "already-connected peer: " +
+                                 mApp.getConfig().toShortString(mPeerID),
+                             dropMode);
+            return;
+        }
+    }
+
+    for (auto const& p : mApp.getOverlayManager().getPendingPeers())
+    {
+        if (&(p->mPeerID) == &mPeerID)
+        {
+            continue;
+        }
+        if (p->getPeerID() == mPeerID)
+        {
+            sendErrorAndDrop(ERR_CONF,
+                             "already-connected peer: " +
+                                 mApp.getConfig().toShortString(mPeerID),
+                             dropMode);
+            return;
+        }
+    }
+
+    // Second, try promoting peer to "authenticated"
     auto self = shared_from_this();
     if (!mApp.getOverlayManager().acceptAuthenticatedPeer(self))
     {
