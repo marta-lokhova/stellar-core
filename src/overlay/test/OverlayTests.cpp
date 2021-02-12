@@ -905,28 +905,40 @@ TEST_CASE("drop peers who straggle", "[overlay][connections][straggler]")
 TEST_CASE("reject peers with the same nodeid", "[overlay][connections]")
 {
     VirtualClock clock;
-    Config const& cfg1 = getTestConfig(1);
-    Config cfg2 = getTestConfig(2);
+    Config const& cfg1 = getTestConfig(0);
+    Config const& cfg2 = getTestConfig(1);
+    Config cfg3 = getTestConfig(2);
 
-    cfg2.NODE_SEED = cfg1.NODE_SEED;
+    cfg3.NODE_SEED = cfg1.NODE_SEED;
 
     auto app1 = createTestApplication(clock, cfg1);
     auto app2 = createTestApplication(clock, cfg2);
+    auto app3 = createTestApplication(clock, cfg3);
 
-    SECTION("inbound")
+    SECTION("connecting to self")
     {
-        LoopbackPeerConnection conn(*app1, *app2);
+        LoopbackPeerConnection conn(*app1, *app3);
         testutil::crankSome(clock);
 
         REQUIRE(conn.getInitiator()->getDropReason() == "connecting to self");
     }
-
-    SECTION("outbound")
+    SECTION("already connected peer")
     {
-        LoopbackPeerConnection conn(*app2, *app1);
+        LoopbackPeerConnection conn(*app1, *app2);
         testutil::crankSome(clock);
 
-        REQUIRE(conn.getInitiator()->getDropReason() == "connecting to self");
+        REQUIRE(conn.getInitiator()->isAuthenticated());
+        REQUIRE(conn.getAcceptor()->isAuthenticated());
+
+        LoopbackPeerConnection conn2(*app2, *app1);
+        testutil::crankSome(clock);
+        REQUIRE(!conn2.getInitiator()->isConnected());
+        REQUIRE(!conn2.getAcceptor()->isConnected());
+
+        std::string dropReason =
+            "already-connected peer: " +
+            app2->getConfig().toShortString(conn2.getAcceptor()->getPeerID());
+        REQUIRE(conn2.getInitiator()->getDropReason() == dropReason);
     }
 
     testutil::shutdownWorkScheduler(*app2);
@@ -1247,5 +1259,63 @@ TEST_CASE("peer is purged from database after few failures",
     simulation->crankForAtLeast(std::chrono::seconds{5}, true);
 
     REQUIRE(!peerManager.load(localhost(cfg2.PEER_PORT)).second);
+}
+
+TEST_CASE("peer numfailures is incremented correctly", "[overlay][acceptance]")
+{
+    // the purpose of this test is to ensure that we only increase
+    // numFailures for non-responsive or invalid nodes. In some cases (such as
+    // peer promotion), nodes make valid outbound connections that are rejected
+    // right away, ensure that we don't mark those connections as failed.
+    auto networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
+    auto simulation =
+        std::make_shared<Simulation>(Simulation::OVER_TCP, networkID);
+    auto record = [](int numFailures) {
+        return PeerRecord{{}, numFailures, static_cast<int>(PeerType::INBOUND)};
+    };
+
+    SIMULATION_CREATE_NODE(Node1);
+    SIMULATION_CREATE_NODE(Node2);
+
+    SCPQuorumSet qSet;
+    qSet.threshold = 1;
+    qSet.validators.push_back(vNode1NodeID);
+
+    Config const& cfg1 = getTestConfig(1);
+    Config const& cfg2 = getTestConfig(2);
+
+    auto app1 = simulation->addNode(vNode1SecretKey, qSet, &cfg1);
+    auto app2 = simulation->addNode(vNode2SecretKey, qSet, &cfg2);
+
+    simulation->startAllNodes();
+
+    auto& pm1 = app1->getOverlayManager().getPeerManager();
+    auto& pm2 = app2->getOverlayManager().getPeerManager();
+
+    pm1.store(localhost(cfg2.PEER_PORT), record(0), false);
+    REQUIRE(pm1.load(localhost(cfg2.PEER_PORT)).second);
+
+    pm2.store(localhost(cfg1.PEER_PORT), record(0), false);
+    REQUIRE(pm2.load(localhost(cfg1.PEER_PORT)).second);
+
+    // Node2 has an inbound connection from Node1
+    simulation->addConnection(vNode1NodeID, vNode2NodeID);
+    simulation->crankForAtLeast(std::chrono::seconds{4}, false);
+    REQUIRE(app1->getOverlayManager().getAuthenticatedPeersCount() == 1);
+    REQUIRE(app2->getOverlayManager().getAuthenticatedPeersCount() == 1);
+
+    auto r = pm1.load(localhost(cfg2.PEER_PORT));
+    REQUIRE(r.second);
+    REQUIRE(r.first.mNumFailures == 0);
+
+    // Node2 attempts to connect outbound to Node1
+    simulation->addConnection(vNode2NodeID, vNode1NodeID);
+    simulation->crankForAtLeast(std::chrono::seconds{4}, false);
+
+    // Connection authenticated, but got dropped because
+    // the peer is already connected
+    r = pm2.load(localhost(cfg1.PEER_PORT));
+    REQUIRE(r.second);
+    REQUIRE(r.first.mNumFailures == 0);
 }
 }
