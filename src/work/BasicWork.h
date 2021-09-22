@@ -102,6 +102,9 @@ class BasicWork : public std::enable_shared_from_this<BasicWork>,
     static size_t const RETRY_A_FEW;
     static size_t const RETRY_A_LOT;
 
+    // TODO: this shouldn't be public
+    virtual void wakeUp(std::function<void()> innerCallback = nullptr);
+
     // Publicly exposed state of work
     enum class State
     {
@@ -190,7 +193,6 @@ class BasicWork : public std::enable_shared_from_this<BasicWork>,
     // propagate the notification up to the scheduler. An example use of
     // this would be RunCommandWork: a timer is used to async_wait for a
     // process to exit, with a call to `wakeUp` upon completion.
-    virtual void wakeUp(std::function<void()> innerCallback = nullptr);
 
     // Default wakeUp callback that implementers can use
     std::function<void()>

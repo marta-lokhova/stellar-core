@@ -141,6 +141,8 @@ TEST_CASE("PendingEnvelopes recvSCPEnvelope", "[herder]")
                                                p.second));
             REQUIRE(!pendingEnvelopes.recvTxSet(p.second->getContentsHash(),
                                                 p.second));
+            REQUIRE(herder.recvSCPEnvelope(saneEnvelope) ==
+                    Herder::ENVELOPE_STATUS_READY);
 
             auto m = herder.getSCP().getLatestMessage(pk);
             REQUIRE(m);
@@ -172,6 +174,9 @@ TEST_CASE("PendingEnvelopes recvSCPEnvelope", "[herder]")
 
             // this triggers process
             REQUIRE(pendingEnvelopes.recvSCPQuorumSet(saneQSetHash, saneQSet));
+            REQUIRE(herder.recvSCPEnvelope(saneEnvelope) ==
+                    Herder::ENVELOPE_STATUS_READY);
+
             auto m = herder.getSCP().getLatestMessage(pk);
             REQUIRE(m);
             REQUIRE(*m == saneEnvelope);
@@ -254,9 +259,14 @@ TEST_CASE("PendingEnvelopes recvSCPEnvelope", "[herder]")
         // saneEnvelope gets processed
         REQUIRE(
             pendingEnvelopes.recvTxSet(p.second->getContentsHash(), p.second));
+        REQUIRE(herder.recvSCPEnvelope(saneEnvelope) ==
+                Herder::ENVELOPE_STATUS_READY);
+
         auto m = herder.getSCP().getLatestMessage(pk);
         REQUIRE(m);
         REQUIRE(*m == saneEnvelope);
+
+        // TODO: is this still needeD?
         REQUIRE(pendingEnvelopes.recvSCPEnvelope(saneEnvelope) ==
                 Herder::ENVELOPE_STATUS_PROCESSED);
 

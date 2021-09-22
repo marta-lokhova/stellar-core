@@ -83,13 +83,18 @@ Floodgate::addRecord(StellarMessage const& msg, Peer::pointer peer, Hash& index)
 }
 
 // send message to anyone you haven't gotten it from
-bool
-Floodgate::broadcast(StellarMessage const& msg, bool force)
+// Pas object reference, call function on that object
+// Notify when ready
+// synchronous call retirns
+Peer::BroadcastToPeers
+Floodgate::broadcast(StellarMessage const& msg, bool force,
+                     Peer::DoneCallback cb)
 {
     ZoneScoped;
+    Peer::BroadcastToPeers broadcastingPeers;
     if (mShuttingDown)
     {
-        return false;
+        return broadcastingPeers;
     }
     Hash index = xdrBlake2(msg);
 
@@ -116,6 +121,12 @@ Floodgate::broadcast(StellarMessage const& msg, bool force)
     bool broadcasted = false;
     std::shared_ptr<StellarMessage> smsg =
         std::make_shared<StellarMessage>(msg);
+    // TODO: peers to broadcast to are populated here and forwarded back to the
+    // original work that caused broadcasting in the first place The work can
+    // then decide to wait until those peers invoke a callback upon thr write
+    // completion Work tracks the peers in case any connections get dropped
+    // while the work is executing asynchronously (if so, the work doesn't need
+    // to wait for the callback)
     for (auto peer : peers)
     {
         releaseAssert(peer.second->isAuthenticated());
@@ -124,12 +135,13 @@ Floodgate::broadcast(StellarMessage const& msg, bool force)
             mSendFromBroadcast.Mark();
             std::weak_ptr<Peer> weak(
                 std::static_pointer_cast<Peer>(peer.second));
+            broadcastingPeers.emplace_back(weak);
             mApp.postOnMainThread(
-                [smsg, weak, log = !broadcasted]() {
+                [smsg, weak, log = !broadcasted, cb]() {
                     auto strong = weak.lock();
                     if (strong)
                     {
-                        strong->sendMessage(*smsg, log);
+                        strong->sendMessage(*smsg, cb, log);
                     }
                 },
                 fmt::format("broadcast to {}", peer.second->toString()));
@@ -138,7 +150,8 @@ Floodgate::broadcast(StellarMessage const& msg, bool force)
     }
     CLOG_TRACE(Overlay, "broadcast {} told {}", hexAbbrev(index),
                peersTold.size());
-    return broadcasted;
+
+    return broadcastingPeers;
 }
 
 std::set<Peer::pointer>

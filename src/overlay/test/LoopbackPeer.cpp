@@ -45,7 +45,7 @@ LoopbackPeer::getAuthCert()
 }
 
 void
-LoopbackPeer::sendMessage(xdr::msg_ptr&& msg)
+LoopbackPeer::sendMessage(xdr::msg_ptr&& msg, DoneCallback cb)
 {
     if (mRemote.expired())
     {
@@ -91,6 +91,10 @@ LoopbackPeer::sendMessage(xdr::msg_ptr&& msg)
             }
         }
         deliverOne();
+        if (cb)
+        {
+            cb();
+        }
     }
 }
 
@@ -428,6 +432,9 @@ LoopbackPeerConnection::LoopbackPeerConnection(Application& initiator,
     : mInitiator(make_shared<LoopbackPeer>(initiator, Peer::WE_CALLED_REMOTE))
     , mAcceptor(make_shared<LoopbackPeer>(acceptor, Peer::REMOTE_CALLED_US))
 {
+    mInitiator->startProcessing();
+    mAcceptor->startProcessing();
+
     mInitiator->mRemote = mAcceptor;
     mInitiator->mState = Peer::CONNECTED;
 

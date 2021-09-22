@@ -100,6 +100,8 @@ class Herder
     // the current reality as best as possible.
     virtual void syncMetrics() = 0;
 
+    virtual bool isFullyFetched(SCPEnvelope const& envelope) = 0;
+
     virtual void bootstrap() = 0;
     virtual void shutdown() = 0;
 
@@ -141,7 +143,9 @@ class Herder
     virtual VirtualTimer const& getTriggerTimer() const = 0;
 #endif
     // a peer needs our SCP state
-    virtual void sendSCPStateToPeer(uint32 ledgerSeq, Peer::pointer peer) = 0;
+    virtual Peer::BroadcastToPeers sendSCPStateToPeer(uint32 ledgerSeq,
+                                                      Peer::pointer peer,
+                                                      Peer::DoneCallback) = 0;
 
     virtual uint32_t trackingConsensusLedgerIndex() const = 0;
 

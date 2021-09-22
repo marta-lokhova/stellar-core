@@ -31,7 +31,7 @@ TEST_CASE("Multi-op pretend transactions are valid", "[loadgen]")
     simulation->startAllNodes();
     simulation->crankUntil(
         [&]() { return simulation->haveAllExternalized(3, 1); },
-        2 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
+        10 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
 
     auto nodes = simulation->getNodes();
     auto& app = *nodes[0]; // pick a node to generate load
@@ -47,7 +47,7 @@ TEST_CASE("Multi-op pretend transactions are valid", "[loadgen]")
                            .NewMeter({"loadgen", "run", "complete"}, "run")
                            .count() == 1;
             },
-            3 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
+            10 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
 
         loadGen.generateLoad(LoadGenMode::PRETEND, 3, 0, 5, 10, 100,
                              std::chrono::seconds(0), 0);
@@ -58,7 +58,7 @@ TEST_CASE("Multi-op pretend transactions are valid", "[loadgen]")
                            .NewMeter({"loadgen", "run", "complete"}, "run")
                            .count() == 2;
             },
-            2 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
+            10 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
     }
     catch (...)
     {

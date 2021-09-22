@@ -345,6 +345,7 @@ PendingEnvelopes::recvSCPEnvelope(SCPEnvelope const& envelope)
 
             envelopeReady(envelope);
             updateMetrics();
+            // This is the only place where we return envelope ready
             return Herder::ENVELOPE_STATUS_READY;
         }
         else
@@ -529,7 +530,6 @@ PendingEnvelopes::envelopeReady(SCPEnvelope const& envelope)
     StellarMessage msg;
     msg.type(SCP_MESSAGE);
     msg.envelope() = envelope;
-    mApp.getOverlayManager().broadcastMessage(msg);
 
     auto envW = mHerder.getHerderSCPDriver().wrapEnvelope(envelope);
     mEnvelopes[slot].mReadyEnvelopes.push_back(envW);

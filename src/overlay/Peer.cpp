@@ -3,6 +3,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "overlay/Peer.h"
+#include "crypto/BLAKE2.h"
 
 #include "BanManager.h"
 #include "crypto/CryptoError.h"
@@ -32,6 +33,8 @@
 #include "xdrpp/marshal.h"
 #include <fmt/format.h>
 
+#include "overlay/OverlayProcessingWork.h"
+#include "work/WorkScheduler.h"
 #include <Tracy.hpp>
 #include <soci.h>
 #include <time.h>
@@ -65,6 +68,15 @@ Peer::Peer(Application& app, PeerRole role)
     mLastPing = std::chrono::hours(24); // some default very high value
     auto bytes = randomBytes(mSendNonce.size());
     std::copy(bytes.begin(), bytes.end(), mSendNonce.begin());
+}
+
+void
+Peer::startProcessing()
+{
+    // TODO: outline the scheduling mechanism in a comment
+    std::weak_ptr<Peer> weak(static_pointer_cast<Peer>(shared_from_this()));
+    mProcessingWork =
+        mApp.getWorkScheduler().scheduleWork<OverlayProcessingWork>(weak);
 }
 
 void
@@ -211,14 +223,14 @@ Peer::connectHandler(asio::error_code const& error)
     else
     {
         CLOG_DEBUG(Overlay, "Connected to {}", toString());
-        connected();
+        startRead();
         mState = CONNECTED;
         sendHello();
     }
 }
 
 void
-Peer::sendDontHave(MessageType type, uint256 const& itemID)
+Peer::sendDontHave(MessageType type, uint256 const& itemID, DoneCallback cb)
 {
     ZoneScoped;
     StellarMessage msg;
@@ -226,18 +238,18 @@ Peer::sendDontHave(MessageType type, uint256 const& itemID)
     msg.dontHave().reqHash = itemID;
     msg.dontHave().type = type;
 
-    sendMessage(msg);
+    sendMessage(msg, cb);
 }
 
 void
-Peer::sendSCPQuorumSet(SCPQuorumSetPtr qSet)
+Peer::sendSCPQuorumSet(SCPQuorumSetPtr qSet, DoneCallback cb)
 {
     ZoneScoped;
     StellarMessage msg;
     msg.type(SCP_QUORUMSET);
     msg.qSet() = *qSet;
 
-    sendMessage(msg);
+    sendMessage(msg, cb);
 }
 
 void
@@ -393,7 +405,7 @@ Peer::msgSummary(StellarMessage const& msg)
 }
 
 void
-Peer::sendMessage(StellarMessage const& msg, bool log)
+Peer::sendMessage(StellarMessage const& msg, DoneCallback cb, bool log)
 {
     ZoneScoped;
     CLOG_TRACE(Overlay, "send: {} to : {}", msgSummary(msg),
@@ -414,6 +426,7 @@ Peer::sendMessage(StellarMessage const& msg, bool log)
         return;
     }
 
+    // OutboundType type = OutboundType::OTHER;
     switch (msg.type())
     {
     case ERROR_MSG:
@@ -450,8 +463,10 @@ Peer::sendMessage(StellarMessage const& msg, bool log)
         getOverlayMetrics().mSendSCPQuorumSetMeter.Mark();
         break;
     case SCP_MESSAGE:
+    {
         getOverlayMetrics().mSendSCPMessageSetMeter.Mark();
         break;
+    }
     case GET_SCP_STATE:
         getOverlayMetrics().mSendGetSCPStateMeter.Mark();
         break;
@@ -463,6 +478,14 @@ Peer::sendMessage(StellarMessage const& msg, bool log)
         break;
     };
 
+    sendAuthenticatedMessage(msg, cb);
+}
+
+void
+Peer::sendAuthenticatedMessage(StellarMessage const& msg, DoneCallback cb)
+{
+    // This needs to be done later, _after_ thr writing component decided that
+    // we should actually send the thing
     AuthenticatedMessage amsg;
     amsg.v0().message = msg;
     if (msg.type() != HELLO && msg.type() != ERROR_MSG)
@@ -478,7 +501,7 @@ Peer::sendMessage(StellarMessage const& msg, bool log)
         ZoneNamedN(xdrZone, "XDR serialize", true);
         xdrBytes = xdr::xdr_to_msg(amsg);
     }
-    this->sendMessage(std::move(xdrBytes));
+    this->sendMessage(std::move(xdrBytes), cb);
 }
 
 void
@@ -620,36 +643,27 @@ Peer::recvMessage(StellarMessage const& stellarMsg)
         cat = "MISC";
     }
 
-    std::weak_ptr<Peer> weak(static_pointer_cast<Peer>(shared_from_this()));
-    mApp.postOnMainThread(
-        [weak, sm = StellarMessage(stellarMsg), mtype = stellarMsg.type(), cat,
-         port = mApp.getConfig().PEER_PORT]() {
-            auto self = weak.lock();
-            if (self)
-            {
-                try
-                {
-                    self->recvRawMessage(sm);
-                }
-                catch (CryptoError const& e)
-                {
-                    std::string err =
-                        fmt::format("Error RecvMessage T:{} cat:{} {} @{}",
-                                    mtype, cat, self->toString(), port);
-                    CLOG_ERROR(Overlay, "Dropping connection with {}: {}", err,
-                               e.what());
-                    self->drop("Bad crypto request",
-                               Peer::DropDirection::WE_DROPPED_REMOTE,
-                               Peer::DropMode::IGNORE_WRITE_QUEUE);
-                }
-            }
-            else
-            {
-                CLOG_TRACE(Overlay, "Error RecvMessage T:{} cat:{}", mtype,
-                           cat);
-            }
-        },
-        fmt::format("{} recvMessage", cat), type);
+    try
+    {
+        recvRawMessage(stellarMsg);
+    }
+    catch (CryptoError const& e)
+    {
+        std::string err = fmt::format("Error RecvMessage T:{} cat:{} {} @{}",
+                                      stellarMsg.type(), cat, toString(),
+                                      mApp.getConfig().PEER_PORT);
+        CLOG_ERROR(Overlay, "Dropping connection with {}: {}", err, e.what());
+        drop("Bad crypto request", Peer::DropDirection::WE_DROPPED_REMOTE,
+             Peer::DropMode::IGNORE_WRITE_QUEUE);
+    }
+}
+
+std::vector<StellarMessage>
+Peer::popNewMessages()
+{
+    auto msgs = mMessages;
+    mMessages.clear();
+    return msgs;
 }
 
 void
@@ -667,6 +681,8 @@ Peer::recvRawMessage(StellarMessage const& stellarMsg)
     if (!isAuthenticated() && (stellarMsg.type() != HELLO) &&
         (stellarMsg.type() != AUTH) && (stellarMsg.type() != ERROR_MSG))
     {
+        CLOG_INFO(Overlay, "received {} before completed handshake",
+                  stellarMsg.type());
         drop(fmt::format("received {} before completed handshake",
                          stellarMsg.type()),
              Peer::DropDirection::WE_DROPPED_REMOTE,
@@ -681,110 +697,34 @@ Peer::recvRawMessage(StellarMessage const& stellarMsg)
 
     switch (stellarMsg.type())
     {
+    // Handle some control messages right away
     case ERROR_MSG:
     {
         auto t = getOverlayMetrics().mRecvErrorTimer.TimeScope();
         recvError(stellarMsg);
+        break;
     }
-    break;
-
     case HELLO:
     {
         auto t = getOverlayMetrics().mRecvHelloTimer.TimeScope();
         this->recvHello(stellarMsg.hello());
+        break;
     }
-    break;
 
     case AUTH:
     {
         auto t = getOverlayMetrics().mRecvAuthTimer.TimeScope();
         this->recvAuth(stellarMsg);
+        break;
     }
-    break;
-
-    case DONT_HAVE:
+    default:
     {
-        auto t = getOverlayMetrics().mRecvDontHaveTimer.TimeScope();
-        recvDontHave(stellarMsg);
+        // TODO: this mechanism is not great, investigate making reader a work
+        // class itself
+        mMessages.push_back(stellarMsg);
+        mProcessingWork->wakeUp();
+        break;
     }
-    break;
-
-    case GET_PEERS:
-    {
-        auto t = getOverlayMetrics().mRecvGetPeersTimer.TimeScope();
-        recvGetPeers(stellarMsg);
-    }
-    break;
-
-    case PEERS:
-    {
-        auto t = getOverlayMetrics().mRecvPeersTimer.TimeScope();
-        recvPeers(stellarMsg);
-    }
-    break;
-
-    case SURVEY_REQUEST:
-    {
-        auto t = getOverlayMetrics().mRecvSurveyRequestTimer.TimeScope();
-        recvSurveyRequestMessage(stellarMsg);
-    }
-    break;
-
-    case SURVEY_RESPONSE:
-    {
-        auto t = getOverlayMetrics().mRecvSurveyResponseTimer.TimeScope();
-        recvSurveyResponseMessage(stellarMsg);
-    }
-    break;
-
-    case GET_TX_SET:
-    {
-        auto t = getOverlayMetrics().mRecvGetTxSetTimer.TimeScope();
-        recvGetTxSet(stellarMsg);
-    }
-    break;
-
-    case TX_SET:
-    {
-        auto t = getOverlayMetrics().mRecvTxSetTimer.TimeScope();
-        recvTxSet(stellarMsg);
-    }
-    break;
-
-    case TRANSACTION:
-    {
-        auto t = getOverlayMetrics().mRecvTransactionTimer.TimeScope();
-        recvTransaction(stellarMsg);
-    }
-    break;
-
-    case GET_SCP_QUORUMSET:
-    {
-        auto t = getOverlayMetrics().mRecvGetSCPQuorumSetTimer.TimeScope();
-        recvGetSCPQuorumSet(stellarMsg);
-    }
-    break;
-
-    case SCP_QUORUMSET:
-    {
-        auto t = getOverlayMetrics().mRecvSCPQuorumSetTimer.TimeScope();
-        recvSCPQuorumSet(stellarMsg);
-    }
-    break;
-
-    case SCP_MESSAGE:
-    {
-        auto t = getOverlayMetrics().mRecvSCPMessageTimer.TimeScope();
-        recvSCPMessage(stellarMsg);
-    }
-    break;
-
-    case GET_SCP_STATE:
-    {
-        auto t = getOverlayMetrics().mRecvGetSCPStateTimer.TimeScope();
-        recvGetSCPState(stellarMsg);
-    }
-    break;
     }
 }
 
@@ -798,23 +738,29 @@ Peer::recvDontHave(StellarMessage const& msg)
                                     shared_from_this());
 }
 
-void
-Peer::recvGetTxSet(StellarMessage const& msg)
+Peer::BroadcastToPeers
+Peer::recvGetTxSet(StellarMessage const& msg, DoneCallback cb)
 {
     ZoneScoped;
     auto self = shared_from_this();
+    std::weak_ptr<Peer> weak = self;
+
+    BroadcastToPeers peers{weak};
+
     if (auto txSet = mApp.getHerder().getTxSet(msg.txSetHash()))
     {
         StellarMessage newMsg;
         newMsg.type(TX_SET);
         txSet->toXDR(newMsg.txSet());
 
-        self->sendMessage(newMsg);
+        self->sendMessage(newMsg, cb);
     }
     else
     {
-        sendDontHave(TX_SET, msg.txSetHash());
+        sendDontHave(TX_SET, msg.txSetHash(), cb);
     }
+
+    return peers;
 }
 
 void
@@ -897,24 +843,30 @@ Peer::getPing() const
     return mLastPing;
 }
 
-void
-Peer::recvGetSCPQuorumSet(StellarMessage const& msg)
+Peer::BroadcastToPeers
+Peer::recvGetSCPQuorumSet(StellarMessage const& msg, Peer::DoneCallback cb)
 {
     ZoneScoped;
     maybeProcessPingResponse(msg.qSetHash());
 
     SCPQuorumSetPtr qset = mApp.getHerder().getQSet(msg.qSetHash());
 
+    std::weak_ptr<Peer> weak(
+        std::static_pointer_cast<Peer>(shared_from_this()));
+    BroadcastToPeers peers{weak};
+
     if (qset)
     {
-        sendSCPQuorumSet(qset);
+        sendSCPQuorumSet(qset, cb);
     }
     else
     {
         CLOG_TRACE(Overlay, "No quorum set: {}", hexAbbrev(msg.qSetHash()));
-        sendDontHave(SCP_QUORUMSET, msg.qSetHash());
+        sendDontHave(SCP_QUORUMSET, msg.qSetHash(), cb);
         // do we want to ask other people for it?
     }
+
+    return peers;
 }
 void
 Peer::recvSCPQuorumSet(StellarMessage const& msg)
@@ -971,12 +923,12 @@ Peer::recvSCPMessage(StellarMessage const& msg)
     }
 }
 
-void
-Peer::recvGetSCPState(StellarMessage const& msg)
+Peer::BroadcastToPeers
+Peer::recvGetSCPState(StellarMessage const& msg, DoneCallback cb)
 {
     ZoneScoped;
     uint32 seq = msg.getSCPLedgerSeq();
-    mApp.getHerder().sendSCPStateToPeer(seq, shared_from_this());
+    return mApp.getHerder().sendSCPStateToPeer(seq, shared_from_this(), cb);
 }
 
 void

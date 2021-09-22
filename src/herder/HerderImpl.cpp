@@ -402,7 +402,9 @@ HerderImpl::broadcast(SCPEnvelope const& e)
                    e.statement.slotIndex);
 
         mSCPMetrics.mEnvelopeEmit.Mark();
-        mApp.getOverlayManager().broadcastMessage(m, true);
+        // Broadcast initated by self, so we don't coutn that toward "unit of
+        // work"
+        mApp.getOverlayManager().broadcastMessage(m, nullptr, true);
     }
 }
 
@@ -572,9 +574,16 @@ HerderImpl::getMinLedgerSeqToRemember() const
     }
 }
 
+bool
+HerderImpl::isFullyFetched(SCPEnvelope const& envelope)
+{
+    return mPendingEnvelopes.isFullyFetched(envelope);
+}
+
 Herder::EnvelopeStatus
 HerderImpl::recvSCPEnvelope(SCPEnvelope const& envelope)
 {
+
     ZoneScoped;
     if (mApp.getConfig().MANUAL_CLOSE)
     {
@@ -654,8 +663,8 @@ HerderImpl::recvSCPEnvelope(SCPEnvelope const& envelope)
         return Herder::ENVELOPE_STATUS_SKIPPED_SELF;
     }
 
-    auto status = mPendingEnvelopes.recvSCPEnvelope(envelope);
-    if (status == Herder::ENVELOPE_STATUS_READY)
+    auto res = mPendingEnvelopes.recvSCPEnvelope(envelope);
+    if (res == Herder::ENVELOPE_STATUS_READY)
     {
         std::string txt("READY");
         ZoneText(txt.c_str(), txt.size());
@@ -668,23 +677,22 @@ HerderImpl::recvSCPEnvelope(SCPEnvelope const& envelope)
     }
     else
     {
-        if (status == Herder::ENVELOPE_STATUS_FETCHING)
+        if (res == Herder::ENVELOPE_STATUS_FETCHING)
         {
             std::string txt("FETCHING");
             ZoneText(txt.c_str(), txt.size());
         }
-        else if (status == Herder::ENVELOPE_STATUS_PROCESSED)
+        else if (res == Herder::ENVELOPE_STATUS_PROCESSED)
         {
             std::string txt("PROCESSED");
             ZoneText(txt.c_str(), txt.size());
         }
-        CLOG_TRACE(Herder, "recvSCPEnvelope ({}) from: {} s:{} i:{} a:{}",
-                   status,
+        CLOG_TRACE(Herder, "recvSCPEnvelope ({}) from: {} s:{} i:{} a:{}", res,
                    mApp.getConfig().toShortString(envelope.statement.nodeID),
                    envelope.statement.pledges.type(),
                    envelope.statement.slotIndex, mApp.getStateHuman());
     }
-    return status;
+    return res;
 }
 
 #ifdef BUILD_TESTS
@@ -716,8 +724,9 @@ HerderImpl::externalizeValue(std::shared_ptr<TxSetFrame> txSet,
 
 #endif
 
-void
-HerderImpl::sendSCPStateToPeer(uint32 ledgerSeq, Peer::pointer peer)
+Peer::BroadcastToPeers
+HerderImpl::sendSCPStateToPeer(uint32 ledgerSeq, Peer::pointer peer,
+                               Peer::DoneCallback cb)
 {
     ZoneScoped;
     bool log = true;
@@ -730,7 +739,8 @@ HerderImpl::sendSCPStateToPeer(uint32 ledgerSeq, Peer::pointer peer)
                 StellarMessage m;
                 m.type(SCP_MESSAGE);
                 m.envelope() = e;
-                peer->sendMessage(m, log);
+                // TODO: sends multiple messages
+                peer->sendMessage(m, cb, log);
                 log = false;
                 slotHadData = true;
                 return true;
@@ -742,6 +752,10 @@ HerderImpl::sendSCPStateToPeer(uint32 ledgerSeq, Peer::pointer peer)
         }
         return maxSlots != 0;
     });
+
+    std::weak_ptr<Peer> weak = peer;
+    Peer::BroadcastToPeers peers{weak};
+    return peers;
 }
 
 void

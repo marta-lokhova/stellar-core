@@ -60,7 +60,11 @@ class Floodgate
                    Hash& msgID);
 
     // returns true if msg was sent to at least one peer
-    bool broadcast(StellarMessage const& msg, bool force);
+    // Reurn a list of peers to broadcast to!
+    // Note: handle peers that will get dropped
+
+    Peer::BroadcastToPeers broadcast(StellarMessage const& msg, bool force,
+                                     Peer::DoneCallback cb);
 
     // returns the list of peers that sent us the item with hash `msgID`
     // NB: `msgID` is the hash of a `StellarMessage`

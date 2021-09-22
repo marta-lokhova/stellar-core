@@ -75,6 +75,7 @@ testQuorumTracker()
         {
             herder->recvTxSet(p.mTxSet->getContentsHash(), *p.mTxSet);
         }
+        herder->recvSCPEnvelope(envelope);
     };
     auto recvNom = [&](uint64 slotID, SecretKey const& k,
                        SCPQuorumSet const& qSet,

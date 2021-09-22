@@ -935,12 +935,13 @@ OverlayManagerImpl::forgetFloodedMsg(Hash const& msgID)
     mFloodGate.forgetRecord(msgID);
 }
 
-bool
-OverlayManagerImpl::broadcastMessage(StellarMessage const& msg, bool force)
+Peer::BroadcastToPeers
+OverlayManagerImpl::broadcastMessage(StellarMessage const& msg,
+                                     Peer::DoneCallback cb, bool force)
 {
     ZoneScoped;
-    auto res = mFloodGate.broadcast(msg, force);
-    if (res)
+    auto res = mFloodGate.broadcast(msg, force, cb);
+    if (!res.empty())
     {
         mOverlayMetrics.mMessagesBroadcast.Mark();
     }

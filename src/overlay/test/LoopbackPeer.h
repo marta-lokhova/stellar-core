@@ -52,7 +52,8 @@ class LoopbackPeer : public Peer
 
     Stats mStats;
 
-    void sendMessage(xdr::msg_ptr&& xdrBytes) override;
+    void sendMessage(xdr::msg_ptr&& xdrBytes,
+                     DoneCallback cb = nullptr) override;
     AuthCert getAuthCert() override;
 
     void processInQueue();

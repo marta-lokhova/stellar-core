@@ -26,6 +26,7 @@ typedef std::shared_ptr<SCPQuorumSet> SCPQuorumSetPtr;
 class Application;
 class LoopbackPeer;
 struct OverlayMetrics;
+class OverlayProcessingWork;
 
 // Peer class represents a connected peer (either inbound or outbound)
 //
@@ -53,7 +54,18 @@ class Peer : public std::enable_shared_from_this<Peer>,
 {
 
   public:
+    using DoneCallback = std::function<void()>;
+    using BroadcastToPeers = std::vector<std::weak_ptr<Peer>>;
+
+    void startProcessing();
     typedef std::shared_ptr<Peer> pointer;
+    std::unique_ptr<VirtualTimer> mTimer;
+    std::vector<StellarMessage> mMessages;
+
+    void sendAuthenticatedMessage(StellarMessage const& msg, DoneCallback cb);
+    // TODO: friend class?
+    // TODO: add recv dont have
+    std::shared_ptr<OverlayProcessingWork> mProcessingWork;
 
     enum PeerState
     {
@@ -112,6 +124,31 @@ class Peer : public std::enable_shared_from_this<Peer>,
         xdr::msg_ptr mMessage;
     };
 
+    std::vector<StellarMessage> popNewMessages();
+
+    void recvAuth(StellarMessage const& msg);
+    void recvDontHave(StellarMessage const& msg);
+    void recvGetPeers(StellarMessage const& msg);
+    void recvHello(Hello const& elo);
+    void recvPeers(StellarMessage const& msg);
+    void recvSurveyRequestMessage(StellarMessage const& msg);
+    void recvSurveyResponseMessage(StellarMessage const& msg);
+
+    BroadcastToPeers recvGetTxSet(StellarMessage const& msg, DoneCallback cb);
+    void recvTxSet(StellarMessage const& msg);
+    void recvTransaction(StellarMessage const& msg);
+    BroadcastToPeers recvGetSCPQuorumSet(StellarMessage const& msg,
+                                         DoneCallback cb);
+    void recvSCPQuorumSet(StellarMessage const& msg);
+    void recvSCPMessage(StellarMessage const& msg);
+    BroadcastToPeers recvGetSCPState(StellarMessage const& msg,
+                                     DoneCallback cb);
+
+    virtual void
+    startRead()
+    {
+    }
+
   protected:
     Application& mApp;
 
@@ -157,26 +194,11 @@ class Peer : public std::enable_shared_from_this<Peer>,
     virtual void recvError(StellarMessage const& msg);
     void updatePeerRecordAfterEcho();
     void updatePeerRecordAfterAuthentication();
-    void recvAuth(StellarMessage const& msg);
-    void recvDontHave(StellarMessage const& msg);
-    void recvGetPeers(StellarMessage const& msg);
-    void recvHello(Hello const& elo);
-    void recvPeers(StellarMessage const& msg);
-    void recvSurveyRequestMessage(StellarMessage const& msg);
-    void recvSurveyResponseMessage(StellarMessage const& msg);
-
-    void recvGetTxSet(StellarMessage const& msg);
-    void recvTxSet(StellarMessage const& msg);
-    void recvTransaction(StellarMessage const& msg);
-    void recvGetSCPQuorumSet(StellarMessage const& msg);
-    void recvSCPQuorumSet(StellarMessage const& msg);
-    void recvSCPMessage(StellarMessage const& msg);
-    void recvGetSCPState(StellarMessage const& msg);
 
     void sendHello();
     void sendAuth();
-    void sendSCPQuorumSet(SCPQuorumSetPtr qSet);
-    void sendDontHave(MessageType type, uint256 const& itemID);
+    void sendSCPQuorumSet(SCPQuorumSetPtr qSet, Peer::DoneCallback cb);
+    void sendDontHave(MessageType type, uint256 const& itemID, DoneCallback cb);
     void sendPeers();
     void sendError(ErrorCode error, std::string const& message);
 
@@ -187,11 +209,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
     // put in a reused/non-owned buffer without having to buffer/queue
     // messages somewhere else. The async write request will point _into_
     // this owned buffer. This is really the best we can do.
-    virtual void sendMessage(xdr::msg_ptr&& xdrBytes) = 0;
-    virtual void
-    connected()
-    {
-    }
+    virtual void sendMessage(xdr::msg_ptr&& xdrBytes, DoneCallback cb) = 0;
+
     virtual bool
     sendQueueIsOverloaded() const
     {
@@ -224,7 +243,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
     void sendErrorAndDrop(ErrorCode error, std::string const& message,
                           DropMode dropMode);
 
-    void sendMessage(StellarMessage const& msg, bool log = true);
+    void sendMessage(StellarMessage const& msg, DoneCallback cb = nullptr,
+                     bool log = true);
 
     PeerRole
     getRole() const

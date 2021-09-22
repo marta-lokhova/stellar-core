@@ -13,6 +13,7 @@
 #include "medida/metrics_registry.h"
 #include "overlay/OverlayManager.h"
 #include "overlay/OverlayMetrics.h"
+#include "overlay/OverlayProcessingWork.h"
 #include "overlay/PeerManager.h"
 #include "overlay/StellarXDR.h"
 #include "util/GlobalChecks.h"
@@ -34,7 +35,10 @@ using namespace std;
 
 TCPPeer::TCPPeer(Application& app, Peer::PeerRole role,
                  std::shared_ptr<TCPPeer::SocketType> socket)
-    : Peer(app, role), mSocket(socket)
+    : Peer(app, role)
+    , mSocket(socket)
+    , mMessagesRead(
+          app.getMetrics().NewMeter({"overlay", "read", "messages"}, "message"))
 {
 }
 
@@ -47,6 +51,8 @@ TCPPeer::initiate(Application& app, PeerBareAddress const& address)
     assertThreadIsMain();
     auto socket = make_shared<SocketType>(app.getClock().getIOContext(), BUFSZ);
     auto result = make_shared<TCPPeer>(app, WE_CALLED_REMOTE, socket);
+    result->startProcessing();
+
     result->mAddress = address;
     result->startRecurrentTimer();
     asio::ip::tcp::endpoint endpoint(
@@ -83,6 +89,7 @@ TCPPeer::accept(Application& app, shared_ptr<TCPPeer::SocketType> socket)
     {
         CLOG_DEBUG(Overlay, "TCPPeer:accept");
         result = make_shared<TCPPeer>(app, REMOTE_CALLED_US, socket);
+        result->startProcessing();
         result->startRecurrentTimer();
         result->startRead();
     }
@@ -134,7 +141,7 @@ TCPPeer::getIP() const
 }
 
 void
-TCPPeer::sendMessage(xdr::msg_ptr&& xdrBytes)
+TCPPeer::sendMessage(xdr::msg_ptr&& xdrBytes, DoneCallback cb)
 {
     if (shouldAbort())
     {
@@ -146,7 +153,7 @@ TCPPeer::sendMessage(xdr::msg_ptr&& xdrBytes)
     TimestampedMessage msg;
     msg.mEnqueuedTime = mApp.getClock().now();
     msg.mMessage = std::move(xdrBytes);
-    mWriteQueue.emplace_back(std::move(msg));
+    mWriteQueue.emplace_back(std::move(msg), cb);
 
     if (!mWriting)
     {
@@ -172,6 +179,12 @@ TCPPeer::shutdown()
 
     // To shutdown, we first queue up our desire to shutdown in the strand,
     // behind any pending read/write calls. We'll let them issue first.
+
+    // Shutdown any message processing
+    if (mProcessingWork)
+    {
+        mProcessingWork->shutdown();
+    }
 
     // leave some time before actually calling shutdown
     mRecurringTimer.expires_from_now(std::chrono::seconds(5));
@@ -251,8 +264,9 @@ TCPPeer::messageSender()
     size_t maxQueueSize = mApp.getConfig().MAX_BATCH_WRITE_COUNT;
     releaseAssert(maxQueueSize > 0);
     size_t const maxTotalBytes = mApp.getConfig().MAX_BATCH_WRITE_BYTES;
-    for (auto& tsm : mWriteQueue)
+    for (auto& pair : mWriteQueue)
     {
+        auto& tsm = pair.first;
         tsm.mIssuedTime = now;
         size_t sz = tsm.mMessage->raw_size();
         mWriteBuffers.emplace_back(tsm.mMessage->raw_data(), sz);
@@ -292,8 +306,14 @@ TCPPeer::messageSender()
                           auto i = self->mWriteQueue.begin();
                           while (!self->mWriteBuffers.empty())
                           {
-                              i->mCompletedTime = now;
-                              i->recordWriteTiming(self->getOverlayMetrics());
+                              auto& msg = i->first;
+                              msg.mCompletedTime = now;
+                              msg.recordWriteTiming(self->getOverlayMetrics());
+                              if (i->second)
+                              {
+                                  // Execute the callback
+                                  i->second();
+                              }
                               ++i;
                               self->mWriteBuffers.pop_back();
                           }
@@ -301,6 +321,8 @@ TCPPeer::messageSender()
                           // Erase the messages from the write queue that we
                           // just forgot about the buffers for.
                           self->mWriteQueue.erase(self->mWriteQueue.begin(), i);
+
+                          // TODO: can track messages that were sent here
 
                           // continue processing the queue
                           if (!ec)
@@ -414,6 +436,8 @@ TCPPeer::noteFullyReadBody(size_t nbytes)
     receivedBytes(nbytes, true);
 }
 
+// TODO: formalize this scheduling policy - read more vs spend time processing
+// tasks
 void
 TCPPeer::scheduleRead()
 {
@@ -436,6 +460,7 @@ TCPPeer::startRead()
 {
     ZoneScoped;
     assertThreadIsMain();
+    // if (shouldAbort() || mReadingCapacity <= 0)
     if (shouldAbort())
     {
         return;
@@ -551,18 +576,13 @@ TCPPeer::getIncomingMsgLength()
     return (length);
 }
 
-void
-TCPPeer::connected()
-{
-    startRead();
-}
-
 bool
 TCPPeer::sendQueueIsOverloaded() const
 {
     auto now = mApp.getClock().now();
-    return (!mWriteQueue.empty() && (now - mWriteQueue.front().mEnqueuedTime) >
-                                        SCHEDULER_LATENCY_WINDOW);
+    return (!mWriteQueue.empty() &&
+            (now - mWriteQueue.front().first.mEnqueuedTime) >
+                SCHEDULER_LATENCY_WINDOW);
 }
 
 void
@@ -636,6 +656,9 @@ TCPPeer::recvMessage()
                        mIncomingBody.data() + mIncomingBody.size());
         AuthenticatedMessage am;
         xdr::xdr_argpack_archive(g, am);
+
+        // Messages read, compare to rate at which messages are processed
+        mMessagesRead.Mark();
 
         Peer::recvMessage(am);
     }

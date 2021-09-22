@@ -31,8 +31,7 @@ class HerderStub : public HerderImpl
 
     std::vector<int> received;
 
-  private:
-    EnvelopeStatus
+    Herder::EnvelopeStatus
     recvSCPEnvelope(SCPEnvelope const& envelope) override
     {
         received.push_back(envelope.statement.pledges.confirm().nPrepared);
@@ -131,6 +130,9 @@ TEST_CASE("ItemFetcher fetches", "[overlay][ItemFetcher]")
         itemFetcher.recv(twelve, timer);
         itemFetcher.recv(ten, timer);
 
+        app->getHerder().recvSCPEnvelope(twelveEnvelope2);
+        app->getHerder().recvSCPEnvelope(tenEnvelope);
+
         auto expectedReceived = std::vector<int>{12, 10};
         REQUIRE(app->getHerder().received == expectedReceived);
 
@@ -156,6 +158,8 @@ TEST_CASE("ItemFetcher fetches", "[overlay][ItemFetcher]")
         itemFetcher.recv(ten, timer);
 
         auto expectedReceived = std::vector<int>{10};
+        app->getHerder().recvSCPEnvelope(tenEnvelope);
+
         REQUIRE(app->getHerder().received == expectedReceived);
 
         REQUIRE(itemFetcher.getLastSeenSlotIndex(zero) == 0);
@@ -173,6 +177,10 @@ TEST_CASE("ItemFetcher fetches", "[overlay][ItemFetcher]")
     {
         itemFetcher.recv(twelve, timer);
         itemFetcher.recv(ten, timer);
+
+        app->getHerder().recvSCPEnvelope(twelveEnvelope1);
+        app->getHerder().recvSCPEnvelope(twelveEnvelope2);
+        app->getHerder().recvSCPEnvelope(tenEnvelope);
 
         auto expectedReceived = std::vector<int>{12, 12, 10};
         REQUIRE(app->getHerder().received == expectedReceived);
@@ -192,6 +200,7 @@ TEST_CASE("ItemFetcher fetches", "[overlay][ItemFetcher]")
             auto zeroEnvelope1 = makeEnvelope(0);
             itemFetcher.fetch(zero, zeroEnvelope1);
             itemFetcher.recv(zero, timer);
+            app->getHerder().recvSCPEnvelope(zeroEnvelope1);
 
             auto zeroEnvelope2 = makeEnvelope(0);
             itemFetcher.fetch(zero, zeroEnvelope2); // no cache in current

@@ -296,7 +296,7 @@ TEST_CASE("survey request process order", "[overlay][survey][topology]")
         [&simulation, nLedgers]() {
             return simulation->haveAllExternalized(nLedgers + 1, 1);
         },
-        2 * nLedgers * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
+        10 * nLedgers * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
 
     REQUIRE(simulation->haveAllExternalized(nLedgers + 1, 1));
 

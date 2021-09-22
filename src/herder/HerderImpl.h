@@ -62,6 +62,8 @@ class HerderImpl : public Herder
     HerderImpl(Application& app);
     ~HerderImpl();
 
+    virtual bool isFullyFetched(SCPEnvelope const& envelope) override;
+
     State getState() const override;
     std::string getStateHuman(State st) const override;
 
@@ -115,7 +117,9 @@ class HerderImpl : public Herder
 
     uint32_t mTriggerNextLedgerSeq{0};
 #endif
-    void sendSCPStateToPeer(uint32 ledgerSeq, Peer::pointer peer) override;
+    Peer::BroadcastToPeers sendSCPStateToPeer(uint32 ledgerSeq,
+                                              Peer::pointer peer,
+                                              Peer::DoneCallback cb) override;
 
     bool recvSCPQuorumSet(Hash const& hash, const SCPQuorumSet& qset) override;
     bool recvTxSet(Hash const& hash, const TxSetFrame& txset) override;

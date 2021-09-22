@@ -73,6 +73,8 @@ void
 PeerDoor::handleKnock(shared_ptr<TCPPeer::SocketType> socket)
 {
     CLOG_DEBUG(Overlay, "PeerDoor handleKnock()");
+    // Move this inside OverlayManager, as overlay manager is the one managing
+    // all the connections (maintaining work children)
     Peer::pointer peer = TCPPeer::accept(mApp, socket);
     if (peer)
     {

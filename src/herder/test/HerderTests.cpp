@@ -1474,11 +1474,12 @@ testSCPDriver(uint32 protocolVersion, uint32_t maxTxSize, size_t expectedOps)
                     Herder::ENVELOPE_STATUS_FETCHING);
             REQUIRE(herder.recvSCPQuorumSet(saneQSet1Hash, saneQSet1));
             REQUIRE(herder.recvTxSet(p1.second->getContentsHash(), *p1.second));
+            // TODO: this test seems better now
             // will not return ENVELOPE_STATUS_READY as the recvSCPEnvelope() is
             // called internally
             // when QSet and TxSet are both received
             REQUIRE(herder.recvSCPEnvelope(saneEnvelopeQ1T1) ==
-                    Herder::ENVELOPE_STATUS_PROCESSED);
+                    Herder::ENVELOPE_STATUS_READY);
         }
 
         SECTION("only accepts qset once")
@@ -1756,7 +1757,7 @@ TEST_CASE("SCP State", "[herder][acceptance]")
                            ->getLedgerManager()
                            .getLastClosedLedgerNum() == expectedLedger;
             },
-            std::chrono::seconds(1), false);
+            std::chrono::seconds(20), false);
 
         REQUIRE(sim->getNode(nodeIDs[0])->getState() ==
                 Application::State::APP_CONNECTED_STANDBY_STATE);
@@ -2357,7 +2358,7 @@ TEST_CASE("In quorum filtering", "[quorum][herder][acceptance]")
 
     // first, close ledgers with a simple topology Core0..Core3
     sim->crankUntil([&]() { return sim->haveAllExternalized(2, 1); },
-                    std::chrono::seconds(1), false);
+                    std::chrono::seconds(30), false);
 
     // add a few extra validators, only connected to node 0
     // E_0 [3: Core0..Core3]

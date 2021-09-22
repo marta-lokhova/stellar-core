@@ -155,7 +155,9 @@ ItemFetcher::recv(Hash itemHash, medida::Timer& timer)
         timer.Update(tracker->getDuration());
         while (!tracker->empty())
         {
-            mApp.getHerder().recvSCPEnvelope(tracker->pop());
+            // TODO: this is now tracked in OverlayProcessingWork, so no need to
+            // call Herder here
+            tracker->pop();
         }
         // stop the timer, stop requesting the item as we have it
         tracker->resetLastSeenSlotIndex();

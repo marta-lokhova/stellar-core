@@ -90,7 +90,6 @@ class PendingEnvelopes
 
     void envelopeReady(SCPEnvelope const& envelope);
     void discardSCPEnvelope(SCPEnvelope const& envelope);
-    bool isFullyFetched(SCPEnvelope const& envelope);
     void startFetch(SCPEnvelope const& envelope);
     void stopFetch(SCPEnvelope const& envelope);
     void touchFetchCache(SCPEnvelope const& envelope);
@@ -118,6 +117,7 @@ class PendingEnvelopes
   public:
     PendingEnvelopes(Application& app, HerderImpl& herder);
     ~PendingEnvelopes();
+    bool isFullyFetched(SCPEnvelope const& envelope);
 
 #ifdef BUILD_TESTS
     void clearQSetCache();

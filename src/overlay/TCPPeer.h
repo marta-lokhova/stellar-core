@@ -25,6 +25,7 @@ class TCPPeer : public Peer
   public:
     typedef asio::buffered_read_stream<asio::ip::tcp::socket> SocketType;
     static constexpr size_t BUFSZ = 0x40000; // 256KB
+    medida::Meter& mMessagesRead;
 
   private:
     std::shared_ptr<SocketType> mSocket;
@@ -32,21 +33,21 @@ class TCPPeer : public Peer
     std::vector<uint8_t> mIncomingBody;
 
     std::vector<asio::const_buffer> mWriteBuffers;
-    std::deque<TimestampedMessage> mWriteQueue;
+    std::deque<std::pair<TimestampedMessage, DoneCallback>> mWriteQueue;
     bool mWriting{false};
     bool mDelayedShutdown{false};
     bool mShutdownScheduled{false};
 
     void recvMessage();
-    void sendMessage(xdr::msg_ptr&& xdrBytes) override;
+    void sendMessage(xdr::msg_ptr&& xdrBytes, DoneCallback cb) override;
 
     void messageSender();
 
     size_t getIncomingMsgLength();
-    virtual void connected() override;
+    virtual void startRead() override;
     void scheduleRead();
     virtual bool sendQueueIsOverloaded() const override;
-    void startRead();
+    // void startRead();
 
     static constexpr size_t HDRSZ = 4;
     void noteErrorReadHeader(size_t nbytes, asio::error_code const& ec);
