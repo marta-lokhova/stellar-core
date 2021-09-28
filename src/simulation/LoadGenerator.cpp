@@ -764,7 +764,7 @@ LoadGenerator::execute(TransactionFramePtr& txf, LoadGenMode mode,
     }
     else
     {
-        mApp.getOverlayManager().broadcastMessage(msg);
+        mApp.getOverlayManager().broadcastMessage(msg, nullptr);
     }
 
     return status;
