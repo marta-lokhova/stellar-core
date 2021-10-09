@@ -123,6 +123,11 @@ Floodgate::broadcast(StellarMessage const& msg, bool force,
         if (peersTold.insert(peer.second->toString()).second)
         {
             mSendFromBroadcast.Mark();
+            // TODO: Randomly select on average half peers to include in
+            // broadcast measurements
+            // TODO: must make sure we're not broadcasting message to peer that
+            // sent us message in the first place, otherwise deadlock
+
             std::weak_ptr<Peer> weak(
                 std::static_pointer_cast<Peer>(peer.second));
             mApp.postOnMainThread(
@@ -130,7 +135,9 @@ Floodgate::broadcast(StellarMessage const& msg, bool force,
                     auto strong = weak.lock();
                     if (strong)
                     {
-                        strong->sendMessage(*smsg, cb, log);
+                        // TODO: pass callback here to include the time it takes
+                        // to write
+                        strong->sendMessage(*smsg, nullptr, log);
                     }
                 },
                 fmt::format("broadcast to {}", peer.second->toString()));

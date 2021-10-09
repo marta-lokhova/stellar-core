@@ -1048,6 +1048,12 @@ OverlayManagerImpl::recordMessageMetric(StellarMessage const& stellarMsg,
             peerMetrics.mDuplicateFloodBytesRecv += size;
             ++peerMetrics.mDuplicateFloodMessageRecv;
 
+            mApp.getMetrics()
+                .NewMeter({"overlay",
+                           mApp.getConfig().toShortString(peer->getPeerID()),
+                           "flood-duplicate-recv"},
+                          "byte")
+                .Mark();
             logMessage(false, "flood");
         }
         else
@@ -1071,6 +1077,13 @@ OverlayManagerImpl::recordMessageMetric(StellarMessage const& stellarMsg,
 
             peerMetrics.mUniqueFloodBytesRecv += size;
             ++peerMetrics.mUniqueFloodMessageRecv;
+
+            mApp.getMetrics()
+                .NewMeter({"overlay",
+                           mApp.getConfig().toShortString(peer->getPeerID()),
+                           "flood-unique-recv"},
+                          "byte")
+                .Mark();
 
             logMessage(true, "flood");
         }

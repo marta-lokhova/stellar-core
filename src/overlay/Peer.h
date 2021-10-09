@@ -60,6 +60,7 @@ class Peer : public std::enable_shared_from_this<Peer>,
     // done
     struct MetricTracker
     {
+        std::weak_ptr<Peer> mWeakPeer;
         std::chrono::system_clock::time_point mStart;
         std::unique_ptr<std::chrono::system_clock::time_point>
             mSCPMessageTypeCtx;
@@ -67,7 +68,13 @@ class Peer : public std::enable_shared_from_this<Peer>,
         Application& mApp;
         StellarMessage const mMsg;
 
-        MetricTracker(StellarMessage const& msg, Application& app);
+        bool mDone{false};
+
+        void markPeer(bool ledgerClosed = false);
+        void done();
+
+        MetricTracker(StellarMessage const& msg, Application& app,
+                      std::weak_ptr<Peer> peer = std::weak_ptr<Peer>());
         ~MetricTracker();
     };
 
@@ -81,6 +88,33 @@ class Peer : public std::enable_shared_from_this<Peer>,
         GOT_AUTH = 3,
         CLOSING = 4
     };
+
+    std::vector<std::pair<StellarMessage, Peer::TimeToProcessMessagePtr>>
+        mOutboundSCPMessages;
+    std::vector<std::pair<StellarMessage, VirtualClock::time_point>>
+        mOutboundTransactions;
+
+    struct ReadingCapacity
+    {
+        uint32_t mFloodCapacity;
+        uint32_t mTotalCapacity;
+    };
+
+    std::vector<StellarMessage> mFloodMsgs;
+    ReadingCapacity mCapacity;
+
+    void sendAuthenticatedMessage(StellarMessage const& msg,
+                                  Peer::TimeToProcessMessagePtr cb);
+
+    void messageProcessed(StellarMessage const& msg);
+
+    bool
+    hasReadingCapacity() const
+    {
+        return mCapacity.mTotalCapacity > 0;
+    }
+
+    void sendNextBatch();
 
     enum PeerRole
     {
@@ -99,6 +133,9 @@ class Peer : public std::enable_shared_from_this<Peer>,
         REMOTE_DROPPED_US,
         WE_DROPPED_REMOTE
     };
+
+    virtual void scheduleRead() = 0;
+    bool mShouldScheduleRead{true};
 
     struct PeerMetrics
     {
@@ -139,6 +176,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
     uint256 mSendNonce;
     uint256 mRecvNonce;
 
+    uint32_t mOutboundCapacity{0};
+
     HmacSha256Key mSendMacKey;
     HmacSha256Key mRecvMacKey;
     uint64_t mSendMacSeq{0};
@@ -177,24 +216,29 @@ class Peer : public std::enable_shared_from_this<Peer>,
     void updatePeerRecordAfterAuthentication();
     void recvAuth(StellarMessage const& msg);
     void recvDontHave(StellarMessage const& msg);
-    void recvGetPeers(StellarMessage const& msg, TimeToProcessMessagePtr cb);
+    void recvGetPeers(StellarMessage const& msg,
+                      TimeToProcessMessagePtr cb = nullptr);
     void recvHello(Hello const& elo);
     void recvPeers(StellarMessage const& msg);
     void recvSurveyRequestMessage(StellarMessage const& msg);
     void recvSurveyResponseMessage(StellarMessage const& msg);
 
-    void recvGetTxSet(StellarMessage const& msg, TimeToProcessMessagePtr cb);
+    void recvGetTxSet(StellarMessage const& msg,
+                      TimeToProcessMessagePtr cb = nullptr);
     void recvTxSet(StellarMessage const& msg);
     void recvTransaction(StellarMessage const& msg);
     void recvGetSCPQuorumSet(StellarMessage const& msg,
-                             TimeToProcessMessagePtr cb);
+                             TimeToProcessMessagePtr cb = nullptr);
     void recvSCPQuorumSet(StellarMessage const& msg);
     void recvSCPMessage(StellarMessage const& msg,
                         Peer::TimeToProcessMessagePtr cb);
-    void recvGetSCPState(StellarMessage const& msg, TimeToProcessMessagePtr cb);
+    void recvGetSCPState(StellarMessage const& msg,
+                         TimeToProcessMessagePtr cb = nullptr);
+    void recvSendMore(StellarMessage const& msg);
 
     void sendHello();
     void sendAuth();
+    void sendSendMore(uint32_t numMessages);
     void sendSCPQuorumSet(SCPQuorumSetPtr qSet,
                           Peer::TimeToProcessMessagePtr cb);
     void sendDontHave(MessageType type, uint256 const& itemID,

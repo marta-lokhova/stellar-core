@@ -532,6 +532,7 @@ NominationProtocol::nominate(ValueWrapperPtr value, Value const& previousValue,
                                                  value->getValue());
         }
     }
+
     // add a few more values from other leaders
     for (auto const& leader : mRoundLeaders)
     {

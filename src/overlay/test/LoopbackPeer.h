@@ -74,6 +74,8 @@ class LoopbackPeer : public Peer
     size_t getBytesQueued() const;
     size_t getMessagesQueued() const;
 
+    virtual void scheduleRead() override;
+
     Stats const& getStats() const;
 
     bool getCorked() const;

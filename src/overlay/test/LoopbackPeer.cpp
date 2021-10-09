@@ -45,6 +45,12 @@ LoopbackPeer::getAuthCert()
 }
 
 void
+LoopbackPeer::scheduleRead()
+{
+}
+
+// TODO: Loopback peer is broken right now - since there's no reading throttling
+void
 LoopbackPeer::sendMessage(xdr::msg_ptr&& msg, Peer::TimeToProcessMessagePtr cb)
 {
     if (mRemote.expired())
@@ -97,6 +103,9 @@ LoopbackPeer::sendMessage(xdr::msg_ptr&& msg, Peer::TimeToProcessMessagePtr cb)
 void
 LoopbackPeer::drop(std::string const& reason, DropDirection direction, DropMode)
 {
+    mOutboundSCPMessages.clear();
+    mOutboundTransactions.clear();
+
     if (mState == CLOSING)
     {
         return;

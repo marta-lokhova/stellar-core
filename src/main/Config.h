@@ -220,6 +220,9 @@ class Config : public std::enable_shared_from_this<Config>
     // Waits for merges to complete before applying transactions during catchup
     bool CATCHUP_WAIT_MERGES_TX_APPLY_FOR_TESTING;
 
+    uint32_t PEER_READING_CAPACITY;
+    uint32_t PEER_FLOOD_READING_CAPACITY;
+
     // A config parameter that allows a node to generate buckets. This should
     // be set to `false` only for testing purposes.
     bool MODE_ENABLES_BUCKETLIST;

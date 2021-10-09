@@ -1772,7 +1772,7 @@ TEST_CASE("SCP State", "[herder][acceptance]")
                            ->getLedgerManager()
                            .getLastClosedLedgerNum() == expectedLedger;
             },
-            std::chrono::seconds(1), false);
+            std::chrono::seconds(2), false);
 
         REQUIRE(sim->getNode(nodeIDs[0])->getState() ==
                 Application::State::APP_CONNECTED_STANDBY_STATE);
@@ -2378,7 +2378,7 @@ TEST_CASE("In quorum filtering", "[quorum][herder][acceptance]")
 
     // first, close ledgers with a simple topology Core0..Core3
     sim->crankUntil([&]() { return sim->haveAllExternalized(2, 1); },
-                    std::chrono::seconds(1), false);
+                    std::chrono::seconds(10), false);
 
     // add a few extra validators, only connected to node 0
     // E_0 [3: Core0..Core3]

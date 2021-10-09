@@ -190,6 +190,10 @@ Config::Config() : NODE_SEED(SecretKey::random())
     MAX_BATCH_WRITE_BYTES = 1 * 1024 * 1024;
     PREFERRED_PEERS_ONLY = false;
 
+    // TODO: adjust these better
+    PEER_READING_CAPACITY = 50;
+    PEER_FLOOD_READING_CAPACITY = 30;
+
     MINIMUM_IDLE_PERCENT = 0;
 
     // WORKER_THREADS: setting this too low risks a form of priority inversion
@@ -887,7 +891,15 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                          "node may not function properly with most networks");
             }
 
-            if (item.first == "PEER_PORT")
+            if (item.first == "PEER_READING_CAPACITY")
+            {
+                PEER_READING_CAPACITY = readInt<uint32_t>(item, 2);
+            }
+            else if (item.first == "PEER_FLOOD_READING_CAPACITY")
+            {
+                PEER_FLOOD_READING_CAPACITY = readInt<uint32_t>(item, 1);
+            }
+            else if (item.first == "PEER_PORT")
             {
                 PEER_PORT = readInt<unsigned short>(item, 1);
             }
