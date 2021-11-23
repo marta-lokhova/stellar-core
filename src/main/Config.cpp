@@ -51,7 +51,8 @@ static const std::unordered_set<std::string> TESTING_ONLY_OPTIONS = {
     "OP_APPLY_SLEEP_TIME_WEIGHT_FOR_TESTING",
     "LOADGEN_OP_COUNT_FOR_TESTING",
     "LOADGEN_OP_COUNT_DISTRIBUTION_FOR_TESTING",
-    "CATCHUP_WAIT_MERGES_TX_APPLY_FOR_TESTING"};
+    "CATCHUP_WAIT_MERGES_TX_APPLY_FOR_TESTING",
+    "ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING"};
 
 // Options that should only be used for testing
 static const std::unordered_set<std::string> TESTING_SUGGESTED_OPTIONS = {
@@ -116,6 +117,8 @@ Config::Config() : NODE_SEED(SecretKey::random())
     LOADGEN_OP_COUNT_FOR_TESTING = {};
     LOADGEN_OP_COUNT_DISTRIBUTION_FOR_TESTING = {};
     CATCHUP_WAIT_MERGES_TX_APPLY_FOR_TESTING = false;
+    ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING =
+        std::chrono::microseconds::zero();
 
     FORCE_SCP = false;
     LEDGER_PROTOCOL_VERSION = CURRENT_LEDGER_PROTOCOL_VERSION;
@@ -1275,6 +1278,11 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
             else if (item.first == "CATCHUP_WAIT_MERGES_TX_APPLY_FOR_TESTING")
             {
                 CATCHUP_WAIT_MERGES_TX_APPLY_FOR_TESTING = readBool(item);
+            }
+            else if (item.first == "ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING")
+            {
+                ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING =
+                    std::chrono::microseconds(readInt<uint32_t>(item));
             }
             else
             {

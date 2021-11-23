@@ -196,6 +196,11 @@ class Config : public std::enable_shared_from_this<Config>
     // system.
     bool ARTIFICIALLY_REPLAY_WITH_NEWEST_BUCKET_LOGIC_FOR_TESTING;
 
+    // A config parameter that forces stellar-core to sleep every time a task is
+    // picked up from the scheduler. This is useful to imitate a "slow" node.
+    // This config should only be enabled when testing.
+    std::chrono::microseconds ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING;
+
     // Config parameters that force transaction application during ledger
     // close to sleep for a certain amount of time.
     // The probability that it sleeps for
