@@ -105,6 +105,7 @@ class Floodgate
     medida::Meter& mMessagesAdvertized;
     medida::Meter& mMessagesDemanded;
     medida::Meter& mMessagesFulfilled;
+    medida::Meter& mDemandTimeouts;
     bool mShuttingDown;
 
   public:

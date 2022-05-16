@@ -81,7 +81,8 @@ overlay.fetch.qset                       | timer     | time to complete fetching
 overlay.flood.broadcast                  | meter     | message sent as broadcast per peer
 overlay.flood.advertized                 | meter     | message advertized to other peers
 overlay.flood.demanded                   | meter     | message demanded in response to advert from other peer
-overlay.flood.fulfilled                  | meter     | message message sent in response to demand from other peer
+overlay.flood.fulfilled                  | meter     | message sent in response to demand from other peer
+overlay.flood.demand-timeout             | meter     | number of pending demand timeouts
 overlay.flood.duplicate_recv             | meter     | number of bytes of flooded messages that have already been received
 overlay.flood.unique_recv                | meter     | number of bytes of flooded messages that have not yet been received
 overlay.inbound.attempt                  | meter     | inbound connection attempted (accepted on socket)

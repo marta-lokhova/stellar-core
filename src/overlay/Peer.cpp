@@ -698,10 +698,6 @@ Peer::sendAuthenticatedMessage(StellarMessage const& msg)
 
 uint32_t const Peer::FIRST_OVERLAY_PROTOCOL_VERSION_SUPPORTING_ADVERTS = 21;
 
-size_t const Peer::ADVERT_FLUSH_THRESHOLD = 1024;
-
-std::chrono::milliseconds const Peer::ADVERT_TIMER{100};
-
 bool
 Peer::supportsAdverts() const
 {
@@ -716,7 +712,7 @@ Peer::advertizeMessage(uint64_t shortHash)
 {
     auto& hashes = mPendingAdvertMsg.floodAdvert().hashes;
     hashes.emplace_back(shortHash);
-    if (hashes.size() >= ADVERT_FLUSH_THRESHOLD)
+    if (hashes.size() >= mApp.getConfig().ADVERT_FLUSH_THRESHOLD)
     {
         flushPendingAdvert();
     }
@@ -729,7 +725,7 @@ Peer::advertizeMessage(uint64_t shortHash)
     {
         mAdvertTimerActive = true;
         auto self = shared_from_this();
-        mAdvertTimer.expires_from_now(ADVERT_TIMER);
+        mAdvertTimer.expires_from_now(mApp.getConfig().ADVERT_TIMER);
         mAdvertTimer.async_wait([self](asio::error_code const& error) {
             self->flushPendingAdvert();
             self->mAdvertTimerActive = false;

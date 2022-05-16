@@ -22,7 +22,6 @@
 namespace stellar
 {
 
-constexpr std::chrono::seconds PENDING_DEMAND_TIMEOUT{1};
 constexpr size_t PENDING_DEMAND_LIMIT{1000000};
 
 Floodgate::FloodRecord::FloodRecord(StellarMessage const& msg, uint32_t ledger,
@@ -49,6 +48,8 @@ Floodgate::Floodgate(Application& app)
           {"overlay", "flood", "demanded"}, "message"))
     , mMessagesFulfilled(app.getMetrics().NewMeter(
           {"overlay", "flood", "fulfilled"}, "message"))
+    , mDemandTimeouts(app.getMetrics().NewMeter(
+          {"overlay", "flood", "demand-timeout"}, "timeout"))
     , mShuttingDown(false)
 {
     mId = KeyUtils::toShortString(mApp.getConfig().NODE_SEED.getPublicKey());
@@ -299,7 +300,7 @@ Floodgate::demandMissing(FloodAdvert const& adv, Peer::pointer fromPeer)
                 std::chrono::milliseconds dur =
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         now - existingDemand->second.second);
-                if (dur < PENDING_DEMAND_TIMEOUT)
+                if (dur < mApp.getConfig().PENDING_DEMAND_TIMEOUT)
                 {
                     // We don't have this message but we did already ask for it
                     // from someone else, more recently than
@@ -317,6 +318,7 @@ Floodgate::demandMissing(FloodAdvert const& adv, Peer::pointer fromPeer)
                     // peer we demanded it from hasn't fulfilled the demand
                     // within a timeout; we'll forget the existing demand now,
                     // in any case.
+                    mDemandTimeouts.Mark();
                     CLOG_TRACE(Overlay,
                                "demand for {} from {} expired after {}", h,
                                existingDemand->second.first, dur);

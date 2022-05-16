@@ -151,8 +151,6 @@ class Peer : public std::enable_shared_from_this<Peer>,
 
     Peer::FlowControlState flowControlEnabled() const;
     static uint32_t const FIRST_OVERLAY_PROTOCOL_VERSION_SUPPORTING_ADVERTS;
-    static size_t const ADVERT_FLUSH_THRESHOLD;
-    static std::chrono::milliseconds const ADVERT_TIMER;
 
     Json::Value getFlowControlJsonInfo(bool compact) const;
     Json::Value getJsonInfo(bool compact) const;

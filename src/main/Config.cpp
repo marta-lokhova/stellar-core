@@ -198,6 +198,9 @@ Config::Config() : NODE_SEED(SecretKey::random())
     FLOOD_ARB_TX_DAMPING_FACTOR = 0.8;
     FLOOD_TX_LAZY_PROBABILITY = 1.0;
     FLOOD_SCP_LAZY_PROBABILITY = 1.0;
+    ADVERT_FLUSH_THRESHOLD = 1024;
+    ADVERT_TIMER = std::chrono::milliseconds(100);
+    PENDING_DEMAND_TIMEOUT = std::chrono::milliseconds(1000);
 
     MAX_BATCH_WRITE_COUNT = 1024;
     MAX_BATCH_WRITE_BYTES = 1 * 1024 * 1024;
@@ -1152,6 +1155,20 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                     throw std::invalid_argument(
                         "bad value for FLOOD_SCP_LAZY_PROBABILITY");
                 }
+            }
+            else if (item.first == "ADVERT_FLUSH_THRESHOLD")
+            {
+                ADVERT_FLUSH_THRESHOLD = readInt<uint32_t>(item);
+            }
+            else if (item.first == "ADVERT_TIMER")
+            {
+                ADVERT_TIMER =
+                    std::chrono::milliseconds(readInt<uint32_t>(item));
+            }
+            else if (item.first == "PENDING_DEMAND_TIMEOUT")
+            {
+                PENDING_DEMAND_TIMEOUT =
+                    std::chrono::milliseconds(readInt<uint32_t>(item));
             }
             else if (item.first == "FLOOD_TX_PERIOD_MS")
             {
