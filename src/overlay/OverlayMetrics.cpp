@@ -130,6 +130,8 @@ OverlayMetrics::OverlayMetrics(Application& app)
           {"overlay", "fetch", "unique-recv"}, "byte"))
     , mDuplicateFetchBytesRecv(app.getMetrics().NewMeter(
           {"overlay", "fetch", "duplicate-recv"}, "byte"))
+    , mTxsInhibited(app.getMetrics().NewMeter({"overlay", "flood", "inhibit"},
+                                              "transaction"))
 {
 }
 }

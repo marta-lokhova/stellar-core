@@ -32,6 +32,7 @@
 #include "xdrpp/marshal.h"
 #include <fmt/format.h>
 
+#include "crypto/Hex.h"
 #include <Tracy.hpp>
 #include <soci.h>
 #include <time.h>
@@ -65,6 +66,7 @@ Peer::Peer(Application& app, PeerRole role)
     , mFlowControlState(Peer::FlowControlState::DONT_KNOW)
     , mCapacity{app.getConfig().PEER_FLOOD_READING_CAPACITY,
                 app.getConfig().PEER_READING_CAPACITY}
+    , mPeerKnowsShortHash(app.getConfig().PEER_KNOWS_TX_CACHE_SIZE)
 {
     mPingSentTime = PING_NOT_SENT;
     mLastPing = std::chrono::hours(24); // some default very high value
@@ -617,9 +619,6 @@ Peer::sendMessage(std::shared_ptr<StellarMessage const> msg, bool log)
     case TX_SET:
         getOverlayMetrics().mSendTxSetMeter.Mark();
         break;
-    case TRANSACTION:
-        getOverlayMetrics().mSendTransactionMeter.Mark();
-        break;
     case GET_SCP_QUORUMSET:
         getOverlayMetrics().mSendGetSCPQuorumSetMeter.Mark();
         break;
@@ -926,6 +925,20 @@ Peer::sendSendMore(uint32_t numMessages)
     StellarMessage m;
     m.type(SEND_MORE);
     m.sendMoreMessage().numMessages = numMessages;
+
+    auto it = mTxsHashesToInhibit.begin();
+    while (m.sendMoreMessage().knownTxns.size() < 1000 &&
+           it != mTxsHashesToInhibit.end())
+    {
+        // No need to send the inhibit message if this peer already told us they
+        // have the tx
+        if (!mPeerKnowsShortHash.exists(*it))
+        {
+            m.sendMoreMessage().knownTxns.emplace_back(*it);
+        }
+        it = mTxsHashesToInhibit.erase(it);
+    }
+
     auto msgPtr = std::make_shared<StellarMessage const>(m);
     sendMessage(msgPtr);
 }
@@ -949,6 +962,11 @@ Peer::recvSendMore(StellarMessage const& msg)
     CLOG_TRACE(Overlay, "Peer {} sent SEND_MORE {}",
                mApp.getConfig().toShortString(getPeerID()),
                msg.sendMoreMessage().numMessages);
+
+    for (auto const& hash : msg.sendMoreMessage().knownTxns)
+    {
+        mPeerKnowsShortHash.put(hash, true);
+    }
 
     // SEND_MORE means we can free some capacity, and dump the next batch of
     // messages onto the writing queue
@@ -1059,25 +1077,47 @@ Peer::maybeSendNextBatch()
         while (!queue.empty() && mOutboundCapacity > 0)
         {
             auto& front = queue.front();
-            sendAuthenticatedMessage(*(front.mMessage));
-            auto& om = mApp.getOverlayManager().getOverlayMetrics();
-            auto& aggregateTimer = front.mMessage->type() == SCP_MESSAGE
-                                       ? om.mOutboundQueueDelaySCP
-                                       : om.mOutboundQueueDelayTxs;
-            auto& peerTimer = front.mMessage->type() == SCP_MESSAGE
-                                  ? mPeerMetrics.mOutboundQueueDelaySCP
-                                  : mPeerMetrics.mOutboundQueueDelayTxs;
-            auto const& diff = mApp.getClock().now() - front.mTimeEmplaced;
-            aggregateTimer.Update(diff);
-            peerTimer.Update(diff);
-            mOutboundCapacity--;
-            if (mOutboundCapacity == 0)
+            bool send = true;
+
+            if (front.mMessage->type() == TRANSACTION)
             {
-                CLOG_DEBUG(Overlay, "No outbound capacity for peer {}",
-                           mApp.getConfig().toShortString(getPeerID()));
-                mNoOutboundCapacity =
-                    std::make_optional<VirtualClock::time_point>(
-                        mApp.getClock().now());
+                auto hash = getShortTxHash(*(front.mMessage), true);
+                if (mPeerKnowsShortHash.exists(hash))
+                {
+                    // peer already knows about the tx
+                    send = false;
+                    mApp.getOverlayManager()
+                        .getOverlayMetrics()
+                        .mTxsInhibited.Mark();
+                }
+                else
+                {
+                    getOverlayMetrics().mSendTransactionMeter.Mark();
+                }
+            }
+
+            if (send)
+            {
+                sendAuthenticatedMessage(*(front.mMessage));
+                auto& om = mApp.getOverlayManager().getOverlayMetrics();
+                auto& aggregateTimer = front.mMessage->type() == SCP_MESSAGE
+                                           ? om.mOutboundQueueDelaySCP
+                                           : om.mOutboundQueueDelayTxs;
+                auto& peerTimer = front.mMessage->type() == SCP_MESSAGE
+                                      ? mPeerMetrics.mOutboundQueueDelaySCP
+                                      : mPeerMetrics.mOutboundQueueDelayTxs;
+                auto const& diff = mApp.getClock().now() - front.mTimeEmplaced;
+                aggregateTimer.Update(diff);
+                peerTimer.Update(diff);
+                mOutboundCapacity--;
+                if (mOutboundCapacity == 0)
+                {
+                    CLOG_DEBUG(Overlay, "No outbound capacity for peer {}",
+                               mApp.getConfig().toShortString(getPeerID()));
+                    mNoOutboundCapacity =
+                        std::make_optional<VirtualClock::time_point>(
+                            mApp.getClock().now());
+                }
             }
             queue.pop_front();
         }
@@ -1306,6 +1346,31 @@ Peer::recvTxSet(StellarMessage const& msg)
 }
 
 void
+Peer::inhibitTransaction(StellarMessage const& msg, Hash const& txHash)
+{
+    ZoneScoped;
+    assert(msg.type() == TRANSACTION);
+    mTxsHashesToInhibit.push_back(getShortTxHash(msg, false));
+}
+
+ShortHash
+Peer::getShortTxHash(StellarMessage const& msg, bool useSendKey)
+{
+    ZoneScoped;
+    auto truncate = [&](Hash const& hash) {
+        ShortHash shortHash;
+        for (int i = 0; i < 8; i++)
+        {
+            shortHash[i] = hash[i];
+        }
+        return shortHash;
+    };
+
+    auto key = useSendKey ? mSendMacKey : mRecvMacKey;
+    return truncate(hmacSha256(key, xdr::xdr_to_opaque(msg)).mac);
+}
+
+void
 Peer::recvTransaction(StellarMessage const& msg)
 {
     ZoneScoped;
@@ -1322,6 +1387,13 @@ Peer::recvTransaction(StellarMessage const& msg)
         // add it to our current set
         // and make sure it is valid
         auto recvRes = mApp.getHerder().recvTransaction(transaction, false);
+
+        if (recvRes == TransactionQueue::AddResult::ADD_STATUS_PENDING)
+        {
+            // Inhibit txs we're seeing for the first time; otherwise, we must
+            // have already sent the inhibition message
+            mApp.getOverlayManager().inhibitTransaction(msg, msgID);
+        }
 
         if (!(recvRes == TransactionQueue::AddResult::ADD_STATUS_PENDING ||
               recvRes == TransactionQueue::AddResult::ADD_STATUS_DUPLICATE))

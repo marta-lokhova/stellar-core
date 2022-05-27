@@ -112,6 +112,8 @@ class OverlayManagerImpl : public OverlayManager
     void removePeer(Peer* peer) override;
     void storeConfigPeers();
     void purgeDeadPeers();
+    void inhibitTransaction(StellarMessage const& msg,
+                            Hash const& txHash) override;
 
     bool acceptAuthenticatedPeer(Peer::pointer peer) override;
     bool isPreferred(Peer* peer) const override;

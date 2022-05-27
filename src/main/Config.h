@@ -250,6 +250,10 @@ class Config : public std::enable_shared_from_this<Config>
     // processes `FLOW_CONTROL_SEND_MORE_BATCH_SIZE` messages
     uint32_t FLOW_CONTROL_SEND_MORE_BATCH_SIZE;
 
+    // Per-connection cache that stores hashes of transactions that the peer
+    // inhibited
+    size_t PEER_KNOWS_TX_CACHE_SIZE;
+
     // A config parameter that allows a node to generate buckets. This should
     // be set to `false` only for testing purposes.
     bool MODE_ENABLES_BUCKETLIST;

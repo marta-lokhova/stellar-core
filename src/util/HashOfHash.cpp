@@ -16,4 +16,12 @@ hash<stellar::uint256>::operator()(stellar::uint256 const& x) const noexcept
 
     return res;
 }
+size_t
+hash<stellar::ShortHash>::operator()(stellar::ShortHash const& x) const noexcept
+{
+    size_t res =
+        stellar::shortHash::computeHash(stellar::ByteSlice(x.data(), 8));
+
+    return res;
+}
 }

@@ -120,6 +120,17 @@ OverlayManagerImpl::PeersList::removePeer(Peer* peer)
     CLOG_WARNING(Overlay, "{}", REPORT_INTERNAL_BUG);
 }
 
+void
+OverlayManagerImpl::inhibitTransaction(StellarMessage const& msg,
+                                       Hash const& txHash)
+{
+    ZoneScoped;
+    for (auto const& peer : getAuthenticatedPeers())
+    {
+        peer.second->inhibitTransaction(msg, txHash);
+    }
+}
+
 bool
 OverlayManagerImpl::PeersList::moveToAuthenticated(Peer::pointer peer)
 {

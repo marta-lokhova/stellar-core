@@ -205,6 +205,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     PEER_FLOOD_READING_CAPACITY = 200;
     ENABLE_OVERLAY_FLOW_CONTROL = true;
     FLOW_CONTROL_SEND_MORE_BATCH_SIZE = 40;
+    PEER_KNOWS_TX_CACHE_SIZE = 50000;
 
     // WORKER_THREADS: setting this too low risks a form of priority inversion
     // where a long-running background task occupies all worker threads and
@@ -935,6 +936,10 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
             else if (item.first == "ENABLE_OVERLAY_FLOW_CONTROL")
             {
                 ENABLE_OVERLAY_FLOW_CONTROL = readBool(item);
+            }
+            else if (item.first == "PEER_KNOWS_TX_CACHE_SIZE")
+            {
+                PEER_KNOWS_TX_CACHE_SIZE = readInt<uint32_t>(item);
             }
             else if (item.first == "PEER_PORT")
             {

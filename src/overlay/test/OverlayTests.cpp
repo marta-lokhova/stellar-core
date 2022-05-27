@@ -22,6 +22,8 @@
 #include "medida/meter.h"
 #include "medida/metrics_registry.h"
 #include "medida/timer.h"
+#include "simulation/Topologies.h"
+#include "util/Logging.h"
 #include <fmt/format.h>
 #include <numeric>
 
@@ -1537,6 +1539,86 @@ TEST_CASE("inbounds nodes can be promoted to ouboundvalid",
         std::chrono::seconds(30), false);
 
     simulation->crankForAtLeast(std::chrono::seconds{3}, true);
+}
+
+// TODO: test all transactions can make it
+TEST_CASE("flow control transaction inhibition", "[overlay][flowcontrol]")
+{
+    auto networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
+
+    auto cfgGen = [&](int i) {
+        auto cfg = getTestConfig(i);
+        // Set flow control parameters to something very small
+        cfg.PEER_FLOOD_READING_CAPACITY = 1;
+        cfg.PEER_READING_CAPACITY = 1;
+        cfg.FLOW_CONTROL_SEND_MORE_BATCH_SIZE = 1;
+        cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 1000;
+        return cfg;
+    };
+
+    auto simulation =
+        Topologies::core(6, 0.75, Simulation::OVER_TCP, networkID, cfgGen);
+    simulation->startAllNodes();
+    auto loadgenNode = simulation->getNodes()[0];
+
+    // Crank for a few ledgers so nodes get connected and become "synced"
+    simulation->crankUntil(
+        [&] { return simulation->haveAllExternalized(2, 1); },
+        3 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
+
+    for (auto const& node : simulation->getNodes())
+    {
+        REQUIRE(node->getOverlayManager().getAuthenticatedPeersCount() == 5);
+    }
+
+    // Generate a bit of load to flood transactions, make sure nodes can close
+    // ledgers properly
+    auto& loadGen = loadgenNode->getLoadGenerator();
+    loadGen.generateLoad(LoadGenMode::CREATE, /* nAccounts */ 1000, 0, 0,
+                         /*txRate*/ 20,
+                         /*batchSize*/ 1, std::chrono::seconds(0), 0);
+
+    auto& loadGenDone = loadgenNode->getMetrics().NewMeter(
+        {"loadgen", "run", "complete"}, "run");
+    auto currLoadGenCount = loadGenDone.count();
+
+    simulation->crankUntil(
+        [&]() { return loadGenDone.count() > currLoadGenCount; },
+        15 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
+
+    for (auto const& node : simulation->getNodes())
+    {
+        CLOG_INFO(
+            Overlay, "Node {} inhibited {} transactions, sent {}",
+            KeyUtils::toShortString(node->getConfig().NODE_SEED.getPublicKey()),
+            node->getOverlayManager().getOverlayMetrics().mTxsInhibited.count(),
+            node->getOverlayManager()
+                .getOverlayMetrics()
+                .mSendTransactionMeter.count());
+        for (auto const& peer :
+             node->getOverlayManager().getAuthenticatedPeers())
+        {
+            CLOG_INFO(Overlay, "Transaction hash cache size: {}",
+                      peer.second->mPeerKnowsShortHash.size());
+        }
+        if (node != loadgenNode)
+        {
+            REQUIRE(node->getOverlayManager()
+                        .getOverlayMetrics()
+                        .mTxsInhibited.count() > 0);
+            REQUIRE(node->getOverlayManager()
+                        .getOverlayMetrics()
+                        .mRecvTransactionTimer.count() > 0);
+        }
+
+        auto& mm = loadgenNode->getMetrics().NewMeter(
+            {"loadgen", "txn", "rejected"}, "txn");
+        auto& applied = loadgenNode->getMetrics().NewTimer(
+            {"ledger", "transaction", "apply"});
+
+        REQUIRE(mm.count() == 0);
+        REQUIRE(applied.count() == 1000);
+    }
 }
 
 TEST_CASE("overlay flow control", "[overlay][flowcontrol]")

@@ -93,5 +93,8 @@ struct OverlayMetrics
     medida::Meter& mDuplicateFloodBytesRecv;
     medida::Meter& mUniqueFetchBytesRecv;
     medida::Meter& mDuplicateFetchBytesRecv;
+
+    // How many txs got dropped due to filter
+    medida::Meter& mTxsInhibited;
 };
 }

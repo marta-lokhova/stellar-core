@@ -10,7 +10,9 @@
 #include "medida/timer.h"
 #include "overlay/PeerBareAddress.h"
 #include "overlay/StellarXDR.h"
+#include "util/HashOfHash.h"
 #include "util/NonCopyable.h"
+#include "util/RandomEvictionCache.h"
 #include "util/Timer.h"
 #include "xdrpp/message.h"
 
@@ -55,6 +57,12 @@ class Peer : public std::enable_shared_from_this<Peer>,
 {
 
   public:
+    // clist of short hashes core wants to inhibit (for this peer)
+    std::deque<ShortHash> mTxsHashesToInhibit;
+
+    // this peer knows about these short tx hashes (via SEND_MORE)
+    RandomEvictionCache<ShortHash, bool> mPeerKnowsShortHash;
+
     static constexpr uint32_t FIRST_VERSION_SUPPORTING_FLOW_CONTROL = 20;
     static constexpr std::chrono::seconds PEER_SEND_MODE_IDLE_TIMEOUT =
         std::chrono::seconds(60);
@@ -68,6 +76,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
         std::chrono::seconds(300);
 
     typedef std::shared_ptr<Peer> pointer;
+
+    void inhibitTransaction(StellarMessage const& msg, Hash const& txHash);
 
     enum PeerState
     {
@@ -153,6 +163,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
 
     Json::Value getFlowControlJsonInfo(bool compact) const;
     Json::Value getJsonInfo(bool compact) const;
+
+    ShortHash getShortTxHash(StellarMessage const& msg, bool useSendKey);
 
   protected:
     Application& mApp;
