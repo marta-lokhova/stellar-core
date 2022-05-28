@@ -125,9 +125,13 @@ OverlayManagerImpl::inhibitTransaction(StellarMessage const& msg,
                                        Hash const& txHash)
 {
     ZoneScoped;
+    auto peersKnow = getPeersKnows(txHash);
     for (auto const& peer : getAuthenticatedPeers())
     {
-        peer.second->inhibitTransaction(msg, txHash);
+        if (peersKnow.find(peer.second) == peersKnow.end())
+        {
+            peer.second->inhibitTransaction(msg, txHash);
+        }
     }
 }
 

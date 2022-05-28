@@ -1071,6 +1071,8 @@ Peer::maybeSendNextBatch()
     releaseAssert(flowControlEnabled() == Peer::FlowControlState::ENABLED);
 
     auto oldOutboundCapacity = mOutboundCapacity;
+    auto& om = getOverlayMetrics();
+
     for (int i = 0; i < mOutboundQueues.size(); i++)
     {
         auto& queue = mOutboundQueues[i];
@@ -1086,20 +1088,17 @@ Peer::maybeSendNextBatch()
                 {
                     // peer already knows about the tx
                     send = false;
-                    mApp.getOverlayManager()
-                        .getOverlayMetrics()
-                        .mTxsInhibited.Mark();
+                    om.mTxsInhibited.Mark();
                 }
                 else
                 {
-                    getOverlayMetrics().mSendTransactionMeter.Mark();
+                    om.mSendTransactionMeter.Mark();
                 }
             }
 
             if (send)
             {
                 sendAuthenticatedMessage(*(front.mMessage));
-                auto& om = mApp.getOverlayManager().getOverlayMetrics();
                 auto& aggregateTimer = front.mMessage->type() == SCP_MESSAGE
                                            ? om.mOutboundQueueDelaySCP
                                            : om.mOutboundQueueDelayTxs;

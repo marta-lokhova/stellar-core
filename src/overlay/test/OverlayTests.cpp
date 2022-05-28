@@ -1611,12 +1611,12 @@ TEST_CASE("flow control transaction inhibition", "[overlay][flowcontrol]")
                         .mRecvTransactionTimer.count() > 0);
         }
 
-        auto& mm = loadgenNode->getMetrics().NewMeter(
+        auto& rejected = loadgenNode->getMetrics().NewMeter(
             {"loadgen", "txn", "rejected"}, "txn");
         auto& applied = loadgenNode->getMetrics().NewTimer(
             {"ledger", "transaction", "apply"});
 
-        REQUIRE(mm.count() == 0);
+        REQUIRE(rejected.count() == 0);
         REQUIRE(applied.count() == 1000);
     }
 }
