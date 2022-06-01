@@ -1083,6 +1083,7 @@ Peer::maybeSendNextBatch()
 
             if (front.mMessage->type() == TRANSACTION)
             {
+                // TODO: can use hash cache here
                 auto hash = getShortTxHash(*(front.mMessage), true);
                 if (mPeerKnowsShortHash.exists(hash))
                 {
@@ -1360,6 +1361,7 @@ Peer::getShortTxHash(StellarMessage const& msg, bool useSendKey)
         ShortHash shortHash;
         for (int i = 0; i < 8; i++)
         {
+            // TODO: avoid copying
             shortHash[i] = hash[i];
         }
         return shortHash;
