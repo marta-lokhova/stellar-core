@@ -571,7 +571,8 @@ Peer::msgSummary(StellarMessage const& msg)
 }
 
 void
-Peer::sendMessage(std::shared_ptr<StellarMessage const> msg, bool log)
+Peer::sendMessage(std::shared_ptr<StellarMessage const> msg, bool log,
+                  std::optional<Hash> txHash)
 {
     ZoneScoped;
     CLOG_TRACE(Overlay, "send: {} to : {}", msgSummary(*msg),
@@ -652,7 +653,7 @@ Peer::sendMessage(std::shared_ptr<StellarMessage const> msg, bool log)
         }
         else if (flowControl == Peer::FlowControlState::ENABLED)
         {
-            addMsgAndMaybeTrimQueue(msg);
+            addMsgAndMaybeTrimQueue(msg, txHash);
             maybeSendNextBatch();
             return;
         }
@@ -1000,14 +1001,16 @@ Peer::flowControlEnabled() const
 }
 
 void
-Peer::addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg)
+Peer::addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg,
+                              std::optional<Hash> txHash)
 {
     ZoneScoped;
 
     releaseAssert(msg);
     auto type = msg->type();
     auto& queue = type == SCP_MESSAGE ? mOutboundQueues[0] : mOutboundQueues[1];
-    queue.emplace_back(QueuedOutboundMessage{msg, mApp.getClock().now()});
+    queue.emplace_back(
+        QueuedOutboundMessage{msg, mApp.getClock().now(), txHash});
 
     size_t dropped = 0;
 
@@ -1083,9 +1086,8 @@ Peer::maybeSendNextBatch()
 
             if (front.mMessage->type() == TRANSACTION)
             {
-                // TODO: can use hash cache here
-                auto hash = getShortTxHash(*(front.mMessage), true);
-                if (mPeerKnowsShortHash.exists(hash))
+                assert(front.mTxHash.has_value());
+                if (mPeerKnowsShortHash.exists(*(front.mTxHash)))
                 {
                     // peer already knows about the tx
                     send = false;
@@ -1350,25 +1352,7 @@ Peer::inhibitTransaction(StellarMessage const& msg, Hash const& txHash)
 {
     ZoneScoped;
     assert(msg.type() == TRANSACTION);
-    mTxsHashesToInhibit.push_back(getShortTxHash(msg, false));
-}
-
-ShortHash
-Peer::getShortTxHash(StellarMessage const& msg, bool useSendKey)
-{
-    ZoneScoped;
-    auto truncate = [&](Hash const& hash) {
-        ShortHash shortHash;
-        for (int i = 0; i < 8; i++)
-        {
-            // TODO: avoid copying
-            shortHash[i] = hash[i];
-        }
-        return shortHash;
-    };
-
-    auto key = useSendKey ? mSendMacKey : mRecvMacKey;
-    return truncate(hmacSha256(key, xdr::xdr_to_opaque(msg)).mac);
+    mTxsHashesToInhibit.push_back(txHash);
 }
 
 void
@@ -1393,7 +1377,8 @@ Peer::recvTransaction(StellarMessage const& msg)
         {
             // Inhibit txs we're seeing for the first time; otherwise, we must
             // have already sent the inhibition message
-            mApp.getOverlayManager().inhibitTransaction(msg, msgID);
+            mApp.getOverlayManager().inhibitTransaction(
+                msg, transaction->getFullHash());
         }
 
         if (!(recvRes == TransactionQueue::AddResult::ADD_STATUS_PENDING ||

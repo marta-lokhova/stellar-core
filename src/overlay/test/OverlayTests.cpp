@@ -472,7 +472,7 @@ TEST_CASE("outbound queue filtering", "[overlay][connections]")
             env.statement.slotIndex =
                 lcl - node->getConfig().MAX_SLOTS_TO_REMEMBER;
             constructSCPMsg(env);
-            peer->addMsgAndMaybeTrimQueue(constructSCPMsg(env));
+            peer->addMsgAndMaybeTrimQueue(constructSCPMsg(env), std::nullopt);
         }
         REQUIRE(scpQueue.empty());
     }
@@ -484,7 +484,7 @@ TEST_CASE("outbound queue filtering", "[overlay][connections]")
             StellarMessage msg;
             msg.type(TRANSACTION);
             peer->addMsgAndMaybeTrimQueue(
-                std::make_shared<StellarMessage const>(msg));
+                std::make_shared<StellarMessage const>(msg), std::nullopt);
         }
 
         REQUIRE(txQueue.size() == limit);
@@ -495,7 +495,8 @@ TEST_CASE("outbound queue filtering", "[overlay][connections]")
         {
             for (auto& env : envs)
             {
-                peer->addMsgAndMaybeTrimQueue(constructSCPMsg(env));
+                peer->addMsgAndMaybeTrimQueue(constructSCPMsg(env),
+                                              std::nullopt);
             }
 
             // Only latest SCP messages, nothing is trimmed
@@ -513,9 +514,11 @@ TEST_CASE("outbound queue filtering", "[overlay][connections]")
                         auto envCopy = env;
                         envCopy.statement.pledges.type(SCP_ST_PREPARE);
 
-                        peer->addMsgAndMaybeTrimQueue(constructSCPMsg(envCopy));
+                        peer->addMsgAndMaybeTrimQueue(constructSCPMsg(envCopy),
+                                                      std::nullopt);
                     }
-                    peer->addMsgAndMaybeTrimQueue(constructSCPMsg(env));
+                    peer->addMsgAndMaybeTrimQueue(constructSCPMsg(env),
+                                                  std::nullopt);
                 }
             };
             SECTION("trim prepare, keep nomination")

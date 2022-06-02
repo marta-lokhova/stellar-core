@@ -25,7 +25,7 @@ struct Error
 struct SendMore
 {
     uint32 numMessages;
-    ShortHash knownTxns<1000>;
+    Hash knownTxns<1000>;
 };
 
 struct AuthCert

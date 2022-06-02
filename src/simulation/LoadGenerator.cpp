@@ -760,7 +760,8 @@ LoadGenerator::execute(TransactionFramePtr& txf, LoadGenMode mode,
     }
     else
     {
-        mApp.getOverlayManager().broadcastMessage(msg);
+        auto txHashOptional = std::make_optional<Hash>(txf->getFullHash());
+        mApp.getOverlayManager().broadcastMessage(msg, false, txHashOptional);
     }
 
     return status;

@@ -57,11 +57,12 @@ class Peer : public std::enable_shared_from_this<Peer>,
 {
 
   public:
-    // clist of short hashes core wants to inhibit (for this peer)
-    std::deque<ShortHash> mTxsHashesToInhibit;
+    // list of short hashes core wants to inhibit (for this peer)
+    // SHA-256 of tx contents
+    std::deque<Hash> mTxsHashesToInhibit;
 
     // this peer knows about these short tx hashes (via SEND_MORE)
-    RandomEvictionCache<ShortHash, bool> mPeerKnowsShortHash;
+    RandomEvictionCache<Hash, bool> mPeerKnowsShortHash;
 
     static constexpr uint32_t FIRST_VERSION_SUPPORTING_FLOW_CONTROL = 20;
     static constexpr std::chrono::seconds PEER_SEND_MODE_IDLE_TIMEOUT =
@@ -149,6 +150,7 @@ class Peer : public std::enable_shared_from_this<Peer>,
     {
         std::shared_ptr<StellarMessage const> mMessage;
         VirtualClock::time_point mTimeEmplaced;
+        std::optional<Hash> mTxHash;
     };
 
     // Does this peer want flow control enabled
@@ -163,8 +165,6 @@ class Peer : public std::enable_shared_from_this<Peer>,
 
     Json::Value getFlowControlJsonInfo(bool compact) const;
     Json::Value getJsonInfo(bool compact) const;
-
-    ShortHash getShortTxHash(StellarMessage const& msg, bool useSendKey);
 
   protected:
     Application& mApp;
@@ -199,7 +199,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
     std::array<std::deque<QueuedOutboundMessage>, 2> mOutboundQueues;
 
     // This methods drops obsolete load from the outbound queue
-    void addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg);
+    void addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg,
+                                 std::optional<Hash> txHash);
 
     // How many flood messages have we received and processed since sending
     // SEND_MORE to this peer
@@ -330,8 +331,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
     void sendErrorAndDrop(ErrorCode error, std::string const& message,
                           DropMode dropMode);
 
-    void sendMessage(std::shared_ptr<StellarMessage const> msg,
-                     bool log = true);
+    void sendMessage(std::shared_ptr<StellarMessage const> msg, bool log = true,
+                     std::optional<Hash> txHash = std::nullopt);
 
     PeerRole
     getRole() const
