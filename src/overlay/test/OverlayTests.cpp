@@ -324,9 +324,10 @@ TEST_CASE("drop idle flow-controlled peers", "[overlay][flowcontrol]")
     StellarMessage msg;
     msg.type(TRANSACTION);
     REQUIRE(conn.getAcceptor()->getOutboundCapacity() == 1);
+    Hash hash;
     // Send outbound message and start the timer
     conn.getAcceptor()->sendMessage(std::make_shared<StellarMessage>(msg),
-                                    false);
+                                    false, std::make_optional<Hash>(hash));
     REQUIRE(conn.getAcceptor()->getOutboundCapacity() == 0);
 
     testutil::crankFor(clock, Peer::PEER_SEND_MODE_IDLE_TIMEOUT +

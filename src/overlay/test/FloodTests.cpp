@@ -154,7 +154,8 @@ TEST_CASE("Flooding", "[flood][overlay][acceptance]")
             auto msg = tx1->toStellarMessage();
             auto res = inApp->getHerder().recvTransaction(tx1, false);
             REQUIRE(res == TransactionQueue::AddResult::ADD_STATUS_PENDING);
-            inApp->getOverlayManager().broadcastMessage(msg);
+            auto hash = std::make_optional<Hash>(tx1->getFullHash());
+            inApp->getOverlayManager().broadcastMessage(msg, false, hash);
         };
 
         auto ackedTransactions = [&](std::shared_ptr<Application> app) {

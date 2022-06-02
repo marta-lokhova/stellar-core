@@ -58,6 +58,7 @@ TransactionFrame::getFullHash() const
 {
     if (isZero(mFullHash))
     {
+        ZoneNamedN(hmacZone, "hash TX", true);
         mFullHash = xdrSha256(mEnvelope);
     }
     return (mFullHash);

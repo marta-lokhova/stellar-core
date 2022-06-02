@@ -261,7 +261,8 @@ class OverlayManagerTests
         auto c = TestAccount{*app, getAccount("c")};
         auto d = TestAccount{*app, getAccount("d")};
 
-        StellarMessage AtoB = a.tx({payment(b, 10)})->toStellarMessage();
+        auto tx = a.tx({payment(b, 10)});
+        StellarMessage AtoB = tx->toStellarMessage();
         auto i = 0;
         for (auto p : pm.mOutboundPeers.mAuthenticated)
         {
@@ -270,23 +271,34 @@ class OverlayManagerTests
                 pm.recvFloodedMsg(AtoB, p.second);
             }
         }
-        pm.broadcastMessage(AtoB);
+
+        auto hash = std::make_optional<Hash>(tx->getFullHash());
+
+        pm.broadcastMessage(AtoB, false, hash);
         crank(10);
         std::vector<int> expected{1, 1, 0, 1, 1};
         REQUIRE(sentCounts(pm) == expected);
-        pm.broadcastMessage(AtoB);
+        pm.broadcastMessage(AtoB, false, hash);
         crank(10);
         REQUIRE(sentCounts(pm) == expected);
-        StellarMessage CtoD = c.tx({payment(d, 10)})->toStellarMessage();
-        pm.broadcastMessage(CtoD);
+
+        auto tx2 = c.tx({payment(d, 10)});
+        StellarMessage CtoD = tx2->toStellarMessage();
+        auto hash2 = std::make_optional<Hash>(tx2->getFullHash());
+
+        pm.broadcastMessage(CtoD, false, hash2);
         crank(10);
         std::vector<int> expectedFinal{2, 2, 1, 2, 2};
         REQUIRE(sentCounts(pm) == expectedFinal);
 
         // Test that we updating a flood record actually prevents re-broadcast
-        StellarMessage AtoC = a.tx({payment(c, 10)})->toStellarMessage();
+        auto tx3 = a.tx({payment(c, 10)});
+
+        StellarMessage AtoC = tx3->toStellarMessage();
+        auto hash3 = tx3->getFullHash();
+
         pm.updateFloodRecord(AtoB, AtoC);
-        pm.broadcastMessage(AtoC);
+        pm.broadcastMessage(AtoC, false, hash3);
         crank(10);
         REQUIRE(sentCounts(pm) == expectedFinal);
     }
