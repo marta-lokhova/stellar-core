@@ -51,6 +51,8 @@ static const std::unordered_set<std::string> TESTING_ONLY_OPTIONS = {
     "OP_APPLY_SLEEP_TIME_WEIGHT_FOR_TESTING",
     "LOADGEN_OP_COUNT_FOR_TESTING",
     "LOADGEN_OP_COUNT_DISTRIBUTION_FOR_TESTING",
+    "LOADGEN_OP_SIZE_FOR_TESTING",
+    "LOADGEN_OP_SIZE_DISTRIBUTION_FOR_TESTING",
     "CATCHUP_WAIT_MERGES_TX_APPLY_FOR_TESTING",
     "ARTIFICIALLY_DELAY_BUCKET_APPLICATION_FOR_TESTING",
     "ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING"};
@@ -117,6 +119,8 @@ Config::Config() : NODE_SEED(SecretKey::random())
     OP_APPLY_SLEEP_TIME_WEIGHT_FOR_TESTING = std::vector<uint32>();
     LOADGEN_OP_COUNT_FOR_TESTING = {};
     LOADGEN_OP_COUNT_DISTRIBUTION_FOR_TESTING = {};
+    LOADGEN_OP_SIZE_FOR_TESTING = {};
+    LOADGEN_OP_SIZE_DISTRIBUTION_FOR_TESTING = {};
     CATCHUP_WAIT_MERGES_TX_APPLY_FOR_TESTING = false;
     ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING =
         std::chrono::microseconds::zero();
@@ -819,6 +823,20 @@ Config::verifyLoadGenOpCountForTestingConfigs()
                                     "must have the exact same size.");
     }
 
+    if (LOADGEN_OP_SIZE_FOR_TESTING.size() !=
+        LOADGEN_OP_SIZE_DISTRIBUTION_FOR_TESTING.size())
+    {
+        throw std::invalid_argument("LOADGEN_OP_SIZE_FOR_TESTING and "
+                                    "LOADGEN_OP_SIZE_DISTRIBUTION_FOR_TESTING "
+                                    "must be defined together and "
+                                    "must have the exact same size.");
+    }
+
+    if (LOADGEN_OP_SIZE_FOR_TESTING.empty())
+    {
+        return;
+    }
+
     if (LOADGEN_OP_COUNT_FOR_TESTING.empty())
     {
         return;
@@ -1341,6 +1359,16 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
             else if (item.first == "LOADGEN_OP_COUNT_DISTRIBUTION_FOR_TESTING")
             {
                 LOADGEN_OP_COUNT_DISTRIBUTION_FOR_TESTING =
+                    readIntArray<uint32>(item);
+            }
+            else if (item.first == "LOADGEN_OP_SIZE_FOR_TESTING")
+            {
+                LOADGEN_OP_SIZE_FOR_TESTING =
+                    readIntArray<unsigned short>(item);
+            }
+            else if (item.first == "LOADGEN_OP_SIZE_DISTRIBUTION_FOR_TESTING")
+            {
+                LOADGEN_OP_SIZE_DISTRIBUTION_FOR_TESTING =
                     readIntArray<uint32>(item);
             }
             else if (item.first == "CATCHUP_WAIT_MERGES_TX_APPLY_FOR_TESTING")

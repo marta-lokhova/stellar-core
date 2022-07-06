@@ -554,7 +554,7 @@ LoadGenerator::paymentTransaction(uint32_t numAccounts, uint32_t offset,
     std::tie(from, to) =
         pickAccountPair(numAccounts, offset, ledgerNum, sourceAccount);
     vector<Operation> paymentOps = {
-        txtest::payment(to->getPublicKey(), amount)};
+        txtest::payment(to->getPublicKey(), amount, mApp)};
     return std::make_pair(from, createTransactionFramePtr(from, paymentOps,
                                                           LoadGenMode::PAY,
                                                           maxGeneratedFeeRate));
@@ -819,9 +819,8 @@ LoadGenerator::execute(TransactionFramePtr& txf, LoadGenMode mode,
     auto status = mApp.getHerder().recvTransaction(txf, true);
     if (status != TransactionQueue::AddResult::ADD_STATUS_PENDING)
     {
-        CLOG_INFO(LoadGen, "tx rejected '{}': {} ===> {}",
+        CLOG_INFO(LoadGen, "tx rejected '{}': ===> {}",
                   TX_STATUS_STRING[static_cast<int>(status)],
-                  xdr_to_string(txf->getEnvelope(), "TransactionEnvelope"),
                   xdr_to_string(txf->getResult(), "TransactionResult"));
         if (status == TransactionQueue::AddResult::ADD_STATUS_ERROR)
         {
