@@ -542,7 +542,7 @@ LoadGenerator::paymentTransaction(uint32_t numAccounts, uint32_t offset,
     std::tie(from, to) =
         pickAccountPair(numAccounts, offset, ledgerNum, sourceAccount);
     vector<Operation> paymentOps = {
-        txtest::payment(to->getPublicKey(), amount)};
+        txtest::payment(to->getPublicKey(), amount, mApp)};
     return std::make_pair(
         from, createTransactionFramePtr(from, paymentOps, LoadGenMode::PAY));
 }
