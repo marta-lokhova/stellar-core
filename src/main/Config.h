@@ -275,6 +275,8 @@ class Config : public std::enable_shared_from_this<Config>
     // it is halted.
     bool MODE_DOES_CATCHUP;
 
+    bool MODE_DOES_HMAC;
+
     // A config parameter that controls whether the application starts the
     // overlay on startup, or waits for a later startup after performing some
     // other pre-overlay-start operations (eg. offline catchup).

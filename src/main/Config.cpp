@@ -113,6 +113,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     MODE_STORES_HISTORY_MISC = true;
     MODE_STORES_HISTORY_LEDGERHEADERS = true;
     MODE_DOES_CATCHUP = true;
+    MODE_DOES_HMAC = true;
     MODE_AUTO_STARTS_OVERLAY = true;
     OP_APPLY_SLEEP_TIME_DURATION_FOR_TESTING =
         std::vector<std::chrono::microseconds>();
@@ -1041,6 +1042,10 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
             {
                 ARTIFICIALLY_DELAY_BUCKET_APPLICATION_FOR_TESTING =
                     std::chrono::seconds(readInt<uint32_t>(item));
+            }
+            else if (item.first == "MODE_DOES_HMAC")
+            {
+                MODE_DOES_HMAC = readBool(item);
             }
             else if (item.first == "ALLOW_LOCALHOST_FOR_TESTING")
             {

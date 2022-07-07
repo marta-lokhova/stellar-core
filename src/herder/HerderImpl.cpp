@@ -1581,6 +1581,13 @@ void
 HerderImpl::persistSCPState(uint64 slot)
 {
     ZoneScoped;
+
+    // This is incorrect, but just to see performance without this function
+    if (!mApp.getConfig().MODE_DOES_HMAC)
+    {
+        return;
+    }
+
     if (slot < mLastSlotSaved)
     {
         return;
@@ -1637,9 +1644,17 @@ HerderImpl::persistSCPState(uint64 slot)
             it.second->toXDR(latestTxSets.back().txSet());
         }
     }
-    latestSCPData = xdr::xdr_to_opaque(scpState);
 
-    std::string encodedScpState = decoder::encode_b64(latestSCPData);
+    {
+        ZoneNamedN(xdrToOpaque, "xdr to opaque", true);
+        latestSCPData = xdr::xdr_to_opaque(scpState);
+    }
+
+    std::string encodedScpState;
+    {
+        ZoneNamedN(encoded, "encode b64", true);
+        encodedScpState = decoder::encode_b64(latestSCPData);
+    }
 
     mApp.getPersistentState().setSCPStateForSlot(slot, encodedScpState);
 }

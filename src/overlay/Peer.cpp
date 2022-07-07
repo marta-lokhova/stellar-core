@@ -670,7 +670,8 @@ Peer::sendAuthenticatedMessage(StellarMessage const& msg)
 {
     AuthenticatedMessage amsg;
     amsg.v0().message = msg;
-    if (msg.type() != HELLO && msg.type() != ERROR_MSG)
+    if (msg.type() != HELLO && msg.type() != ERROR_MSG &&
+        mApp.getConfig().MODE_DOES_HMAC)
     {
         ZoneNamedN(hmacZone, "message HMAC", true);
         amsg.v0().sequence = mSendMacSeq;
@@ -749,7 +750,8 @@ Peer::recvMessage(AuthenticatedMessage const& msg)
         return;
     }
 
-    if (mState >= GOT_HELLO && msg.v0().message.type() != ERROR_MSG)
+    if (mState >= GOT_HELLO && msg.v0().message.type() != ERROR_MSG &&
+        mApp.getConfig().MODE_DOES_HMAC)
     {
         if (msg.v0().sequence != mRecvMacSeq)
         {
