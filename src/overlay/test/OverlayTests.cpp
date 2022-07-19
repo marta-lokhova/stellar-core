@@ -224,7 +224,7 @@ TEST_CASE("drop peers that dont respect capacity", "[overlay][flowcontrol]")
     cfg1.FLOW_CONTROL_SEND_MORE_BATCH_SIZE = 1;
     // Set PEER_READING_CAPACITY to something higher so that the initiator will
     // read both messages right away and detect capacity violation
-    cfg1.PEER_READING_CAPACITY = 2;
+    cfg1.PEER_READING_CAPACITY = MAX_MESSAGE_SIZE * 2;
 
     auto app1 = createTestApplication(clock, cfg1);
     auto app2 = createTestApplication(clock, cfg2);
@@ -265,7 +265,7 @@ TEST_CASE("drop idle flow-controlled peers", "[overlay][flowcontrol]")
     cfg1.PEER_FLOOD_READING_CAPACITY = 1;
     cfg1.PEER_READING_CAPACITY = 1;
     // Incorrectly set batch size, so that the node does not send flood requests
-    cfg1.FLOW_CONTROL_SEND_MORE_BATCH_SIZE = 2;
+    cfg1.FLOW_CONTROL_SEND_MORE_BATCH_SIZE = MAX_MESSAGE_SIZE + 1;
 
     auto app1 = createTestApplication(clock, cfg1);
     auto app2 = createTestApplication(clock, cfg2);
@@ -286,7 +286,7 @@ TEST_CASE("drop idle flow-controlled peers", "[overlay][flowcontrol]")
     // Send outbound message and start the timer
     conn.getAcceptor()->sendMessage(std::make_shared<StellarMessage>(msg),
                                     false);
-    REQUIRE(conn.getAcceptor()->getOutboundCapacity() == 0);
+    REQUIRE(conn.getAcceptor()->getOutboundCapacity() <= 0);
 
     testutil::crankFor(clock, Peer::PEER_SEND_MODE_IDLE_TIMEOUT +
                                   std::chrono::seconds(5));
@@ -321,7 +321,7 @@ TEST_CASE("drop peers that overflow capacity", "[overlay][flowcontrol]")
 
     // Set outbound capacity close to max on initiator
     auto& cap = conn.getInitiator()->getOutboundCapacity();
-    cap = UINT64_MAX - 1;
+    cap = INT64_MAX - 1;
 
     // Acceptor sends request for more that overflows capacity
     conn.getAcceptor()->sendSendMore(2);
@@ -1550,6 +1550,7 @@ TEST_CASE("overlay flow control", "[overlay][flowcontrol]")
                              /*txRate*/ 1,
                              /*batchSize*/ 1, std::chrono::seconds(0), 0);
 
+
         auto& loadGenDone =
             node->getMetrics().NewMeter({"loadgen", "run", "complete"}, "run");
         auto currLoadGenCount = loadGenDone.count();
@@ -1557,6 +1558,15 @@ TEST_CASE("overlay flow control", "[overlay][flowcontrol]")
         simulation->crankUntil(
             [&]() { return loadGenDone.count() > currLoadGenCount; },
             15 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
+
+        currLoadGenCount = loadGenDone.count();
+
+        loadGen.generateLoad(LoadGenMode::PAY, /* nAccounts */ 10, 0, 1000,
+    /*txRate*/ 5,  /*batchSize*/ 1, std::chrono::seconds(0), 0);
+
+        simulation->crankUntil(
+            [&]() { return loadGenDone.count() > currLoadGenCount; },
+            100 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
     }
     SECTION("one peer disables flow control")
     {

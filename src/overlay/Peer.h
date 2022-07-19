@@ -168,18 +168,21 @@ class Peer : public std::enable_shared_from_this<Peer>,
     {
         std::weak_ptr<Peer> mWeakPeer;
         StellarMessage mMsg;
+        size_t mBytes;
 
       public:
-        MsgCapacityTracker(std::weak_ptr<Peer> peer, StellarMessage const& msg);
+        MsgCapacityTracker(std::weak_ptr<Peer> peer, StellarMessage const& msg,
+                           size_t bytes);
         ~MsgCapacityTracker();
         StellarMessage const& getMessage();
         std::weak_ptr<Peer> getPeer();
+        size_t getSize() const;
     };
 
     struct ReadingCapacity
     {
-        uint64_t mFloodCapacity;
-        uint64_t mTotalCapacity;
+        int64_t mFloodCapacity;
+        int64_t mTotalCapacity;
     };
 
     // Outbound queues indexes by priority
@@ -195,7 +198,7 @@ class Peer : public std::enable_shared_from_this<Peer>,
     uint64_t mFloodMsgsProcessed{0};
 
     // How many flood messages can we send to this peer
-    uint64_t mOutboundCapacity{0};
+    int64_t mOutboundCapacity{0};
 
     // Is this peer currently throttled due to lack of capacity
     bool mIsPeerThrottled{false};
@@ -235,8 +238,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
 
     bool shouldAbort() const;
     void recvRawMessage(StellarMessage const& msg);
-    void recvMessage(StellarMessage const& msg);
-    void recvMessage(AuthenticatedMessage const& msg);
+    void recvMessage(StellarMessage const& msg, size_t bytes);
+    void recvMessage(AuthenticatedMessage const& msg, size_t bytes);
     void recvMessage(xdr::msg_ptr const& xdrBytes);
 
     virtual void recvError(StellarMessage const& msg);
@@ -296,10 +299,10 @@ class Peer : public std::enable_shared_from_this<Peer>,
     // helper method to acknownledge that some bytes were received
     void receivedBytes(size_t byteCount, bool gotFullMessage);
 
-    void sendAuthenticatedMessage(StellarMessage const& msg);
+    size_t sendAuthenticatedMessage(StellarMessage const& msg);
 
-    void beginMesssageProcessing(StellarMessage const& msg);
-    void endMessageProcessing(StellarMessage const& msg);
+    void beginMesssageProcessing(StellarMessage const& msg, size_t bytes);
+    void endMessageProcessing(StellarMessage const& msg, size_t bytes);
 
     void maybeSendNextBatch();
 

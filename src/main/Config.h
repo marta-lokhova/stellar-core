@@ -238,15 +238,15 @@ class Config : public std::enable_shared_from_this<Config>
     // core can process simultaneously. If core is at capacity, it temporarily
     // stops reading from a peer until it completes processing of at least one
     // in-flight message
-    uint32_t PEER_READING_CAPACITY;
+    int32_t PEER_READING_CAPACITY;
 
     // A config parameter that controls how many flood messages (tx or SCP) from
     // a particular peer core can process simultaneously
-    uint32_t PEER_FLOOD_READING_CAPACITY;
+    int32_t PEER_FLOOD_READING_CAPACITY;
 
     // When flow control is enabled, peer asks for more data every time it
     // processes `FLOW_CONTROL_SEND_MORE_BATCH_SIZE` messages
-    uint32_t FLOW_CONTROL_SEND_MORE_BATCH_SIZE;
+    int32_t FLOW_CONTROL_SEND_MORE_BATCH_SIZE;
 
     // A config parameter that allows a node to generate buckets. This should
     // be set to `false` only for testing purposes.

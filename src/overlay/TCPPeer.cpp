@@ -676,7 +676,7 @@ TCPPeer::recvMessage()
         AuthenticatedMessage am;
         xdr::xdr_argpack_archive(g, am);
 
-        Peer::recvMessage(am);
+        Peer::recvMessage(am, mIncomingBody.size() + mIncomingHeader.size());
     }
     catch (xdr::xdr_runtime_error& e)
     {
@@ -706,8 +706,9 @@ TCPPeer::drop(std::string const& reason, DropDirection dropDirection,
         isFlowControlled() ? "flow-controlled" : "not flow-controlled";
     if (mState != GOT_AUTH)
     {
-        CLOG_DEBUG(Overlay, "TCPPeer::drop {} {} in state {} we called:{}",
-                   connectionType, toString(), mState, mRole);
+        CLOG_DEBUG(Overlay,
+                   "TCPPeer::drop {} {} in state {} we called:{}, reason:{}",
+                   connectionType, toString(), mState, mRole, reason);
     }
     else if (dropDirection == Peer::DropDirection::WE_DROPPED_REMOTE)
     {

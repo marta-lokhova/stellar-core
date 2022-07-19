@@ -489,8 +489,9 @@ Simulation::haveAllExternalized(uint32 num, uint32 maxSpread)
     {
         auto app = it->second.mApp;
         auto n = app->getLedgerManager().getLastClosedLedgerNum();
-        LOG_DEBUG(DEFAULT_LOG, "{} @ ledger#: {}", app->getConfig().PEER_PORT,
-                  n);
+        // LOG_DEBUG(DEFAULT_LOG, "{} @ ledger#: {}",
+        // app->getConfig().PEER_PORT,
+        //   n);
 
         if (n < min)
             min = n;

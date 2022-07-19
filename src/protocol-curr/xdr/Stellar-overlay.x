@@ -24,7 +24,7 @@ struct Error
 
 struct SendMore
 {
-    uint32 numMessages;
+    uint32 numBytes;
 };
 
 struct AuthCert

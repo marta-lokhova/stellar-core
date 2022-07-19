@@ -118,7 +118,7 @@ class LoopbackPeer : public Peer
         return mOutboundQueues;
     }
 
-    uint64_t&
+    int64_t&
     getOutboundCapacity()
     {
         return mOutboundCapacity;
