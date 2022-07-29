@@ -73,6 +73,12 @@ OverlayMetrics::OverlayMetrics(Application& app)
           app.getMetrics().NewTimer({"overlay", "recv", "survey-request"}))
     , mRecvSurveyResponseTimer(
           app.getMetrics().NewTimer({"overlay", "recv", "survey-response"}))
+
+    , mRecvFloodAdvertTimer(
+          app.getMetrics().NewTimer({"overlay", "recv", "flood-advert"}))
+    , mRecvFloodDemandTimer(
+          app.getMetrics().NewTimer({"overlay", "recv", "flood-demand"}))
+
     , mMessageDelayInWriteQueueTimer(
           app.getMetrics().NewTimer({"overlay", "delay", "write-queue"}))
     , mMessageDelayInAsyncWriteTimer(
@@ -81,6 +87,10 @@ OverlayMetrics::OverlayMetrics(Application& app)
           app.getMetrics().NewTimer({"overlay", "outbound-queue", "scp"}))
     , mOutboundQueueDelayTxs(
           app.getMetrics().NewTimer({"overlay", "outbound-queue", "tx"}))
+    , mOutboundQueueDelayAdvert(
+          app.getMetrics().NewTimer({"overlay", "outbound-queue", "advert"}))
+    , mOutboundQueueDelayDemand(
+          app.getMetrics().NewTimer({"overlay", "outbound-queue", "demand"}))
 
     , mSendErrorMeter(
           app.getMetrics().NewMeter({"overlay", "send", "error"}, "message"))
@@ -114,6 +124,20 @@ OverlayMetrics::OverlayMetrics(Application& app)
           {"overlay", "send", "survey-request"}, "message"))
     , mSendSurveyResponseMeter(app.getMetrics().NewMeter(
           {"overlay", "send", "survey-response"}, "message"))
+    , mSendFloodAdvertMeter(app.getMetrics().NewMeter(
+          {"overlay", "send", "flood-advert"}, "message"))
+    , mSendFloodDemandMeter(app.getMetrics().NewMeter(
+          {"overlay", "send", "flood-demand"}, "message"))
+    , mDemandTimeoutMeter(app.getMetrics().NewMeter(
+          {"overlay", "demand", "timeout"}, "message"))
+    , mMessagesDemanded(app.getMetrics().NewMeter(
+          {"overlay", "flood", "demanded"}, "message"))
+    , mMessagesFulfilledMeter(app.getMetrics().NewMeter(
+          {"overlay", "flood", "fulfilled"}, "message"))
+    , mBannedMessageUnfulfilledMeter(app.getMetrics().NewMeter(
+          {"overlay", "flood", "unfulfilled-banned"}, "message"))
+    , mUnknownMessageUnfulfilledMeter(app.getMetrics().NewMeter(
+          {"overlay", "flood", "unfulfilled-unknown"}, "message"))
     , mMessagesBroadcast(app.getMetrics().NewMeter(
           {"overlay", "message", "broadcast"}, "message"))
     , mPendingPeersSize(

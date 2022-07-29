@@ -5,6 +5,7 @@
 #include "overlay/Floodgate.h"
 #include "crypto/BLAKE2.h"
 #include "crypto/Hex.h"
+#include "crypto/SHA.h"
 #include "herder/Herder.h"
 #include "main/Application.h"
 #include "medida/counter.h"
@@ -33,6 +34,8 @@ Floodgate::Floodgate(Application& app)
           app.getMetrics().NewCounter({"overlay", "memory", "flood-known"}))
     , mSendFromBroadcast(app.getMetrics().NewMeter(
           {"overlay", "flood", "broadcast"}, "message"))
+    , mMessagesAdvertized(app.getMetrics().NewMeter(
+          {"overlay", "flood", "advertized"}, "message"))
     , mShuttingDown(false)
 {
 }
@@ -84,7 +87,8 @@ Floodgate::addRecord(StellarMessage const& msg, Peer::pointer peer, Hash& index)
 
 // send message to anyone you haven't gotten it from
 bool
-Floodgate::broadcast(StellarMessage const& msg, bool force)
+Floodgate::broadcast(StellarMessage const& msg, bool force,
+                     std::optional<Hash> const hash)
 {
     ZoneScoped;
     if (mShuttingDown)
@@ -120,19 +124,32 @@ Floodgate::broadcast(StellarMessage const& msg, bool force)
         releaseAssert(peer.second->isAuthenticated());
         if (peersTold.insert(peer.second->toString()).second)
         {
-            mSendFromBroadcast.Mark();
-            std::weak_ptr<Peer> weak(
-                std::static_pointer_cast<Peer>(peer.second));
-            mApp.postOnMainThread(
-                [smsg, weak, log = !broadcasted]() {
-                    auto strong = weak.lock();
-                    if (strong)
-                    {
-                        strong->sendMessage(smsg, log);
-                    }
-                },
-                fmt::format(FMT_STRING("broadcast to {}"),
-                            peer.second->toString()));
+            if (msg.type() == TRANSACTION && peer.second->shouldFloodLazily())
+            {
+                mMessagesAdvertized.Mark();
+                TracyPlot("overlay.flood.advertized",
+                          static_cast<int64_t>(mMessagesAdvertized.count()));
+                releaseAssert(hash.has_value());
+                peer.second->queueTxHashToAdvertize(hash.value());
+            }
+            else
+            {
+                mSendFromBroadcast.Mark();
+                TracyPlot("overlay.flood.broadcast",
+                          static_cast<int64_t>(mSendFromBroadcast.count()));
+                std::weak_ptr<Peer> weak(
+                    std::static_pointer_cast<Peer>(peer.second));
+                mApp.postOnMainThread(
+                    [smsg, weak, log = !broadcasted]() {
+                        auto strong = weak.lock();
+                        if (strong)
+                        {
+                            strong->sendMessage(smsg, log);
+                        }
+                    },
+                    fmt::format(FMT_STRING("broadcast to {}"),
+                                peer.second->toString()));
+            }
             broadcasted = true;
         }
     }
@@ -192,4 +209,5 @@ Floodgate::updateRecord(StellarMessage const& oldMsg,
         mFloodMap.emplace(newHash, record);
     }
 }
+
 }

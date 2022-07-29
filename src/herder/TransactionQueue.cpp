@@ -869,6 +869,12 @@ TransactionQueue::getTransactions(LedgerHeader const& lcl) const
     return txs;
 }
 
+const TransactionFrameBasePtr
+TransactionQueue::getTx(Hash const& hash) const
+{
+    return mTxQueueLimiter->getTx(hash);
+}
+
 void
 TransactionQueue::clearAll()
 {
@@ -1006,7 +1012,9 @@ TransactionQueue::broadcastTx(AccountState& state, TimestampedTx& tx)
         // work from other sources.
         return BroadcastStatus::BROADCAST_STATUS_SKIPPED;
     }
-    return mApp.getOverlayManager().broadcastMessage(tx.mTx->toStellarMessage())
+    return mApp.getOverlayManager().broadcastMessage(
+               tx.mTx->toStellarMessage(), false,
+               std::make_optional<Hash>(tx.mTx->getFullHash()))
                ? BroadcastStatus::BROADCAST_STATUS_SUCCESS
                : BroadcastStatus::BROADCAST_STATUS_ALREADY;
 }
@@ -1237,4 +1245,11 @@ TransactionQueue::getQueueSizeOps() const
     return mTxQueueLimiter->size();
 }
 #endif
+
+size_t
+TransactionQueue::getMaxQueueSizeOps() const
+{
+    return mTxQueueLimiter->maxQueueSizeOps();
+}
+
 }

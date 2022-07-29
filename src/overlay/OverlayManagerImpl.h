@@ -95,6 +95,22 @@ class OverlayManagerImpl : public OverlayManager
 
     std::shared_ptr<SurveyManager> mSurveyManager;
 
+    // This gets called once when starting
+    // and it continues to call itself every FLOOD_DEMAND_PERIOD_MS.
+    void demand();
+    VirtualTimer mDemandTimer;
+    std::unordered_map<Hash, std::pair<int, VirtualClock::time_point>>
+        mDemandHistory;
+    // After `MAX_RETRY_COUNT` attempts with linear back-off, we assume that
+    // no one has the transaction.
+    int const MAX_RETRY_COUNT = 15;
+
+    // Regardless of the number of failed attempts &
+    // FLOOD_DEMAND_BACKOFF_DELAY_MS it doesn't make much sense to wait much
+    // longer than 2 seconds between re-issueing demands.
+    static constexpr std::chrono::seconds MAX_DELAY_DEMAND{2};
+    std::chrono::milliseconds retryDelayDemand(int numAttemptsMade);
+
   public:
     OverlayManagerImpl(Application& app);
     ~OverlayManagerImpl();
@@ -103,8 +119,9 @@ class OverlayManagerImpl : public OverlayManager
     bool recvFloodedMsgID(StellarMessage const& msg, Peer::pointer peer,
                           Hash& msgID) override;
     void forgetFloodedMsg(Hash const& msgID) override;
-    bool broadcastMessage(StellarMessage const& msg,
-                          bool force = false) override;
+    bool
+    broadcastMessage(StellarMessage const& msg, bool force = false,
+                     std::optional<Hash> const hash = std::nullopt) override;
     void connectTo(PeerBareAddress const& address) override;
 
     void addInboundConnection(Peer::pointer peer) override;

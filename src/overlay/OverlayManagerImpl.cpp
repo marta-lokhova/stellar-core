@@ -7,6 +7,7 @@
 #include "crypto/SecretKey.h"
 #include "crypto/ShortHash.h"
 #include "database/Database.h"
+#include "herder/Herder.h"
 #include "lib/util/stdrandom.h"
 #include "main/Application.h"
 #include "main/Config.h"
@@ -268,6 +269,7 @@ OverlayManagerImpl::OverlayManagerImpl(Application& app)
     , mPeerIPTimer(app)
     , mFloodGate(app)
     , mSurveyManager(make_shared<SurveyManager>(app))
+    , mDemandTimer(app)
     , mResolvingPeersWithBackoff(true)
     , mResolvingPeersRetryCount(0)
 
@@ -300,6 +302,11 @@ OverlayManagerImpl::start()
                 tick();
             },
             VirtualTimer::onFailureNoop);
+    }
+    if (mApp.getConfig().ENABLE_PULL_MODE)
+    {
+        // Start demanding.
+        demand();
     }
 }
 
@@ -893,9 +900,9 @@ OverlayManagerImpl::isPreferred(Peer* peer) const
 bool
 OverlayManagerImpl::isFloodMessage(StellarMessage const& msg)
 {
-    return msg.type() == SCP_MESSAGE || msg.type() == TRANSACTION;
+    return msg.type() == SCP_MESSAGE || msg.type() == TRANSACTION ||
+           msg.type() == FLOOD_DEMAND || msg.type() == FLOOD_ADVERT;
 }
-
 std::vector<Peer::pointer>
 OverlayManagerImpl::getRandomAuthenticatedPeers()
 {
@@ -962,10 +969,11 @@ OverlayManagerImpl::forgetFloodedMsg(Hash const& msgID)
 }
 
 bool
-OverlayManagerImpl::broadcastMessage(StellarMessage const& msg, bool force)
+OverlayManagerImpl::broadcastMessage(StellarMessage const& msg, bool force,
+                                     std::optional<Hash> const hash)
 {
     ZoneScoped;
-    auto res = mFloodGate.broadcast(msg, force);
+    auto res = mFloodGate.broadcast(msg, force, hash);
     if (res)
     {
         mOverlayMetrics.mMessagesBroadcast.Mark();
@@ -1115,4 +1123,129 @@ OverlayManagerImpl::updateFloodRecord(StellarMessage const& oldMsg,
     ZoneScoped;
     mFloodGate.updateRecord(oldMsg, newMsg);
 }
+
+std::chrono::milliseconds
+OverlayManagerImpl::retryDelayDemand(int numAttemptsMade)
+{
+    auto res = numAttemptsMade * mApp.getConfig().FLOOD_DEMAND_BACKOFF_DELAY_MS;
+    return std::min(res, std::chrono::milliseconds(MAX_DELAY_DEMAND));
+}
+
+void
+OverlayManagerImpl::demand()
+{
+    ZoneScoped;
+    if (mShuttingDown)
+    {
+        return;
+    }
+    auto const& authenticatedPeers = getAuthenticatedPeers();
+    std::vector<std::pair<NodeID, Peer::pointer>> pullModePeers;
+    std::copy_if(authenticatedPeers.begin(), authenticatedPeers.end(),
+                 std::back_inserter(pullModePeers),
+                 [](auto const& it) { return it.second->shouldFloodLazily(); });
+    stellar::shuffle(pullModePeers.begin(), pullModePeers.end(), gRandomEngine);
+
+    std::map<NodeID, xdr::xvector<Hash>> demandMap;
+    auto const now = mApp.getClock().now();
+    auto const& cfg = mApp.getConfig();
+    auto const& herder = mApp.getHerder();
+    auto remainingPeers = pullModePeers;
+    std::map<NodeID, std::list<Hash>> retryMap;
+
+    while (!remainingPeers.empty())
+    {
+        for (auto it = remainingPeers.begin(); it != remainingPeers.end();)
+        {
+            auto const id = it->first;
+            auto peer = it->second;
+            if (demandMap[id].size() >= cfg.FLOOD_MAX_DEMAND_SIZE)
+            {
+                continue;
+            }
+            if (peer->txHashCount() > 0)
+            {
+                auto code = peer->popFrontTxHash();
+
+                // Demand only if it's neither banned nor known.
+                if (!herder.isBannedTx(code) && herder.getTx(code) == nullptr)
+                {
+                    bool shouldDemand = false;
+                    int numDemanded = mDemandHistory[code].first;
+                    if (numDemanded == 0)
+                    {
+                        // never demanded
+                        shouldDemand = true;
+                    }
+                    else if (numDemanded < MAX_RETRY_COUNT)
+                    {
+                        // Check if it's been a while since our last demand
+                        if ((now - mDemandHistory[code].second) >=
+                            retryDelayDemand(numDemanded))
+                        {
+                            mOverlayMetrics.mDemandTimeoutMeter.Mark();
+                            TracyPlot("overlay.demand.timeout",
+                                      static_cast<int64_t>(
+                                          mOverlayMetrics.mDemandTimeoutMeter
+                                              .count()));
+                            shouldDemand = true;
+                        }
+                        else
+                        {
+                            retryMap[id].push_back(code);
+                        }
+                    }
+
+                    if (shouldDemand)
+                    {
+                        demandMap[id].push_back(code);
+                        mDemandHistory[code].first++;
+                        mDemandHistory[code].second = now;
+                    }
+                }
+            }
+            if (demandMap[id].size() < cfg.FLOOD_MAX_DEMAND_SIZE &&
+                peer->txHashCount() > 0)
+            {
+                it++;
+            }
+            else
+            {
+                // Remove this peer since we won't send a demand to it
+                // in this call.
+                it = remainingPeers.erase(it);
+            }
+        }
+    }
+    for (auto& p : pullModePeers)
+    {
+        p.second->sendTxDemand(std::move(demandMap[p.first]));
+        p.second->appendTxHashesToRetry(std::move(retryMap[p.first]));
+    }
+
+    // We determine that demands are obsolete after maxRetention.
+    auto maxRetention = MAX_DELAY_DEMAND * MAX_RETRY_COUNT * 2;
+    for (auto it = mDemandHistory.begin(); it != mDemandHistory.end();)
+    {
+        if ((now - it->second.second) >= maxRetention)
+        {
+            TracyPlot("pending-demand-removed-too-old",
+                      static_cast<int64_t>(1));
+            it = mDemandHistory.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    mDemandTimer.expires_from_now(cfg.FLOOD_DEMAND_PERIOD_MS);
+    mDemandTimer.async_wait([this](asio::error_code const& error) {
+        if (!error)
+        {
+            this->demand();
+        }
+    });
+}
+
 }

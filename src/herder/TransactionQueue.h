@@ -142,6 +142,7 @@ class TransactionQueue
 
     size_t countBanned(int index) const;
     bool isBanned(Hash const& hash) const;
+    const TransactionFrameBasePtr getTx(Hash const& hash) const;
 
     TxSetFrame::Transactions getTransactions(LedgerHeader const& lcl) const;
 
@@ -156,6 +157,7 @@ class TransactionQueue
     void rebroadcast();
 
     void shutdown();
+    size_t getMaxQueueSizeOps() const;
 
   private:
     /**

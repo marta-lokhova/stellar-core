@@ -7,6 +7,7 @@
 #include "util/asio.h"
 #include "database/Database.h"
 #include "lib/json/json.h"
+#include "medida/meter.h"
 #include "medida/timer.h"
 #include "overlay/PeerBareAddress.h"
 #include "overlay/StellarXDR.h"
@@ -63,6 +64,18 @@ class Peer : public std::enable_shared_from_this<Peer>,
         std::chrono::milliseconds(1);
     static constexpr std::chrono::nanoseconds PEER_METRICS_RATE_UNIT =
         std::chrono::seconds(1);
+    static constexpr uint32_t FIRST_VERSION_SUPPORTING_PULL_MODE = 24;
+
+    // During the roll-out phrase, pull mode will be optional.
+    // Therefore, we need a way to communicate with other nodes
+    // that we want/don't want pull mode.
+    // However, the goal is for everyone to enable it by default,
+    // so we don't want to introduce a new member variable.
+    // For now, we'll use the `unused` field in `Auth`.
+    // There is no significance to this integer value.
+    // This is just a number that is not 0.
+    static constexpr uint32_t PULL_MODE_ENABLE_AUTH_UNUSED = 100;
+
     // The reporting will be based on the previous
     // PEER_METRICS_WINDOW_SIZE-second time window.
     static constexpr std::chrono::seconds PEER_METRICS_WINDOW_SIZE =
@@ -112,6 +125,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
         medida::Timer mMessageDelayInAsyncWriteTimer;
         medida::Timer mOutboundQueueDelaySCP;
         medida::Timer mOutboundQueueDelayTxs;
+        medida::Timer mOutboundQueueDelayAdvert;
+        medida::Timer mOutboundQueueDelayDemand;
 
         uint64_t mUniqueFloodBytesRecv;
         uint64_t mDuplicateFloodBytesRecv;
@@ -123,7 +138,14 @@ class Peer : public std::enable_shared_from_this<Peer>,
         uint64_t mUniqueFetchMessageRecv;
         uint64_t mDuplicateFetchMessageRecv;
 
+        uint64_t mTxHashReceived;
+        uint64_t mTxDemandSent;
+
         VirtualClock::time_point mConnectedTime;
+
+        uint64_t mMessagesFulfilled;
+        uint64_t mBannedMessageUnfulfilled;
+        uint64_t mUnknownMessageUnfulfilled;
     };
 
     struct TimestampedMessage
@@ -155,6 +177,12 @@ class Peer : public std::enable_shared_from_this<Peer>,
     Json::Value getFlowControlJsonInfo(bool compact) const;
     Json::Value getJsonInfo(bool compact) const;
 
+    void flushAdvert();
+    void queueTxHashToAdvertize(Hash const& hash);
+    void queueTxHashAndMaybeTrim(Hash const& hash);
+    VirtualTimer mAdvertTimer;
+    void startAdvertTimer();
+
   protected:
     Application& mApp;
 
@@ -185,7 +213,9 @@ class Peer : public std::enable_shared_from_this<Peer>,
     // Outbound queues indexes by priority
     // Priority 0 - SCP messages
     // Priority 1 - transactions
-    std::array<std::deque<QueuedOutboundMessage>, 2> mOutboundQueues;
+    // Priority 2 - flood demands
+    // Priority 3 - flood adverts
+    std::array<std::deque<QueuedOutboundMessage>, 4> mOutboundQueues;
 
     // This methods drops obsolete load from the outbound queue
     void addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg);
@@ -202,6 +232,11 @@ class Peer : public std::enable_shared_from_this<Peer>,
 
     // Does local node have capacity to read from this peer
     bool hasReadingCapacity() const;
+
+    // How many _hashes_ in total are queued?
+    // NB: Each advert & demand contains a _vector_ of tx hashes.
+    uint64_t mAdvertQueueTxHashCount{0};
+    uint64_t mDemandQueueTxHashCount{0};
 
     HmacSha256Key mSendMacKey;
     HmacSha256Key mRecvMacKey;
@@ -231,6 +266,15 @@ class Peer : public std::enable_shared_from_this<Peer>,
     FlowControlState mFlowControlState;
     ReadingCapacity mCapacity;
 
+    // As of MIN_OVERLAY_VERSION_FOR_FLOOD_ADVERT, peers accumulate an _advert_
+    // of flood messages, then periodically flush the advert and await a
+    // _demand_ message with a list of flood messages to send. Adverts are
+    // typically smaller than full messages and batching them means we also
+    // amortize the authentication framing.
+    StellarMessage mPendingAdvertMsg;
+    std::deque<Hash> mIncomingTxHashes;
+    std::list<Hash> mTxHashesToRetry;
+
     OverlayMetrics& getOverlayMetrics();
 
     bool shouldAbort() const;
@@ -259,6 +303,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
     void recvSCPQuorumSet(StellarMessage const& msg);
     void recvSCPMessage(StellarMessage const& msg);
     void recvGetSCPState(StellarMessage const& msg);
+    void recvFloodAdvert(StellarMessage const& msg);
+    void recvFloodDemand(StellarMessage const& msg);
 
     void sendHello();
     void sendAuth();
@@ -302,6 +348,7 @@ class Peer : public std::enable_shared_from_this<Peer>,
     void endMessageProcessing(StellarMessage const& msg);
 
     void maybeSendNextBatch();
+    void fulfillDemand(FloodDemand const& dmd);
 
   public:
     Peer(Application& app, PeerRole role);
@@ -417,6 +464,14 @@ class Peer : public std::enable_shared_from_this<Peer>,
     virtual ~Peer()
     {
     }
+
+    bool mShouldFloodLazily{false};
+    bool shouldFloodLazily() const;
+    void sendTxDemand(xdr::xvector<Hash>&& demands);
+
+    size_t txHashCount() const;
+    void appendTxHashesToRetry(std::list<Hash>&& list);
+    Hash popFrontTxHash();
 
     friend class LoopbackPeer;
 };

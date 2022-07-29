@@ -25,6 +25,7 @@ class TxQueueLimiter
 
     // all known transactions
     std::unique_ptr<QueueLimiterTxMap> mTxs;
+    std::map<Hash, TransactionFrameBasePtr> mKnownTxHashes;
     TransactionFrameBasePtr getWorstTransaction();
 
   public:
@@ -66,6 +67,8 @@ class TxQueueLimiter
     std::pair<int64, uint32> getMinFeeNeeded() const;
 
     void resetMinFeeNeeded();
+
+    const TransactionFrameBasePtr getTx(Hash const& hash) const;
 };
 
 bool lessThanXored(TransactionFrameBasePtr const& l,

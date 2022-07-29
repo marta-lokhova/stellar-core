@@ -7,6 +7,7 @@
 #include "herder/TxSetFrame.h"
 #include "util/GlobalChecks.h"
 #include "util/Logging.h"
+#include <Tracy.hpp>
 
 namespace stellar
 {
@@ -73,6 +74,7 @@ TxQueueLimiter::addTransaction(TransactionFrameBasePtr const& tx)
     }
     mTxs->emplace(tx);
     mQueueSizeOps = newTotOps;
+    mKnownTxHashes[tx->getFullHash()] = tx;
 }
 
 void
@@ -90,6 +92,22 @@ TxQueueLimiter::removeTransaction(TransactionFrameBasePtr const& tx)
             "invalid state (missing tx) removing tx in TxQueueLimiter");
     }
     mQueueSizeOps -= txOps;
+    mKnownTxHashes.erase(tx->getFullHash());
+}
+
+const TransactionFrameBasePtr
+TxQueueLimiter::getTx(Hash const& hash) const
+{
+    ZoneScoped;
+    auto it = mKnownTxHashes.find(hash);
+    if (it != mKnownTxHashes.end())
+    {
+        return it->second;
+    }
+    else
+    {
+        return nullptr;
+    }
 }
 
 // compute the fee bid that `tx` should have in order to beat
