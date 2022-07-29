@@ -102,7 +102,9 @@ enum MessageType
     SURVEY_REQUEST = 14,
     SURVEY_RESPONSE = 15,
 
-    SEND_MORE = 16
+    SEND_MORE = 16,
+    FLOOD_ADVERT = 18,
+    FLOOD_DEMAND = 19
 };
 
 struct DontHave
@@ -185,6 +187,16 @@ case SURVEY_TOPOLOGY:
     TopologyResponseBody topologyResponseBody;
 };
 
+struct FloodAdvert
+{
+    Hash txHashes<>;
+};
+
+struct FloodDemand
+{
+    Hash txHashes<>;
+};
+
 union StellarMessage switch (MessageType type)
 {
 case ERROR_MSG:
@@ -227,6 +239,12 @@ case GET_SCP_STATE:
     uint32 getSCPLedgerSeq; // ledger seq requested ; if 0, requests the latest
 case SEND_MORE:
     SendMore sendMoreMessage;
+
+// Pull mode
+case FLOOD_ADVERT:
+     FloodAdvert floodAdvert;
+case FLOOD_DEMAND:
+     FloodDemand floodDemand;
 };
 
 union AuthenticatedMessage switch (uint32 v)
