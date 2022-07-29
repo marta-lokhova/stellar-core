@@ -128,7 +128,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     MAXIMUM_LEDGER_CLOSETIME_DRIFT = 50;
 
     OVERLAY_PROTOCOL_MIN_VERSION = 21;
-    OVERLAY_PROTOCOL_VERSION = 23;
+    OVERLAY_PROTOCOL_VERSION = 24;
 
     VERSION_STR = STELLAR_CORE_VERSION;
 
@@ -196,6 +196,13 @@ Config::Config() : NODE_SEED(SecretKey::random())
     FLOOD_TX_PERIOD_MS = 200;
     FLOOD_ARB_TX_BASE_ALLOWANCE = 5;
     FLOOD_ARB_TX_DAMPING_FACTOR = 0.8;
+
+    FLOOD_MAX_DEMAND_SIZE = 200;
+    FLOOD_MAX_ADVERT_SIZE = 200;
+    FLOOD_DEMAND_PERIOD_MS = std::chrono::milliseconds(200);
+    FLOOD_ADVERT_PERIOD_MS = std::chrono::milliseconds(200);
+    FLOOD_DEMAND_BACKOFF_DELAY_MS = std::chrono::milliseconds(500);
+    ENABLE_PULL_MODE = true;
 
     MAX_BATCH_WRITE_COUNT = 1024;
     MAX_BATCH_WRITE_BYTES = 1 * 1024 * 1024;
@@ -1129,6 +1136,33 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
             else if (item.first == "FLOOD_TX_PERIOD_MS")
             {
                 FLOOD_TX_PERIOD_MS = readInt<int>(item, 1);
+            }
+            else if (item.first == "FLOOD_MAX_DEMAND_SIZE")
+            {
+                FLOOD_MAX_DEMAND_SIZE = readInt<int>(item, 1);
+            }
+            else if (item.first == "FLOOD_MAX_ADVERT_SIZE")
+            {
+                FLOOD_MAX_ADVERT_SIZE = readInt<int>(item, 1);
+            }
+            else if (item.first == "FLOOD_DEMAND_PERIOD_MS")
+            {
+                FLOOD_DEMAND_PERIOD_MS =
+                    std::chrono::milliseconds(readInt<int>(item, 1));
+            }
+            else if (item.first == "FLOOD_ADVERT_PERIOD_MS")
+            {
+                FLOOD_ADVERT_PERIOD_MS =
+                    std::chrono::milliseconds(readInt<int>(item, 1));
+            }
+            else if (item.first == "FLOOD_DEMAND_BACKOFF_DELAY_MS")
+            {
+                FLOOD_DEMAND_BACKOFF_DELAY_MS =
+                    std::chrono::milliseconds(readInt<int>(item, 1));
+            }
+            else if (item.first == "ENABLE_PULL_MODE")
+            {
+                ENABLE_PULL_MODE = readBool(item);
             }
             else if (item.first == "FLOOD_ARB_TX_BASE_ALLOWANCE")
             {
