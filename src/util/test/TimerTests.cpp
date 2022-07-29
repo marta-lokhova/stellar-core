@@ -86,7 +86,12 @@ TEST_CASE("VirtualClock from_time_t", "[timer]")
 
 TEST_CASE("virtual event dispatch order and times", "[timer]")
 {
+    // Enabling pull mode introduces various timers (e.g.,
+    // adverts & demands are flushed periodically).
+    // In order to prevent them from interfering the test,
+    // disable pull mode.
     Config cfg(getTestConfig());
+    cfg.ENABLE_PULL_MODE = false;
     VirtualClock clock;
     Application::pointer appPtr = createTestApplication(clock, cfg);
     Application& app = *appPtr;
@@ -143,8 +148,20 @@ TEST_CASE("shared virtual time advances only when all apps idle",
           "[timer][sharedtimer]")
 {
     VirtualClock clock;
-    Application::pointer app1 = createTestApplication(clock, getTestConfig(0));
-    Application::pointer app2 = createTestApplication(clock, getTestConfig(1));
+    // Enabling pull mode introduces various timers (e.g.,
+    // adverts & demands are flushed periodically).
+    // In order to prevent them from interfering the test,
+    // disable pull mode.
+    auto getNonPullModeCfg = [](auto i) {
+        auto cfg = getTestConfig(i);
+        cfg.ENABLE_PULL_MODE = false;
+        return cfg;
+    };
+
+    Application::pointer app1 =
+        createTestApplication(clock, getNonPullModeCfg(0));
+    Application::pointer app2 =
+        createTestApplication(clock, getNonPullModeCfg(1));
 
     size_t app1Event = 0;
     size_t app2Event = 0;
@@ -194,7 +211,11 @@ TEST_CASE("shared virtual time advances only when all apps idle",
 TEST_CASE("timer cancels", "[timer]")
 {
     VirtualClock clock;
-    Application::pointer app = createTestApplication(clock, getTestConfig(0));
+    // Disable pull mode as pull mode introduces a demand timer
+    // that continues to demand periodically
+    Config cfg = getTestConfig(0);
+    cfg.ENABLE_PULL_MODE = false;
+    Application::pointer app = createTestApplication(clock, cfg);
 
     int timerFired = 0;
     int timerCancelled = 0;

@@ -403,10 +403,14 @@ TEST_CASE("outbound queue filtering", "[overlay][connections]")
 
     auto& scpQueue = conn->getAcceptor()->getQueues()[0];
     auto& txQueue = conn->getAcceptor()->getQueues()[1];
+    auto& demandQueue = conn->getAcceptor()->getQueues()[2];
+    auto& advertQueue = conn->getAcceptor()->getQueues()[3];
 
     // Clear queues for testing
     scpQueue.clear();
     txQueue.clear();
+    demandQueue.clear();
+    advertQueue.clear();
 
     auto lcl = node->getLedgerManager().getLastClosedLedgerNum();
     HerderImpl& herder = *static_cast<HerderImpl*>(&node->getHerder());
@@ -503,6 +507,42 @@ TEST_CASE("outbound queue filtering", "[overlay][connections]")
                                     }));
             }
         }
+    }
+    SECTION("advert demand limit reached")
+    {
+        uint32_t limit = node->getLedgerManager().getLastMaxTxSetSizeOps();
+        for (uint32_t i = 0; i < limit + 10; ++i)
+        {
+            StellarMessage adv, dem, txn;
+            adv.type(FLOOD_ADVERT);
+            dem.type(FLOOD_DEMAND);
+            adv.floodAdvert().txHashes.push_back(xdrSha256(txn));
+            dem.floodDemand().txHashes.push_back(xdrSha256(txn));
+            peer->addMsgAndMaybeTrimQueue(
+                std::make_shared<StellarMessage const>(adv));
+            peer->addMsgAndMaybeTrimQueue(
+                std::make_shared<StellarMessage const>(dem));
+        }
+
+        REQUIRE(advertQueue.size() == limit);
+        REQUIRE(demandQueue.size() == limit);
+
+        StellarMessage adv, dem, txn;
+        adv.type(FLOOD_ADVERT);
+        dem.type(FLOOD_DEMAND);
+        for (int i = 0; i < 2; i++)
+        {
+            adv.floodAdvert().txHashes.push_back(xdrSha256(txn));
+            dem.floodDemand().txHashes.push_back(xdrSha256(txn));
+        }
+
+        peer->addMsgAndMaybeTrimQueue(
+            std::make_shared<StellarMessage const>(adv));
+        peer->addMsgAndMaybeTrimQueue(
+            std::make_shared<StellarMessage const>(dem));
+
+        REQUIRE(advertQueue.size() == limit - 1);
+        REQUIRE(demandQueue.size() == limit - 1);
     }
 }
 
@@ -832,7 +872,8 @@ TEST_CASE("allow inbound pending peers up to max", "[overlay][connections]")
     REQUIRE(conn4.getInitiator()->getState() == Peer::CONNECTED);
     REQUIRE(conn4.getAcceptor()->getState() == Peer::CLOSING);
 
-    testutil::crankSome(clock);
+    // Must wait for RECURRENT_TIMER_PERIOD
+    testutil::crankFor(clock, std::chrono::seconds(5));
 
     REQUIRE(conn1.getInitiator()->getState() == Peer::CLOSING);
     REQUIRE(conn1.getAcceptor()->getState() == Peer::CLOSING);
@@ -903,7 +944,8 @@ TEST_CASE("allow inbound pending peers over max if possibly preferred",
     REQUIRE(conn4.getInitiator()->getState() == Peer::CONNECTED);
     REQUIRE(conn4.getAcceptor()->getState() == Peer::CONNECTED);
 
-    testutil::crankSome(clock);
+    // Must wait for RECURRENT_TIMER_PERIOD
+    testutil::crankFor(clock, std::chrono::seconds(5));
 
     REQUIRE(conn1.getInitiator()->getState() == Peer::CLOSING);
     REQUIRE(conn1.getAcceptor()->getState() == Peer::CLOSING);
@@ -973,7 +1015,8 @@ TEST_CASE("allow outbound pending peers up to max", "[overlay][connections]")
     REQUIRE(conn4.getAcceptor()->getState() == Peer::CONNECTED);
     conn2.getInitiator()->setCorked(true);
 
-    testutil::crankSome(clock);
+    // Must wait for RECURRENT_TIMER_PERIOD
+    testutil::crankFor(clock, std::chrono::seconds(5));
 
     REQUIRE(conn1.getInitiator()->getState() == Peer::CLOSING);
     REQUIRE(conn1.getAcceptor()->getState() == Peer::CLOSING);
@@ -1215,14 +1258,15 @@ TEST_CASE("drop peers who straggle", "[overlay][connections][straggler]")
             // Straggler keeps asking for peers once per second -- this is
             // easy traffic to fake-generate -- but not accepting response
             // messages in a timely fashion.
-            sendTimer.expires_from_now(std::chrono::seconds(1));
+            std::chrono::seconds const dur{1};
+            sendTimer.expires_from_now(dur);
             sendTimer.async_wait([straggler](asio::error_code const& error) {
                 if (!error)
                 {
                     straggler->sendGetPeers();
                 }
             });
-            clock.crank(false);
+            testutil::crankFor(clock, dur);
         }
         LOG_INFO(DEFAULT_LOG, "loop complete, clock.now() = {}",
                  clock.now().time_since_epoch().count());
@@ -1607,7 +1651,11 @@ TEST_CASE("database is purged at overlay start", "[overlay]")
 
     om.start();
 
-    testutil::crankSome(clock);
+    // Must wait 2 seconds as `OverlayManagerImpl::start()`
+    // sets a 2-second timer.
+    // `crankSome` may not work if other timers fire before that.
+    // (e.g., pull-mode advert timer)
+    testutil::crankFor(clock, std::chrono::seconds(2));
 
     REQUIRE(peerManager.load(localhost(1)).second);
     REQUIRE(peerManager.load(localhost(2)).second);
@@ -1753,5 +1801,459 @@ TEST_CASE("generalized tx sets are not sent to non-upgraded peers",
     {
         runTest(true);
     }
+}
+
+auto numDemandSent = [](std::shared_ptr<Application> app) {
+    return app->getOverlayManager()
+        .getOverlayMetrics()
+        .mSendFloodDemandMeter.count();
+};
+
+auto numUnknownDemand = [](std::shared_ptr<Application> app) {
+    return app->getMetrics()
+        .NewMeter({"overlay", "flood", "unfulfilled-unknown"}, "message")
+        .count();
+};
+
+auto numTxHashesAdvertized = [](std::shared_ptr<Application> app) {
+    return app->getMetrics()
+        .NewMeter({"overlay", "flood", "advertized"}, "message")
+        .count();
+};
+
+auto numAdvertSent = [](std::shared_ptr<Application> app) {
+    return app->getOverlayManager()
+        .getOverlayMetrics()
+        .mSendFloodAdvertMeter.count();
+};
+
+TEST_CASE("overlay pull mode", "[overlay][pullmode]")
+{
+    VirtualClock clock;
+    int const numNodes = 3;
+    std::vector<std::shared_ptr<Application>> apps;
+    std::chrono::milliseconds const epsilon{1};
+
+    for (int i = 0; i < numNodes; i++)
+    {
+        Config cfg = getTestConfig(i);
+        cfg.FLOOD_DEMAND_BACKOFF_DELAY_MS = std::chrono::milliseconds(200);
+        cfg.FLOOD_DEMAND_PERIOD_MS = std::chrono::milliseconds(200);
+        apps.push_back(createTestApplication(clock, cfg));
+    }
+
+    std::vector<std::shared_ptr<LoopbackPeerConnection>> connections;
+    for (int i = 0; i < numNodes; i++)
+    {
+        connections.push_back(std::make_shared<LoopbackPeerConnection>(
+            *apps[i], *apps[(i + 1) % numNodes]));
+    }
+    testutil::crankFor(clock, std::chrono::seconds(5));
+    for (auto& conn : connections)
+    {
+        REQUIRE(conn->getInitiator()->isAuthenticated());
+        REQUIRE(conn->getAcceptor()->isAuthenticated());
+        REQUIRE(conn->getInitiator()->flowControlEnabled() ==
+                Peer::FlowControlState::ENABLED);
+        REQUIRE(conn->getAcceptor()->flowControlEnabled() ==
+                Peer::FlowControlState::ENABLED);
+    }
+
+    auto createTxn = [](int n) {
+        StellarMessage txn;
+        txn.type(TRANSACTION);
+        // TODO: Add a memo.
+
+        Memo memo(MEMO_TEXT);
+        memo.text() = "tx" + std::to_string(n);
+        txn.transaction().v0().tx.memo = memo;
+
+        return std::make_shared<StellarMessage>(txn);
+    };
+
+    auto createAdvert = [](auto txns) {
+        StellarMessage adv;
+        adv.type(FLOOD_ADVERT);
+        for (auto const& txn : txns)
+        {
+            adv.floodAdvert().txHashes.push_back(xdrSha256(txn->transaction()));
+        }
+        return std::make_shared<StellarMessage>(adv);
+    };
+
+    // +-------------+------------+---------+
+    // |             | Initiator  | Acceptor|
+    // +-------------+------------+---------+
+    // |Connection 0 |     0      |    1    |
+    // |Connection 1 |     1      |    2    |
+    // |Connection 2 |     2      |    0    |
+    // +-------------+------------+---------+
+
+    // `links[i][j]->sendMessage` is an easy way to send a message
+    // from node `i` to node `j`.
+    std::shared_ptr<LoopbackPeer> links[numNodes][numNodes];
+    for (int i = 0; i < numNodes; i++)
+    {
+        int j = (i + 1) % 3;
+        links[i][j] = connections[i]->getInitiator();
+        links[j][i] = connections[i]->getAcceptor();
+    }
+
+    SECTION("sanity check - demand")
+    {
+        auto tx0 = createTxn(0);
+        auto tx1 = createTxn(1);
+        auto adv0 =
+            createAdvert(std::vector<std::shared_ptr<StellarMessage>>{tx0});
+        auto adv1 =
+            createAdvert(std::vector<std::shared_ptr<StellarMessage>>{tx1});
+
+        // Node 0 advertises tx 0 to Node 2
+        links[0][2]->sendMessage(adv0, false);
+        // Node 1 advertises tx 1 to Node 2
+        links[1][2]->sendMessage(adv1, false);
+
+        // Give enough time to:
+        // 1) call `demand`, and
+        // 2) send the demands out.
+        testutil::crankFor(clock, apps[2]->getConfig().FLOOD_DEMAND_PERIOD_MS +
+                                      epsilon);
+
+        REQUIRE(numDemandSent(apps[2]) == 2);
+        REQUIRE(numUnknownDemand(apps[0]) == 1);
+        REQUIRE(numUnknownDemand(apps[1]) == 1);
+    }
+
+    SECTION("exact same advert from two peers")
+    {
+        std::vector<std::shared_ptr<StellarMessage>> txns;
+        int const numTxns = 5;
+        txns.reserve(numTxns);
+        for (int i = 0; i < numTxns; i++)
+        {
+            txns.push_back(createTxn(i));
+        }
+        auto adv = createAdvert(txns);
+
+        // Both Node 0 and Node 1 advertize {tx0, tx1, ..., tx5} to Node 2
+        links[0][2]->sendMessage(adv, false);
+        links[1][2]->sendMessage(adv, false);
+
+        // Give enough time to:
+        // 1) call `demand`, and
+        // 2) send the demands out.
+        testutil::crankFor(clock, apps[2]->getConfig().FLOOD_DEMAND_PERIOD_MS +
+                                      epsilon);
+
+        REQUIRE(numDemandSent(apps[2]) == 1);
+        {
+            // Exactly one of Node 0 or Node 1 should get a demand for all the 5
+            // txns.
+            int n0 = numUnknownDemand(apps[0]);
+            int n1 = numUnknownDemand(apps[1]);
+            REQUIRE(std::min(n0, n1) == 0);
+            REQUIRE(std::max(n0, n1) == 5);
+        }
+
+        // Wait long enough so the first round of demands expire and the second
+        // round of demands get sent out.
+        testutil::crankFor(
+            clock, std::max(apps[2]->getConfig().FLOOD_DEMAND_BACKOFF_DELAY_MS,
+                            apps[2]->getConfig().FLOOD_DEMAND_PERIOD_MS) +
+                       epsilon);
+
+        // The other node should get the exact same demand.
+        REQUIRE(numDemandSent(apps[2]) == 2);
+        REQUIRE(numUnknownDemand(apps[0]) == 5);
+        REQUIRE(numUnknownDemand(apps[1]) == 5);
+    }
+
+    SECTION("overlapping adverts")
+    {
+        auto tx0 = createTxn(0);
+        auto tx1 = createTxn(1);
+        auto tx2 = createTxn(2);
+        auto tx3 = createTxn(3);
+        auto adv0 = createAdvert(
+            std::vector<std::shared_ptr<StellarMessage>>{tx0, tx1, tx3});
+        auto adv1 = createAdvert(
+            std::vector<std::shared_ptr<StellarMessage>>{tx0, tx2, tx3});
+
+        // Node 0 advertizes {tx0, tx1, tx3} to Node 2
+        links[0][2]->sendMessage(adv0, false);
+        // Node 1 advertizes {tx0, tx2, tx3} to Node 2
+        links[1][2]->sendMessage(adv1, false);
+
+        // Give enough time to:
+        // 1) call `demand`, and
+        // 2) send the demands out.
+        testutil::crankFor(clock, apps[2]->getConfig().FLOOD_DEMAND_PERIOD_MS +
+                                      epsilon);
+
+        REQUIRE(numDemandSent(apps[2]) == 2);
+
+        {
+            // Node 0 should get a demand for tx 1.
+            // Node 1 should get a demand for tx 2.
+            // Exactly one of Node 0 or Node 1 should get a demand for both tx 0
+            // and tx 3.
+            int n0 = numUnknownDemand(apps[0]);
+            int n1 = numUnknownDemand(apps[1]);
+            REQUIRE(std::min(n0, n1) == 1);
+            REQUIRE(std::max(n0, n1) == 3);
+        }
+
+        // Wait long enough so the first round of demands expire and the second
+        // round of demands get sent out.
+        testutil::crankFor(clock,
+                           apps[2]->getConfig().FLOOD_DEMAND_BACKOFF_DELAY_MS +
+                               epsilon);
+
+        // We should've sent 3 demands by now.
+        // Case 1:
+        //     Demand 1: {tx0, tx1, tx3} to Node 0
+        //     Demand 2: {tx2} to Node 1
+        //     Demand 3: {tx0, tx3} to Node 1
+        // Case 2:
+        //     Demand 1: {tx1} to Node 0
+        //     Demand 2: {tx0, tx2, tx3} to Node 1
+        //     Demand 3: {tx0, tx3} to Node 0
+        REQUIRE(numDemandSent(apps[2]) == 3);
+        REQUIRE(numUnknownDemand(apps[0]) == 3);
+        REQUIRE(numUnknownDemand(apps[1]) == 3);
+    }
+
+    SECTION("randomize peers")
+    {
+        int peer0 = 0;
+        int peer1 = 0;
+        int const numRounds = 300;
+        int const numTxns = 5;
+        for (int i = 0; i < numRounds; i++)
+        {
+            std::vector<std::shared_ptr<StellarMessage>> txns;
+            txns.reserve(numTxns);
+            for (int j = 0; j < numTxns; j++)
+            {
+                txns.push_back(createTxn(i * numTxns + j));
+            }
+            auto adv = createAdvert(txns);
+
+            // Both Node 0 and Node 1 advertize {tx0, tx1, ..., tx5} to Node 2
+            links[0][2]->sendMessage(adv, false);
+            links[1][2]->sendMessage(adv, false);
+
+            // Give enough time to:
+            // 1) call `demand`, and
+            // 2) send the demands out.
+            testutil::crankFor(
+                clock, apps[2]->getConfig().FLOOD_DEMAND_PERIOD_MS + epsilon);
+
+            REQUIRE(numDemandSent(apps[2]) == (i + 1) * 2 - 1);
+            {
+                // Exactly one of Node 0 or Node 1 should get a demand for all
+                // the 5 txns this round.
+                int n0 = numUnknownDemand(apps[0]);
+                int n1 = numUnknownDemand(apps[1]);
+                REQUIRE(std::max(n0, n1) == (i + 1) * numTxns);
+                REQUIRE(std::min(n0, n1) == i * numTxns);
+                if (n0 < n1)
+                {
+                    peer1++;
+                }
+                else
+                {
+                    peer0++;
+                }
+            }
+
+            // Wait long enough so the first round of demands expire and the
+            // second round of demands get sent out.
+            testutil::crankFor(
+                clock,
+                apps[2]->getConfig().FLOOD_DEMAND_BACKOFF_DELAY_MS + epsilon);
+            REQUIRE(numUnknownDemand(apps[0]) == (i + 1) * numTxns);
+            REQUIRE(numUnknownDemand(apps[1]) == (i + 1) * numTxns);
+        }
+
+        // In each 300 round, both peer0 and peer1 have
+        // a 50% chance of getting the demand before the other.
+        // Statistically speaking, this is the same as coin flips.
+        // After 300 flips, the chance that we have more than 200 heads
+        // is 0.000000401%.
+        REQUIRE(std::max(peer0, peer1) <= numRounds * 2 / 3);
+    }
+    for (auto& app : apps)
+    {
+        testutil::shutdownWorkScheduler(*app);
+    }
+}
+
+TEST_CASE("pull mode enable only if both request", "[overlay][pullmode]")
+{
+    VirtualClock clock;
+    auto app1 = createTestApplication(clock, getTestConfig(1));
+    Config cfg2 = getTestConfig(2);
+    cfg2.ENABLE_PULL_MODE = false;
+    auto app2 = createTestApplication(clock, cfg2);
+
+    auto conn = std::make_shared<LoopbackPeerConnection>(*app1, *app2);
+    testutil::crankSome(clock);
+
+    REQUIRE(conn->getInitiator()->isAuthenticated());
+    REQUIRE(conn->getAcceptor()->isAuthenticated());
+    REQUIRE(conn->getInitiator()->shouldFloodLazily() == false);
+    REQUIRE(conn->getAcceptor()->shouldFloodLazily() == false);
+}
+
+TEST_CASE("overlay pull mode loadgen", "[overlay][pullmode]")
+{
+    auto networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
+    auto simulation =
+        std::make_shared<Simulation>(Simulation::OVER_TCP, networkID);
+
+    SIMULATION_CREATE_NODE(Node1);
+    SIMULATION_CREATE_NODE(Node2);
+    SIMULATION_CREATE_NODE(Node3);
+
+    SCPQuorumSet qSet;
+    qSet.threshold = 3;
+    qSet.validators.push_back(vNode1NodeID);
+    qSet.validators.push_back(vNode2NodeID);
+    qSet.validators.push_back(vNode3NodeID);
+
+    auto configs = std::vector<Config>{};
+
+    int const advertSize = 2;
+    int const demandSize = 3;
+
+    for (auto i = 0; i < 3; i++)
+    {
+        auto cfg = getTestConfig(i + 1);
+
+        cfg.FLOOD_MAX_ADVERT_SIZE = advertSize;
+        cfg.FLOOD_MAX_DEMAND_SIZE = demandSize;
+        // Intentionally set the demand period significantly longer.
+        // This allows each node to receive all the adverts
+        // before they start putting together demands.
+        // Without this, a node may not be able to create a demand
+        // containing up to `demandSize` hashes.
+        cfg.FLOOD_ADVERT_PERIOD_MS = std::chrono::milliseconds(50);
+        cfg.FLOOD_DEMAND_PERIOD_MS = std::chrono::milliseconds(500);
+        configs.push_back(cfg);
+    }
+
+    Application::pointer node1 =
+        simulation->addNode(vNode1SecretKey, qSet, &configs[0]);
+    Application::pointer node2 =
+        simulation->addNode(vNode2SecretKey, qSet, &configs[1]);
+    Application::pointer node3 =
+        simulation->addNode(vNode3SecretKey, qSet, &configs[2]);
+
+    simulation->addPendingConnection(vNode1NodeID, vNode2NodeID);
+    simulation->addPendingConnection(vNode2NodeID, vNode3NodeID);
+    simulation->addPendingConnection(vNode3NodeID, vNode1NodeID);
+    simulation->startAllNodes();
+
+    simulation->crankUntil(
+        [&] { return simulation->haveAllExternalized(2, 1); },
+        3 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
+
+    auto& loadGen = node1->getLoadGenerator();
+
+    // Create 5 txns each creating one new account.
+    // Set a really high tx rate so we create the txns right away.
+    int const numAccounts = 5;
+    loadGen.generateLoad(LoadGenMode::CREATE, numAccounts, 0, 0,
+                         /*txRate*/ 1000,
+                         /*batchSize*/ 1, std::chrono::seconds(0), 0);
+
+    // Let the network close multiple ledgers.
+    // If the logic to advertize or demand incorrectly sends more than
+    // they're supposed to (e.g., advertize the same txn twice),
+    // then it'll likely happen within a few ledgers.
+    simulation->crankUntil(
+        [&] { return simulation->haveAllExternalized(5, 1); },
+        10 * Herder::EXP_LEDGER_TIMESPAN_SECONDS, false);
+
+    // Node 1 advertized 5 txn hashes to each of Node 2 and Node 3.
+    REQUIRE(numTxHashesAdvertized(node1) == (numAccounts * 2));
+
+    // Node 2 and Node 3 advertized the 5 txn hashes to each other.
+    REQUIRE(numTxHashesAdvertized(node2) == numAccounts);
+    REQUIRE(numTxHashesAdvertized(node3) == numAccounts);
+
+    // The number of adverts and demands should depend on the number of tx
+    // hashes and the maximum number of hashes in each advert and demand. Thus
+    // we want to divide it and round it up.
+    int const numAdverts = (numAccounts + advertSize - 1) / advertSize;
+    int const numDemands = (numAccounts + demandSize - 1) / demandSize;
+
+    REQUIRE(numAdvertSent(node1) == (2 * numAdverts));
+    REQUIRE(numAdvertSent(node2) == numAdverts);
+    REQUIRE(numAdvertSent(node3) == numAdverts);
+
+    REQUIRE(numDemandSent(node1) == 0);
+    REQUIRE(numDemandSent(node2) == numDemands);
+    REQUIRE(numDemandSent(node3) == numDemands);
+
+    // As this is a "happy path", there should be no unknown demands.
+    REQUIRE(numUnknownDemand(node1) == 0);
+    REQUIRE(numUnknownDemand(node2) == 0);
+    REQUIRE(numUnknownDemand(node3) == 0);
+}
+
+TEST_CASE("overlay pull mode with many peers", "[overlay][pullmode]")
+{
+    VirtualClock clock;
+
+    // Defined in src/overlay/OverlayManagerImpl.h.
+    int const maxRetry = 15;
+
+    int const numNodes = maxRetry + 5;
+    std::vector<std::shared_ptr<Application>> apps;
+
+    for (int i = 0; i < numNodes; i++)
+    {
+        apps.push_back(createTestApplication(clock, getTestConfig(i)));
+    }
+
+    std::vector<std::shared_ptr<LoopbackPeerConnection>> connections;
+    // Every node is connected to node 0.
+    for (int i = 1; i < numNodes; i++)
+    {
+        connections.push_back(
+            std::make_shared<LoopbackPeerConnection>(*apps[i], *apps[0]));
+    }
+
+    testutil::crankFor(clock, std::chrono::seconds(5));
+    for (auto& conn : connections)
+    {
+        REQUIRE(conn->getInitiator()->isAuthenticated());
+        REQUIRE(conn->getAcceptor()->isAuthenticated());
+        REQUIRE(conn->getInitiator()->flowControlEnabled() ==
+                Peer::FlowControlState::ENABLED);
+        REQUIRE(conn->getAcceptor()->flowControlEnabled() ==
+                Peer::FlowControlState::ENABLED);
+    }
+
+    StellarMessage adv, emptyMsg;
+    adv.type(FLOOD_ADVERT);
+    // As we will never fulfill the demand in this test,
+    // we won't even bother hashing an actual txn envelope.
+    adv.floodAdvert().txHashes.push_back(xdrSha256(emptyMsg));
+    for (auto& conn : connections)
+    {
+        // Everyone advertizes to Node 0.
+        conn->getInitiator()->sendMessage(
+            std::make_shared<StellarMessage>(adv));
+    }
+
+    // Let it crank for 10 minutes.
+    // If we're ever going to retry too many times,
+    // it's likely that they'll happen in 10 minutes.
+    testutil::crankFor(clock, std::chrono::minutes(10));
+
+    REQUIRE(numDemandSent(apps[0]) == maxRetry);
 }
 }
