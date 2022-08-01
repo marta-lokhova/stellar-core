@@ -92,6 +92,14 @@ OverlayMetrics::OverlayMetrics(Application& app)
     , mOutboundQueueDelayDemand(
           app.getMetrics().NewTimer({"overlay", "outbound-queue", "demand"}))
 
+    , mOutboundQueueDropSCP(app.getMetrics().NewMeter(
+          {"overlay", "outbound-queue", "drop-scp"}, "message"))
+    , mOutboundQueueDropTxs(app.getMetrics().NewMeter(
+          {"overlay", "outbound-queue", "drop-tx"}, "message"))
+    , mOutboundQueueDropAdvert(app.getMetrics().NewMeter(
+          {"overlay", "outbound-queue", "drop-advert"}, "message"))
+    , mOutboundQueueDropDemand(app.getMetrics().NewMeter(
+          {"overlay", "outbound-queue", "drop-demand"}, "message"))
     , mSendErrorMeter(
           app.getMetrics().NewMeter({"overlay", "send", "error"}, "message"))
     , mSendHelloMeter(

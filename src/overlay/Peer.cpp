@@ -1036,7 +1036,7 @@ Peer::addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg)
         {
             dropped = queue.size() - limit;
             queue.erase(queue.begin(), queue.begin() + dropped);
-            TracyPlot("overlay-txns-dropped", static_cast<int64_t>(dropped));
+            getOverlayMetrics().mOutboundQueueDropTxs.Mark(dropped);
         }
     }
     else if (type == SCP_MESSAGE)
@@ -1072,6 +1072,7 @@ Peer::addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg)
                 ++it;
             }
         }
+        getOverlayMetrics().mOutboundQueueDropSCP.Mark(dropped);
     }
     else if (type == FLOOD_ADVERT)
     {
@@ -1082,6 +1083,7 @@ Peer::addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg)
                 queue.begin()->mMessage->floodAdvert().txHashes.size();
             queue.erase(queue.begin());
         }
+        getOverlayMetrics().mOutboundQueueDropAdvert.Mark(dropped);
         TracyPlot("overlay-adverts-dropped", static_cast<int64_t>(dropped));
     }
     else if (type == FLOOD_DEMAND)
@@ -1093,6 +1095,7 @@ Peer::addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg)
                 queue.begin()->mMessage->floodDemand().txHashes.size();
             queue.erase(queue.begin());
         }
+        getOverlayMetrics().mOutboundQueueDropDemand.Mark(dropped);
         TracyPlot("overlay-demand-dropped", static_cast<int64_t>(dropped));
     }
 

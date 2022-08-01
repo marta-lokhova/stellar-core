@@ -70,6 +70,10 @@ struct OverlayMetrics
     medida::Timer& mOutboundQueueDelayTxs;
     medida::Timer& mOutboundQueueDelayAdvert;
     medida::Timer& mOutboundQueueDelayDemand;
+    medida::Meter& mOutboundQueueDropSCP;
+    medida::Meter& mOutboundQueueDropTxs;
+    medida::Meter& mOutboundQueueDropAdvert;
+    medida::Meter& mOutboundQueueDropDemand;
 
     medida::Meter& mSendErrorMeter;
     medida::Meter& mSendHelloMeter;
