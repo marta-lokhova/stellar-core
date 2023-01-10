@@ -124,7 +124,8 @@ struct DontHave
 
 enum SurveyMessageCommandType
 {
-    SURVEY_TOPOLOGY = 0
+    SURVEY_TOPOLOGY = 0,
+    SURVEY_TOPOLOGY_EXTENDED = 1
 };
 
 struct SurveyRequestMessage
@@ -181,7 +182,7 @@ struct PeerStats
 
 typedef PeerStats PeerStatList<25>;
 
-struct TopologyResponseBody
+struct TopologyResponseBodyV0
 {
     PeerStatList inboundPeers;
     PeerStatList outboundPeers;
@@ -190,10 +191,24 @@ struct TopologyResponseBody
     uint32 totalOutboundPeerCount;
 };
 
+struct TopologyResponseBodyV1
+{
+    PeerStatList inboundPeers;
+    PeerStatList outboundPeers;
+
+    uint32 totalInboundPeerCount;
+    uint32 totalOutboundPeerCount;
+
+    uint32 maxInboundPeerCount;
+    uint32 maxOutboundPeerCount;
+};
+
 union SurveyResponseBody switch (SurveyMessageCommandType type)
 {
 case SURVEY_TOPOLOGY:
-    TopologyResponseBody topologyResponseBody;
+    TopologyResponseBodyV0 topologyResponseBodyV0;
+case SURVEY_TOPOLOGY_EXTENDED:
+    TopologyResponseBodyV1 topologyResponseBodyV1;
 };
 
 const TX_ADVERT_VECTOR_MAX_SIZE = 1000;
