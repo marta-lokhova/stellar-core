@@ -33,7 +33,7 @@ RUST_VERSION=$(perl -ne 'if (/channel\s+=\s+"(\d+\.\d+)"/) { print $1 }' rust-to
 case "$(uname -m)" in
   "x86_64"*)
     HOST_TRIPLE=x86_64-unknown-linux-gnu
-    RUSTUP_SHA256=5cc9ffd1026e82e7fb2eec2121ad71f4b0f044e88bca39207b3f6b769aaa799c
+    RUSTUP_SHA256=bb31eaf643926b2ee9f4d8d6fc0e2835e03c0a60f34d324048aa194f0b29a71c
   ;;
   "aarch64"*)
     HOST_TRIPLE=aarch64-unknown-linux-gnu
