@@ -60,6 +60,9 @@ class LocalNode
     static bool isVBlocking(SCPQuorumSet const& qSet,
                             std::vector<NodeID> const& nodeSet);
 
+    static void getAllNodesFlat(SCPQuorumSet const& qSet,
+                                std::vector<NodeID>& nodes);
+
     // Tests this node against a map of nodeID -> T for the specified qSetHash.
 
     // `isVBlocking` tests if the filtered nodes V are a v-blocking set for

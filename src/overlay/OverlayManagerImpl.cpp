@@ -33,6 +33,7 @@
 #include "medida/meter.h"
 #include "medida/metrics_registry.h"
 
+#include "scp/LocalNode.h"
 #include <algorithm>
 #include <random>
 
@@ -174,7 +175,8 @@ OverlayManagerImpl::PeersList::acceptAuthenticatedPeer(Peer::pointer peer)
     ZoneScoped;
     CLOG_TRACE(Overlay, "Trying to promote peer to authenticated {}",
                peer->toString());
-    if (mOverlayManager.isPreferred(peer.get()))
+    if (mOverlayManager.isPreferred(peer.get()) ||
+        mOverlayManager.isAutomaticallyPreferred(peer.get()))
     {
         if (mAuthenticated.size() < mMaxAuthenticatedCount)
         {
@@ -183,7 +185,8 @@ OverlayManagerImpl::PeersList::acceptAuthenticatedPeer(Peer::pointer peer)
 
         for (auto victim : mAuthenticated)
         {
-            if (!mOverlayManager.isPreferred(victim.second.get()))
+            if (!mOverlayManager.isPreferred(victim.second.get()) &&
+                !mOverlayManager.isAutomaticallyPreferred(victim.second.get()))
             {
                 CLOG_INFO(
                     Overlay,
@@ -289,6 +292,8 @@ OverlayManagerImpl::OverlayManagerImpl(Application& app)
         mPeerManager, RandomPeerSource::nextAttemptCutoff(PeerType::OUTBOUND));
     mPeerSources[PeerType::PREFERRED] = std::make_unique<RandomPeerSource>(
         mPeerManager, RandomPeerSource::nextAttemptCutoff(PeerType::PREFERRED));
+    mPeerSources[PeerType::AUTOMATIC] = std::make_unique<RandomPeerSource>(
+        mPeerManager, RandomPeerSource::nextAttemptCutoff(PeerType::AUTOMATIC));
 }
 
 OverlayManagerImpl::~OverlayManagerImpl()
@@ -374,6 +379,11 @@ OverlayManagerImpl::storePeerList(std::vector<PeerBareAddress> const& addresses,
 {
     ZoneScoped;
     auto type = setPreferred ? PeerType::PREFERRED : PeerType::OUTBOUND;
+    if (setPreferred)
+    {
+        type = PeerType::AUTOMATIC;
+    }
+
     if (setPreferred)
     {
         mConfigurationPreferredPeers.clear();
@@ -540,7 +550,10 @@ OverlayManagerImpl::updateTimerAndMaybeDropRandomPeer(bool shouldDrop)
                              std::back_inserter(nonPreferredPeers),
                              [&](auto const& peer) {
                                  return !mApp.getOverlayManager().isPreferred(
-                                     peer.second.get());
+                                            peer.second.get()) &&
+                                        !mApp.getOverlayManager()
+                                             .isAutomaticallyPreferred(
+                                                 peer.second.get());
                              });
                 if (!nonPreferredPeers.empty())
                 {
@@ -651,13 +664,39 @@ OverlayManagerImpl::tick()
         availablePendingSlots -= pendingUsedByPreferred;
     }
 
+    // Next, check if we have capacity to automatically promote peers to
+    // preferred
+    // TODO: do we need something else regarding the backoff strategy? It
+    // already seems fairly conservative, with long exponential backoffs between
+    // re-connects
+    if (mApp.getConfig().AUTOMATIC_PREFERRED_PEERS)
+    {
+        // in that context, an available slot is either a free slot or a non
+        // preferred one
+        auto desiredAutomaticPeers = getAutomaticPeersNumSlots();
+
+        int automaticToConnect = availableOutboundAuthenticatedSlots() +
+                                 nonPreferredAuthenticatedCount();
+        int availableSlots =
+            std::min(automaticToConnect, availablePendingSlots);
+        automaticToConnect = std::min(desiredAutomaticPeers, availableSlots);
+
+        auto pendingUsedByAutomatic =
+            connectTo(automaticToConnect, PeerType::AUTOMATIC);
+
+        releaseAssert(pendingUsedByAutomatic <= availablePendingSlots);
+        availablePendingSlots -= pendingUsedByAutomatic;
+    }
+
     // Only trigger reconnecting if:
     //   * no outbound slots are available
     //   * we didn't establish any new preferred peers connections (those
     //      will evict regular peers anyway)
     bool shouldDrop =
         availableAuthenticatedSlots == 0 && availablePendingSlots > 0;
-    updateTimerAndMaybeDropRandomPeer(shouldDrop);
+
+    // TODO: temporarily disable recovery to properly test connectivity
+    // updateTimerAndMaybeDropRandomPeer(shouldDrop);
 
     availableAuthenticatedSlots = availableOutboundAuthenticatedSlots();
 
@@ -731,7 +770,8 @@ OverlayManagerImpl::nonPreferredAuthenticatedCount() const
     unsigned short nonPreferredCount{0};
     for (auto const& p : mOutboundPeers.mAuthenticated)
     {
-        if (!isPreferred(p.second.get()))
+        if (!isPreferred(p.second.get()) &&
+            !isAutomaticallyPreferred(p.second.get()))
         {
             nonPreferredCount++;
         }
@@ -961,6 +1001,44 @@ OverlayManagerImpl::isPreferred(Peer* peer) const
 
     CLOG_TRACE(Overlay, "Peer {} is not preferred", pstr);
     return false;
+}
+
+bool
+OverlayManagerImpl::isAutomaticallyPreferred(Peer* peer) const
+{
+    if (!mApp.getConfig().AUTOMATIC_PREFERRED_PEERS)
+    {
+        return false;
+    }
+    auto peerID = peer->getPeerID();
+    return !LocalNode::forAllNodes(
+        mApp.getConfig().QUORUM_SET,
+        [&](NodeID const& node) { return !(peerID == node); });
+}
+
+int
+OverlayManagerImpl::getAutomaticPeersNumSlots()
+{
+    if (!mApp.getConfig().AUTOMATIC_PREFERRED_PEERS)
+    {
+        return 0;
+    }
+    std::vector<NodeID> qset;
+    // TODO: can save this as a member variable
+    // TODO: turn this into a real formula
+    size_t numConnections = 4;
+
+    for (auto const& p : getAuthenticatedPeers())
+    {
+        if (isAutomaticallyPreferred(p.second.get()) && numConnections > 0)
+        {
+            --numConnections;
+        }
+    }
+
+    CLOG_TRACE(Overlay, "Automatically preferred connections: {}",
+               numConnections);
+    return numConnections;
 }
 
 bool

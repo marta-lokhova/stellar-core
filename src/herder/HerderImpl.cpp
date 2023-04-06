@@ -1888,7 +1888,7 @@ HerderImpl::herderOutOfSync()
     CLOG_WARNING(Herder, "Lost track of consensus");
 
     auto s = getJsonInfo(20).toStyledString();
-    CLOG_WARNING(Herder, "Out of sync context: {}", s);
+    CLOG_WARNING(Herder, "Out of sync context");
 
     mSCPMetrics.mLostSync.Mark();
     lostSync();

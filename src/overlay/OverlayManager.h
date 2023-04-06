@@ -130,6 +130,8 @@ class OverlayManager
     virtual bool acceptAuthenticatedPeer(Peer::pointer peer) = 0;
 
     virtual bool isPreferred(Peer* peer) const = 0;
+    virtual bool isAutomaticallyPreferred(Peer* peer) const = 0;
+    virtual int getAutomaticPeersNumSlots() = 0;
 
     virtual bool isFloodMessage(StellarMessage const& msg) = 0;
 

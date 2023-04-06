@@ -24,7 +24,8 @@ enum class PeerType
 {
     INBOUND,
     OUTBOUND,
-    PREFERRED
+    PREFERRED,
+    AUTOMATIC
 };
 
 enum class PeerTypeFilter
@@ -32,6 +33,7 @@ enum class PeerTypeFilter
     INBOUND_ONLY,
     OUTBOUND_ONLY,
     PREFERRED_ONLY,
+    AUTOMATIC_ONLY,
     ANY_OUTBOUND
 };
 
@@ -66,6 +68,7 @@ class PeerManager
     {
         ENSURE_OUTBOUND,
         SET_PREFERRED,
+        SET_AUTOMATIC,
         ENSURE_NOT_PREFERRED,
     };
 

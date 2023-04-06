@@ -458,6 +458,8 @@ class Config : public std::enable_shared_from_this<Config>
     // Whether to exclude peers that are not preferred.
     bool PREFERRED_PEERS_ONLY;
 
+    bool AUTOMATIC_PREFERRED_PEERS;
+
     // thread-management config
     int WORKER_THREADS;
 

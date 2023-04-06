@@ -89,6 +89,20 @@ LocalNode::forAllNodes(SCPQuorumSet const& qset,
     return true;
 }
 
+void
+LocalNode::getAllNodesFlat(SCPQuorumSet const& qSet, std::vector<NodeID>& nodes)
+{
+    for (auto const& n : qSet.validators)
+    {
+        nodes.emplace_back(n);
+    }
+
+    for (auto const& q : qSet.innerSets)
+    {
+        getAllNodesFlat(q, nodes);
+    }
+}
+
 uint64
 LocalNode::computeWeight(uint64 m, uint64 total, uint64 threshold)
 {

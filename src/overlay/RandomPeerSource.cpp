@@ -50,6 +50,10 @@ peerTypeToFilter(PeerType peerType)
     {
         return PeerTypeFilter::PREFERRED_ONLY;
     }
+    case PeerType::AUTOMATIC:
+    {
+        return PeerTypeFilter::AUTOMATIC_ONLY;
+    }
     default:
     {
         abort();
@@ -61,8 +65,8 @@ peerTypeToFilter(PeerType peerType)
 PeerQuery
 RandomPeerSource::nextAttemptCutoff(PeerType requireExactType)
 {
-    return {true, Config::REALLY_DEAD_NUM_FAILURES_CUTOFF,
-            peerTypeToFilter(requireExactType)};
+    return PeerQuery{true, Config::REALLY_DEAD_NUM_FAILURES_CUTOFF,
+                     peerTypeToFilter(requireExactType)};
 }
 
 RandomPeerSource::RandomPeerSource(PeerManager& peerManager,

@@ -341,9 +341,15 @@ PeerManager::update(PeerRecord& peer, TypeUpdate type)
         peer.mType = static_cast<int>(PeerType::PREFERRED);
         break;
     }
+    case TypeUpdate::SET_AUTOMATIC:
+    {
+        peer.mType = static_cast<int>(PeerType::AUTOMATIC);
+        break;
+    }
     case TypeUpdate::ENSURE_NOT_PREFERRED:
     {
-        if (peer.mType == static_cast<int>(PeerType::PREFERRED))
+        if (peer.mType == static_cast<int>(PeerType::PREFERRED) ||
+            peer.mType == static_cast<int>(PeerType::AUTOMATIC))
         {
             peer.mType = static_cast<int>(PeerType::OUTBOUND);
         }
@@ -360,18 +366,28 @@ namespace
 {
 
 static std::chrono::seconds
-computeBackoff(size_t numFailures)
+computeBackoff(size_t numFailures, PeerType type)
 {
     constexpr const uint32 SECONDS_PER_BACKOFF = 10;
     constexpr const size_t MAX_BACKOFF_EXPONENT = 10;
 
     uint32 backoffCount = static_cast<uint32>(
         std::min<size_t>(MAX_BACKOFF_EXPONENT, numFailures));
-    auto nsecs =
-        std::chrono::seconds(static_cast<uint32>(gRandomEngine()) %
-                                 ((1u << backoffCount) * SECONDS_PER_BACKOFF) +
-                             1);
-    return nsecs;
+    // if (type != PeerType::AUTOMATIC)
+    {
+        return std::chrono::seconds(
+            static_cast<uint32>(gRandomEngine()) %
+                ((1u << backoffCount) * SECONDS_PER_BACKOFF) +
+            1);
+    }
+    // else
+    // {
+    //     // Don't try too often for AUTOMATIC peers
+    //     return std::chrono::seconds(static_cast<uint32>(gRandomEngine()) %
+    //                                 ((1u << backoffCount) *
+    //                                 SECONDS_PER_BACKOFF) +
+    //                             SECONDS_PER_BACKOFF);
+    // }
 }
 }
 
@@ -392,8 +408,9 @@ PeerManager::update(PeerRecord& peer, BackOffUpdate backOff, Application& app)
     {
         peer.mNumFailures =
             backOff == BackOffUpdate::RESET ? 0 : peer.mNumFailures + 1;
-        auto nextAttempt =
-            app.getClock().system_now() + computeBackoff(peer.mNumFailures);
+        auto nextAttempt = app.getClock().system_now() +
+                           computeBackoff(peer.mNumFailures,
+                                          static_cast<PeerType>(peer.mType));
         peer.mNextAttempt = VirtualClock::systemPointToTm(nextAttempt);
         break;
     }
@@ -421,7 +438,9 @@ getTypeUpdate(PeerRecord const& peer, PeerType observedType,
               bool preferredTypeKnown)
 {
     PeerManager::TypeUpdate typeUpdate;
-    bool isPreferredInDB = peer.mType == static_cast<int>(PeerType::PREFERRED);
+    bool isPreferredInDB =
+        peer.mType == static_cast<int>(PeerType::PREFERRED) ||
+        peer.mType == static_cast<int>(PeerType::AUTOMATIC);
 
     switch (observedType)
     {
@@ -429,6 +448,12 @@ getTypeUpdate(PeerRecord const& peer, PeerType observedType,
     {
         // Always update to preferred
         typeUpdate = PeerManager::TypeUpdate::SET_PREFERRED;
+        break;
+    }
+    case PeerType::AUTOMATIC:
+    {
+        // Always update to preferred
+        typeUpdate = PeerManager::TypeUpdate::SET_AUTOMATIC;
         break;
     }
     case PeerType::OUTBOUND:

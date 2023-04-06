@@ -1696,9 +1696,15 @@ Peer::updatePeerRecordAfterEcho()
     releaseAssert(!getAddress().isEmpty());
 
     PeerType type;
+    // Remember automatic peers that are not preferred already
     if (mApp.getOverlayManager().isPreferred(this))
     {
         type = PeerType::PREFERRED;
+    }
+    else if (mApp.getOverlayManager().isAutomaticallyPreferred(this))
+    {
+        // TODO: every time we add a new automatic peer, re-shuffle
+        type = PeerType::AUTOMATIC;
     }
     else if (mRole == WE_CALLED_REMOTE)
     {
