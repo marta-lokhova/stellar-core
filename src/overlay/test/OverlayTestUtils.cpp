@@ -7,6 +7,8 @@
 #include "medida/metrics_registry.h"
 #include "overlay/OverlayManager.h"
 #include "overlay/OverlayMetrics.h"
+#include "simulation/Simulation.h"
+#include "util/Logging.h"
 
 namespace stellar
 {
@@ -56,6 +58,69 @@ getSentDemandCount(std::shared_ptr<Application> app)
         .mSendFloodDemandMeter.count();
 }
 
+bool
+knowsAs(Application& knowingApp, Application& knownApp, PeerType peerType)
+{
+    auto data = knowingApp.getOverlayManager().getPeerManager().load(
+        PeerBareAddress{"127.0.0.1", knownApp.getConfig().PEER_PORT});
+    if (!data.second)
+    {
+        return false;
+    }
+
+    return data.first.mType == static_cast<int>(peerType);
 }
 
+bool
+doesNotKnow(Application& knowingApp, Application& knownApp)
+{
+    return !knowingApp.getOverlayManager()
+                .getPeerManager()
+                .load(PeerBareAddress{"127.0.0.1",
+                                      knownApp.getConfig().PEER_PORT})
+                .second;
+}
+
+bool
+knowsAsInbound(Application& knowingApp, Application& knownApp)
+{
+    return knowsAs(knowingApp, knownApp, PeerType::INBOUND);
+}
+
+bool
+knowsAsOutbound(Application& knowingApp, Application& knownApp)
+{
+    return knowsAs(knowingApp, knownApp, PeerType::OUTBOUND);
+}
+
+bool
+knowsAsPreferred(Application& knowingApp, Application& knownApp)
+{
+    return knowsAs(knowingApp, knownApp, PeerType::PREFERRED);
+}
+
+bool
+knowsAsAutomatic(Application& knowingApp, Application& knownApp)
+{
+    return knowsAs(knowingApp, knownApp, PeerType::AUTOMATIC);
+}
+
+int
+numberOfAppConnections(Application& app)
+{
+    return app.getOverlayManager().getAuthenticatedPeersCount();
+}
+
+int
+numberOfSimulationConnections(std::shared_ptr<Simulation> simulation)
+{
+    auto nodes = simulation->getNodes();
+    auto num = std::accumulate(std::begin(nodes), std::end(nodes), 0,
+                               [&](int x, Application::pointer app) {
+                                   return x + numberOfAppConnections(*app);
+                               });
+    CLOG_INFO(Overlay, "Total Connections {}", num);
+    return num;
+}
+}
 }
