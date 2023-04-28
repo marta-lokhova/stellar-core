@@ -208,7 +208,10 @@ class HerderImpl : public Herder
     void newSlotExternalized(bool synchronous, StellarValue const& value);
     void purgeOldPersistedTxSets();
 
-    TransactionQueue mTransactionQueue;
+    ClassicTransactionQueue mTransactionQueue;
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    SorobanTransactionQueue mSorobanTransactionQueue;
+#endif
 
     void
     updateTransactionQueue(std::vector<TransactionFrameBasePtr> const& applied);

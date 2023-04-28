@@ -22,7 +22,7 @@ class AccountTransactionQueue : public TxStack
     TransactionFrameBasePtr getTopTx() const override;
     bool empty() const override;
     void popTopTx() override;
-    uint32_t getNumOperations() const override;
+    Resource getResources() const override;
 
     std::deque<TransactionFrameBasePtr> mTxs;
 

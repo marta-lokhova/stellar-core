@@ -95,10 +95,10 @@ AccountTransactionQueue::popTopTx()
     mTxs.pop_front();
 }
 
-uint32_t
-AccountTransactionQueue::getNumOperations() const
+Resource
+AccountTransactionQueue::getResources() const
 {
-    return mNumOperations;
+    return Resource(mNumOperations);
 }
 
 bool

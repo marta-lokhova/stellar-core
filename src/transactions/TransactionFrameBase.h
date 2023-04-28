@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "herder/SurgePricingUtils.h"
 #include "ledger/LedgerHashUtils.h"
 #include "overlay/StellarXDR.h"
 #include "transactions/TransactionMetaFrame.h"
@@ -51,6 +52,8 @@ class TransactionFrameBase
     virtual Hash const& getFullHash() const = 0;
 
     virtual uint32_t getNumOperations() const = 0;
+    virtual Resource getNumResources() const = 0;
+
     virtual std::vector<Operation> const& getRawOperations() const = 0;
 
     virtual TransactionResult& getResult() = 0;

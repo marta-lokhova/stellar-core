@@ -175,6 +175,25 @@ TransactionFrame::getNumOperations() const
                : static_cast<uint32_t>(mEnvelope.v1().tx.operations.size());
 }
 
+Resource
+TransactionFrame::getNumResources() const
+{
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    if (isSoroban())
+    {
+        // TODO: constructor should just take thr whole struct
+        auto r = sorobanResources();
+        int64_t txSize = xdr::xdr_size(mEnvelope.v1().tx);
+
+        return Resource({r.instructions, txSize, r.readBytes, r.writeBytes,
+                         static_cast<int64_t>(r.footprint.readOnly.size()),
+                         static_cast<int64_t>(r.footprint.readWrite.size())});
+    }
+#endif
+
+    return Resource(getNumOperations());
+}
+
 std::vector<Operation> const&
 TransactionFrame::getRawOperations() const
 {
@@ -360,7 +379,7 @@ TransactionFrame::hasDexOperations() const
 bool
 TransactionFrame::isSoroban() const
 {
-    return mOperations[0]->isSoroban();
+    return !mOperations.empty() && mOperations[0]->isSoroban();
 }
 
 #ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION

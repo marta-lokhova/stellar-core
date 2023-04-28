@@ -87,6 +87,7 @@ class SorobanNetworkConfig
     // Memory limit per transaction.
     uint32_t txMemoryLimit() const;
 
+    // TODO: what does ledger access limits really mean?
     // Ledger access settings for contracts.
     // Maximum number of ledger entry read operations per ledger
     uint32_t ledgerMaxReadLedgerEntries() const;

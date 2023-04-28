@@ -210,7 +210,7 @@ class TransactionQueueTest
     }
 
   private:
-    TransactionQueue mTransactionQueue;
+    ClassicTransactionQueue mTransactionQueue;
 };
 }
 
@@ -1736,7 +1736,7 @@ TEST_CASE("transaction queue starting sequence boundary",
         acc1.bumpSequence(startingSeq - 1);
         REQUIRE(acc1.loadSequenceNumber() == startingSeq - 1);
 
-        TransactionQueue tq(*app, 4, 10, 4);
+        ClassicTransactionQueue tq(*app, 4, 10, 4);
         REQUIRE(tq.tryAdd(transaction(*app, acc1, 1, 1, 100), false) ==
                 TransactionQueue::AddResult::ADD_STATUS_PENDING);
 
@@ -1758,7 +1758,7 @@ TEST_CASE("transaction queue starting sequence boundary",
         acc1.bumpSequence(startingSeq - 3);
         REQUIRE(acc1.loadSequenceNumber() == startingSeq - 3);
 
-        TransactionQueue tq(*app, 4, 10, 4);
+        ClassicTransactionQueue tq(*app, 4, 10, 4);
         for (size_t i = 1; i <= 4; ++i)
         {
             REQUIRE(tq.tryAdd(transaction(*app, acc1, i, 1, 100), false) ==

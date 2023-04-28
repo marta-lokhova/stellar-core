@@ -4,12 +4,61 @@
 // under the Apache License, Version 2.0. See the COPYING file at the root
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
+#include "util/GlobalChecks.h"
+#include "util/numeric.h"
 #include <set>
-
-#include "transactions/TransactionFrameBase.h"
+#include <vector>
 
 namespace stellar
 {
+// TODO: deal with includes later
+class TransactionFrameBase;
+using TransactionFrameBasePtr = std::shared_ptr<TransactionFrameBase>;
+using TransactionFrameBaseConstPtr =
+    std::shared_ptr<TransactionFrameBase const>;
+
+struct Resource
+{
+    // TODO: make it const
+    std::vector<int64_t> mResources;
+    Resource& operator+=(Resource const& other);
+    Resource& operator-=(Resource const& other);
+    bool operator<(Resource const& other) const;
+    bool operator>(Resource const& other) const;
+
+    Resource(std::vector<int64_t> args)
+    {
+        mResources = args;
+    }
+
+    Resource(int64_t arg)
+    {
+        mResources = std::vector<int64_t>(1, arg);
+    }
+
+    bool
+    isZero() const
+    {
+        return std::all_of(mResources.begin(), mResources.end(),
+                           [](int64_t x) { return x == 0; });
+    }
+
+    size_t
+    size() const
+    {
+        return mResources.size();
+    }
+};
+
+Resource mutliplyByDouble(Resource const& res, double m);
+Resource bigDivideOrThrow(Resource const& res, int64_t B, int64_t C,
+                          Rounding rounding);
+
+Resource operator+(Resource const& lhs, Resource const& rhs);
+Resource operator-(Resource const& lhs, Resource const& rhs);
+bool operator<=(Resource const& lhs, Resource const& rhs);
+bool operator==(Resource const& lhs, Resource const& rhs);
+
 // Compare fee/numOps between `l` and `r`.
 // Returns -1 if `l` is strictly less than `r`, `1` if it's strictly greater and
 // 0 when both are equal.
@@ -36,7 +85,7 @@ class TxStack
     // Pops the transaction from top of the stack.
     virtual void popTopTx() = 0;
     // Returns the total number of operations in the stack.
-    virtual uint32_t getNumOperations() const = 0;
+    virtual Resource getResources() const = 0;
     // Returns whether this stack is empty.
     virtual bool empty() const = 0;
 
@@ -75,12 +124,12 @@ class SurgePricingLaneConfig
 
     // Returns a a lane the transaction belongs to.
     virtual size_t getLane(TransactionFrameBase const& tx) const = 0;
-    // Returns per-lane operation limits.
-    virtual std::vector<uint32_t> const& getLaneOpsLimits() const = 0;
+    // Returns per-lane limits.
+    virtual std::vector<Resource> const& getLaneLimits() const = 0;
     // Updates the limit of the generic lane. This is needed due to
     // protocol upgrades (other lane limits are currently updated via
     // configuration).
-    virtual void updateGenericLaneLimit(uint32_t limit) = 0;
+    virtual void updateGenericLaneLimit(Resource const& limit) = 0;
 
     virtual ~SurgePricingLaneConfig() = default;
 };
@@ -96,17 +145,17 @@ class DexLimitingLaneConfig : public SurgePricingLaneConfig
     // Creates the config. `opsLimit` is the total number of operations allowed
     // (lane '0'). `dexOpsLimit` when non-`nullopt` defines a limited lane for
     // transactions with DEX operations (otherwise only one lane is created).
-    DexLimitingLaneConfig(uint32_t opsLimit,
-                          std::optional<uint32_t> dexOpsLimit);
+    DexLimitingLaneConfig(Resource opsLimit,
+                          std::optional<Resource> dexOpsLimit);
 
     size_t getLane(TransactionFrameBase const& tx) const override;
-    std::vector<uint32_t> const& getLaneOpsLimits() const override;
-    virtual void updateGenericLaneLimit(uint32_t limit) override;
+    std::vector<Resource> const& getLaneLimits() const override;
+    virtual void updateGenericLaneLimit(Resource const& limit) override;
 
   private:
     size_t getTxLane(TransactionFrameBase const& tx) const;
 
-    std::vector<uint32_t> mLaneOpsLimits;
+    std::vector<Resource> mLaneOpsLimits;
 };
 
 // Priority queue-like data structure that allows to store transactions ordered
@@ -132,10 +181,15 @@ class SurgePricingPriorityQueue
     // `hadTxNotFittingLane` is an output parameter that for every lane will
     // identify whether there was a transaction that didn't fit into that lane's
     // limit.
-    static std::vector<TransactionFrameBasePtr> getMostTopTxsWithinLimits(
-        std::vector<TxStackPtr> const& txStacks,
-        std::shared_ptr<SurgePricingLaneConfig> laneConfig,
-        std::vector<bool>& hadTxNotFittingLane);
+    std::vector<TransactionFrameBasePtr>
+    getMostTopTxsWithinLimits(std::vector<TxStackPtr> const& txStacks,
+                              std::vector<bool>& hadTxNotFittingLane);
+
+    // Returns total number of operations in all the stacks in this queue.
+    Resource totalResources() const;
+
+    // Returns total number of operations in the provided lane of the queue.
+    Resource laneResources(size_t lane) const;
 
     // Result of visiting the transaction stack in the `visitTopTxs`.
     // This serves as a callback output to let the queue know how to process the
@@ -162,13 +216,14 @@ class SurgePricingPriorityQueue
     // that stack.
     // `laneOpsLeftUntilLimit` is an output parameter that for each lane will
     // contain the number of operations left until lane's limit is reached.
-    static void visitTopTxs(
+    void visitTopTxs(
         std::vector<TxStackPtr> const& txStacks,
-        std::shared_ptr<SurgePricingLaneConfig> laneConfig,
-        size_t comparisonSeed,
         std::function<VisitTxStackResult(TxStack const&)> const& visitor,
-        std::vector<uint32_t>& laneOpsLeftUntilLimit);
+        std::vector<Resource>& laneOpsLeftUntilLimit);
 
+    std::pair<bool, int64_t> canFitWithEviction(
+        TransactionFrameBase const& tx, Resource txOpsDiscount,
+        std::vector<std::pair<TxStackPtr, bool>>& txStacksToEvict) const;
     // Creates a `SurgePricingPriorityQueue` for the provided lane
     // configuration.
     // `isHighestPriority` defines the comparison order: when it's `true` the
@@ -185,28 +240,7 @@ class SurgePricingPriorityQueue
     // Erases a `TxStack` from this queue.
     void erase(TxStackPtr txStack);
 
-    // Checks whether a provided transaction could fit into this queue without
-    // violating the `laneConfig` limits while evicting some lower fee rate
-    // `TxStacks` from the queue.
-    // Returns whether transaction can be fit and if not, returns the minimum
-    // required fee to possibly fit.
-    // `txOpsDiscount` is a number of operations to subtract from tx's
-    // operations when estimating the total operation counts.
-    // `txStacksToEvict` is an output parameter that will contain all the stacks
-    // that need to be evicted in order to fit `tx`. The `bool` argument
-    // indicates whether this `TxStack` has been evicted due to lane's limit (as
-    // opposed to 'generic' lane's limit).
-    std::pair<bool, int64_t> canFitWithEviction(
-        TransactionFrameBase const& tx, uint32_t txOpsDiscount,
-        std::vector<std::pair<TxStackPtr, bool>>& txStacksToEvict) const;
-
-    // Returns total number of operations in all the stacks in this queue.
-    uint32_t sizeOps() const;
-
-    // Returns total number of operations in the provided lane of the queue.
-    uint32_t laneOps(size_t lane) const;
-
-  private:
+  protected:
     class TxStackComparator
     {
       public:
@@ -269,7 +303,7 @@ class SurgePricingPriorityQueue
     void
     popTopTxs(bool allowGaps,
               std::function<VisitTxStackResult(TxStack const&)> const& visitor,
-              std::vector<uint32_t>& laneOpsLeftUntilLimit,
+              std::vector<Resource>& laneOpsLeftUntilLimit,
               std::vector<bool>& hadTxNotFittingLane);
 
     void erase(Iterator const& it);
@@ -279,11 +313,12 @@ class SurgePricingPriorityQueue
 
     Iterator getTop() const;
 
+    // TODO: comparator interface, changes for smart
     TxStackComparator const mComparator;
     std::shared_ptr<SurgePricingLaneConfig> mLaneConfig;
-    std::vector<uint32_t> const& mLaneOpsLimits;
+    std::vector<Resource> const& mLaneOpsLimits;
 
-    std::vector<uint32_t> mLaneOpsCount;
+    std::vector<Resource> mLaneCurrentCount;
 
     std::vector<TxStackSet> mTxStackSets;
 };

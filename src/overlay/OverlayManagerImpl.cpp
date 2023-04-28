@@ -1208,6 +1208,8 @@ OverlayManagerImpl::getMaxAdvertSize() const
     return res;
 }
 
+// TODO: is this a problem for pull mode? should demand size be based on
+// resources?
 size_t
 OverlayManagerImpl::getMaxDemandSize() const
 {
@@ -1217,6 +1219,7 @@ OverlayManagerImpl::getMaxDemandSize() const
             cfg.getExpectedLedgerCloseTime())
             .count();
     double opRatePerLedger = cfg.FLOOD_OP_RATE_PER_LEDGER;
+    // TODO: fix this
     double queueSizeInOpsDbl =
         static_cast<double>(mApp.getHerder().getMaxQueueSizeOps()) *
         opRatePerLedger;

@@ -13,6 +13,7 @@
 namespace stellar
 {
 
+// tx limiter based on reousrces (either ops or soroban resource)
 class TxQueueLimiter
 {
     // number of ledgers we can pool in memory
@@ -25,7 +26,7 @@ class TxQueueLimiter
     std::unique_ptr<SurgePricingPriorityQueue> mTxs;
 
     // When non-nullopt, limit the number dex operations by this value
-    std::optional<uint32_t> mMaxDexOperations;
+    std::optional<Resource> mMaxDexOperations;
 
     // Stores the maximum bid among the transactions evicted from every tx lane.
     // Bids are stored as ratios (fee_bid / num_ops).
@@ -34,6 +35,13 @@ class TxQueueLimiter
     // Configuration of SurgePricingPriorityQueue with the per-lane operation
     // limits.
     std::shared_ptr<SurgePricingLaneConfig> mSurgePricingLaneConfig;
+
+    // Quick lookup of relevant account IDs, needed temporary to maintain
+    // 1-tx-per-account invariance. When tx stacks are removed, we can remove
+    // this logic as well.
+    std::optional<std::unordered_set<AccountID>> mEnforceSingleAccounts;
+
+    Application& mApp;
 
   public:
     TxQueueLimiter(uint32 multiplier, Application& app);
@@ -44,7 +52,8 @@ class TxQueueLimiter
 #ifdef BUILD_TESTS
     size_t size() const;
 #endif
-    uint32_t maxQueueSizeOps() const;
+    Resource maxClassicQueueSizeOps(bool isSoroban,
+                                    AbstractLedgerTxn& ltxOuter) const;
 
     // Evict `txsToEvict` from the limiter by calling `evict`.
     // `txsToEvict` should be provided by the `canAddTx` call.
@@ -67,12 +76,17 @@ class TxQueueLimiter
     std::pair<bool, int64>
     canAddTx(TransactionFrameBasePtr const& tx,
              TransactionFrameBasePtr const& oldTx,
+             std::vector<std::pair<TxStackPtr, bool>>& txsToEvict,
+             AbstractLedgerTxn& ltxOuter);
+    std::pair<bool, int64>
+    canAddTx(TransactionFrameBasePtr const& tx,
+             TransactionFrameBasePtr const& oldTx,
              std::vector<std::pair<TxStackPtr, bool>>& txsToEvict);
 
     // Resets the state related to evictions (maximum evicted bid).
     void resetEvictionState();
 
     // Resets the internal transaction container and the eviction state.
-    void reset();
+    void reset(AbstractLedgerTxn& ltxOuter);
 };
 }

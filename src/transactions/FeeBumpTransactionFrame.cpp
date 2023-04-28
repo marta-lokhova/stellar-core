@@ -341,6 +341,12 @@ FeeBumpTransactionFrame::getNumOperations() const
     return mInnerTx->getNumOperations() + 1;
 }
 
+Resource
+FeeBumpTransactionFrame::getNumResources() const
+{
+    return Resource(getNumOperations());
+}
+
 std::vector<Operation> const&
 FeeBumpTransactionFrame::getRawOperations() const
 {

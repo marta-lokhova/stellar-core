@@ -78,6 +78,12 @@ HerderImpl::HerderImpl(Application& app)
     : mTransactionQueue(app, TRANSACTION_QUEUE_TIMEOUT_LEDGERS,
                         TRANSACTION_QUEUE_BAN_LEDGERS,
                         TRANSACTION_QUEUE_SIZE_MULTIPLIER)
+    // TODO: add invariance, have to add the right tx type to an appropriate
+    // queue
+    , mSorobanTransactionQueue(app, TRANSACTION_QUEUE_TIMEOUT_LEDGERS,
+                               TRANSACTION_QUEUE_BAN_LEDGERS,
+                               // TODO: update multipler to split the ledger
+                               TRANSACTION_QUEUE_SIZE_MULTIPLIER)
     , mPendingEnvelopes(app, *this)
     , mHerderSCPDriver(app, *this, mUpgrades, mPendingEnvelopes)
     , mLastSlotSaved(0)
@@ -251,6 +257,7 @@ HerderImpl::shutdown()
         mLastQuorumMapIntersectionState.mInterruptFlag = true;
     }
     mTransactionQueue.shutdown();
+    mSorobanTransactionQueue.shutdown();
     mTxSetGarbageCollectTimer.cancel();
 }
 
@@ -1146,6 +1153,11 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     // during last few ledger closes
     auto const& lcl = mLedgerManager.getLastClosedLedgerHeader();
     auto queueTxs = mTransactionQueue.getTransactions(lcl.header);
+
+#ifdef ENABLE_NEXT_PROTOCOL_VERSION_UNSAFE_FOR_PRODUCTION
+    auto sorobanTxs = mSorobanTransactionQueue.getTransactions(lcl.header);
+    queueTxs.insert(queueTxs.end(), sorobanTxs.begin(), sorobanTxs.end());
+#endif
 
     // We pick as next close time the current time unless it's before the last
     // close time. We don't know how much time it will take to reach consensus

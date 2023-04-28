@@ -879,11 +879,14 @@ TxSetFrame::applySurgePricing(Application& app)
         std::make_shared<DexLimitingLaneConfig>(maxOps, dexOpsLimit);
 
     std::vector<bool> hadTxNotFittingLane;
-    auto includedTxs = SurgePricingPriorityQueue::getMostTopTxsWithinLimits(
+    SurgePricingPriorityQueue queue(
+        /* isHighestPriority */ true, surgePricingLaneConfig,
+        stellar::rand_uniform<size_t>(0, std::numeric_limits<size_t>::max()));
+    auto includedTxs = queue.getMostTopTxsWithinLimits(
         std::vector<TxStackPtr>(actTxQueues.begin(), actTxQueues.end()),
-        surgePricingLaneConfig, hadTxNotFittingLane);
+        hadTxNotFittingLane);
 
-    size_t laneCount = surgePricingLaneConfig->getLaneOpsLimits().size();
+    size_t laneCount = surgePricingLaneConfig->getLaneLimits().size();
     std::vector<int64_t> lowestLaneFee(laneCount,
                                        std::numeric_limits<int64_t>::max());
     for (auto const& tx : includedTxs)

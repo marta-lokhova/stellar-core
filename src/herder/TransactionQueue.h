@@ -121,7 +121,7 @@ class TransactionQueue
 
     explicit TransactionQueue(Application& app, uint32 pendingDepth,
                               uint32 banDepth, uint32 poolLedgerMultiplier);
-    ~TransactionQueue();
+    virtual ~TransactionQueue();
 
     static std::vector<AssetPair>
     findAllAssetPairsInvolvedInPaymentLoops(TransactionFrameBasePtr tx);
@@ -159,7 +159,7 @@ class TransactionQueue
     void shutdown();
     size_t getMaxQueueSizeOps() const;
 
-  private:
+  protected:
     /**
      * The AccountState for every account. As noted above, an AccountID is in
      * AccountStates iff at least one of the following is true for the
@@ -194,12 +194,13 @@ class TransactionQueue
 
     bool mShutdown{false};
     bool mWaiting{false};
-    std::vector<uint32_t> mBroadcastOpCarryover;
+    std::vector<Resource> mBroadcastOpCarryover;
     VirtualTimer mBroadcastTimer;
 
-    std::pair<uint32_t, std::optional<uint32_t>>
-    getMaxOpsToFloodThisPeriod() const;
-    bool broadcastSome();
+    virtual std::pair<Resource, std::optional<Resource>>
+    getMaxResourcesToFloodThisPeriod() const = 0;
+    virtual bool broadcastSome() = 0;
+
     void broadcast(bool fromCallback);
     // broadcasts a single transaction
     enum class BroadcastStatus
@@ -241,6 +242,30 @@ class TransactionQueue
     std::optional<int64_t> getInQueueSeqNum(AccountID const& account) const;
     std::function<void(TransactionFrameBasePtr&)> mTxBroadcastedEvent;
 #endif
+};
+
+class SorobanTransactionQueue : public TransactionQueue
+{
+  public:
+    SorobanTransactionQueue(Application& app, uint32 pendingDepth,
+                            uint32 banDepth, uint32 poolLedgerMultiplier);
+
+  private:
+    virtual std::pair<Resource, std::optional<Resource>>
+    getMaxResourcesToFloodThisPeriod() const override;
+    virtual bool broadcastSome() override;
+};
+
+class ClassicTransactionQueue : public TransactionQueue
+{
+  public:
+    ClassicTransactionQueue(Application& app, uint32 pendingDepth,
+                            uint32 banDepth, uint32 poolLedgerMultiplier);
+
+  private:
+    virtual std::pair<Resource, std::optional<Resource>>
+    getMaxResourcesToFloodThisPeriod() const override;
+    virtual bool broadcastSome() override;
 };
 
 extern std::array<const char*,

@@ -80,7 +80,23 @@ TransactionQueue::TransactionQueue(Application& app, uint32 pendingDepth,
     mFilteredTypes.insert(filteredTypes.begin(), filteredTypes.end());
     mBroadcastSeed =
         rand_uniform<uint64>(0, std::numeric_limits<uint64>::max());
-    mBroadcastOpCarryover.resize(1);
+    mBroadcastOpCarryover.resize(1, Resource(0));
+}
+
+ClassicTransactionQueue::ClassicTransactionQueue(Application& app,
+                                                 uint32 pendingDepth,
+                                                 uint32 banDepth,
+                                                 uint32 poolLedgerMultiplier)
+    : TransactionQueue(app, pendingDepth, banDepth, poolLedgerMultiplier)
+{
+}
+
+SorobanTransactionQueue::SorobanTransactionQueue(Application& app,
+                                                 uint32 pendingDepth,
+                                                 uint32 banDepth,
+                                                 uint32 poolLedgerMultiplier)
+    : TransactionQueue(app, pendingDepth, banDepth, poolLedgerMultiplier)
+{
 }
 
 TransactionQueue::~TransactionQueue()
@@ -193,7 +209,7 @@ isDuplicateTx(TransactionFrameBasePtr oldTx, TransactionFrameBasePtr newTx)
 TransactionQueue::AddResult
 TransactionQueue::canAdd(TransactionFrameBasePtr tx,
                          AccountStates::iterator& stateIter,
-                         TimestampedTransactions::iterator& oldTxIter,
+                         TimestampedTransactions::iterator& txToReplaceIter,
                          std::vector<std::pair<TxStackPtr, bool>>& txsToEvict)
 {
     ZoneScoped;
@@ -214,7 +230,18 @@ TransactionQueue::canAdd(TransactionFrameBasePtr tx,
     if (stateIter != mAccountStates.end())
     {
         auto& transactions = stateIter->second.mTransactions;
-        oldTxIter = transactions.end();
+
+        // Invariant: there must be one transaction per source account at all
+        // times if LIMIT_TX_QUEUE_SOURCE_ACCOUNT is on
+        if (mApp.getConfig().LIMIT_TX_QUEUE_SOURCE_ACCOUNT &&
+            transactions.size() > 1)
+        {
+            throw std::runtime_error(
+                "TransactionQueue::canAdd invalid state: more than one "
+                "transaction per source account");
+        }
+
+        txToReplaceIter = transactions.end();
 
         if (!transactions.empty())
         {
@@ -225,6 +252,14 @@ TransactionQueue::canAdd(TransactionFrameBasePtr tx,
                     iter != transactions.end() && isDuplicateTx(iter->mTx, tx))
                 {
                     return TransactionQueue::AddResult::ADD_STATUS_DUPLICATE;
+                }
+
+                if (mApp.getConfig().LIMIT_TX_QUEUE_SOURCE_ACCOUNT)
+                {
+                    // If there's already a transaction in the queue, we reject
+                    // any new transaction
+                    return TransactionQueue::AddResult::
+                        ADD_STATUS_TRY_AGAIN_LATER;
                 }
 
                 // By this point, there's already a tx in the queue for this
@@ -240,30 +275,31 @@ TransactionQueue::canAdd(TransactionFrameBasePtr tx,
             }
             else
             {
-                if (!findBySeq(tx, transactions, oldTxIter))
+                if (!findBySeq(tx, transactions, txToReplaceIter))
                 {
                     tx->getResult().result.code(txBAD_SEQ);
                     return TransactionQueue::AddResult::ADD_STATUS_ERROR;
                 }
 
-                if (oldTxIter != transactions.end())
+                // Found tx with seqnum to replace
+                if (txToReplaceIter != transactions.end())
                 {
                     // Replace-by-fee logic
-                    if (isDuplicateTx(oldTxIter->mTx, tx))
+                    if (isDuplicateTx(txToReplaceIter->mTx, tx))
                     {
                         return TransactionQueue::AddResult::
                             ADD_STATUS_DUPLICATE;
                     }
 
                     int64_t minFee;
-                    if (!canReplaceByFee(tx, oldTxIter->mTx, minFee))
+                    if (!canReplaceByFee(tx, txToReplaceIter->mTx, minFee))
                     {
                         tx->getResult().result.code(txINSUFFICIENT_FEE);
                         tx->getResult().feeCharged = minFee;
                         return TransactionQueue::AddResult::ADD_STATUS_ERROR;
                     }
 
-                    oldTx = oldTxIter->mTx;
+                    oldTx = txToReplaceIter->mTx;
                     int64_t oldFee = oldTx->getFeeBid();
                     if (oldTx->getFeeSourceID() == tx->getFeeSourceID())
                     {
@@ -271,7 +307,8 @@ TransactionQueue::canAdd(TransactionFrameBasePtr tx,
                     }
                 }
 
-                if (oldTxIter != transactions.begin() &&
+                // Tx to replace is at the beginning, meaning lowest seqnum
+                if (txToReplaceIter != transactions.begin() &&
                     (tx->getMinSeqAge() != 0 || tx->getMinSeqLedgerGap() != 0))
                 {
                     return TransactionQueue::AddResult::
@@ -282,20 +319,42 @@ TransactionQueue::canAdd(TransactionFrameBasePtr tx,
                 // existing transaction, use the previous one in the queue (if
                 // the tx is first, leave seqNum == 0 so the seqNum will be
                 // loaded from the account)
-                if (oldTxIter == transactions.end())
+                if (txToReplaceIter == transactions.end())
                 {
+                    if (!transactions.empty() &&
+                        mApp.getConfig().LIMIT_TX_QUEUE_SOURCE_ACCOUNT)
+                    {
+                        // This is a new fee-bump transaction. We didn't find
+                        // any existing transaction to replace, so it should be
+                        // rejected due to source account limit
+                        return TransactionQueue::AddResult::
+                            ADD_STATUS_TRY_AGAIN_LATER;
+                    }
+
                     seqNum = transactions.back().mTx->getSeqNum();
                 }
-                else if (oldTxIter != transactions.begin())
+                else if (txToReplaceIter != transactions.begin())
                 {
-                    auto copyIt = oldTxIter - 1;
+                    // replace-by-fee logic, regardless of the source account
+                    // limit, don't reject the tx because the old tx will be
+                    // replaced (maintaining the invariance)
+                    auto copyIt = txToReplaceIter - 1;
                     seqNum = copyIt->mTx->getSeqNum();
                 }
             }
         }
     }
 
-    auto canAddRes = mTxQueueLimiter->canAddTx(tx, oldTx, txsToEvict);
+    // Transaction queue performs read-only transactions to the database and
+    // there are no concurrent writers, so it is safe to not enclose all the SQL
+    // statements into one transaction here.
+    LedgerTxn ltx(mApp.getLedgerTxnRoot(), /* shouldUpdateLastModified */ true,
+                  TransactionMode::READ_ONLY_WITHOUT_SQL_TXN);
+
+    // Subtle: transactions are rejected based on the source account limit prior
+    // to this point. This is safe because we can't evict transactions from the
+    // same source account, so a newer transaction won't replace an old one.
+    auto canAddRes = mTxQueueLimiter->canAddTx(tx, oldTx, txsToEvict, ltx);
     if (!canAddRes.first)
     {
         ban({tx});
@@ -312,11 +371,6 @@ TransactionQueue::canAdd(TransactionFrameBasePtr tx,
                          .getLastClosedLedgerHeader()
                          .header.scpValue.closeTime;
 
-    // Transaction queue performs read-only transactions to the database and
-    // there are no concurrent writers, so it is safe to not enclose all the SQL
-    // statements into one transaction here.
-    LedgerTxn ltx(mApp.getLedgerTxnRoot(), /* shouldUpdateLastModified */ true,
-                  TransactionMode::READ_ONLY_WITHOUT_SQL_TXN);
     if (protocolVersionStartsFrom(ltx.loadHeader().current().ledgerVersion,
                                   ProtocolVersion::V_19))
     {
@@ -347,6 +401,8 @@ TransactionQueue::canAdd(TransactionFrameBasePtr tx,
     return TransactionQueue::AddResult::ADD_STATUS_PENDING;
 }
 
+// Would be nice to charge actual fees so that the developers can start
+// experiencing the fee structure
 void
 TransactionQueue::releaseFeeMaybeEraseAccountState(TransactionFrameBasePtr tx)
 {
@@ -521,6 +577,16 @@ TransactionQueue::tryAdd(TransactionFrameBasePtr tx, bool submittedFromSelf)
         oldTxIter = --stateIter->second.mTransactions.end();
         mSizeByAge[stateIter->second.mAge]->inc();
     }
+
+    // Maybe replaced-by-fee, make sure we maintain the invariant
+    if (mApp.getConfig().LIMIT_TX_QUEUE_SOURCE_ACCOUNT &&
+        stateIter->second.mTransactions.size() > 1)
+    {
+        throw std::runtime_error(
+            "Invalid state: tx queue source account limit violated");
+    }
+
+    // Update transaction chain accounting
     auto ops = tx->getNumOperations();
     stateIter->second.mQueueSizeOps += ops;
     stateIter->second.mBroadcastQueueOps += ops;
@@ -909,7 +975,8 @@ TransactionQueue::clearAll()
     {
         b.clear();
     }
-    mTxQueueLimiter->reset();
+    LedgerTxn ltx(mApp.getLedgerTxnRoot());
+    mTxQueueLimiter->reset(ltx);
     mKnownTxHashes.clear();
 }
 
@@ -926,8 +993,29 @@ TransactionQueue::maybeVersionUpgraded()
     mLedgerVersion = lcl.header.ledgerVersion;
 }
 
-std::pair<uint32_t, std::optional<uint32_t>>
-TransactionQueue::getMaxOpsToFloodThisPeriod() const
+std::pair<Resource, std::optional<Resource>>
+SorobanTransactionQueue::getMaxResourcesToFloodThisPeriod() const
+{
+    auto& cfg = mApp.getConfig();
+    double ratePerLedger = cfg.FLOOD_OP_RATE_PER_LEDGER;
+
+    LedgerTxn ltx(mApp.getLedgerTxnRoot());
+    auto sorRes = mTxQueueLimiter->maxClassicQueueSizeOps(true, ltx);
+
+    auto totalFloodPerLedger = mutliplyByDouble(sorRes, ratePerLedger);
+
+    Resource opsToFlood =
+        mBroadcastOpCarryover[SurgePricingPriorityQueue::GENERIC_LANE] +
+        bigDivideOrThrow(totalFloodPerLedger, cfg.FLOOD_TX_PERIOD_MS,
+                         cfg.getExpectedLedgerCloseTime().count() * 1000,
+                         Rounding::ROUND_UP);
+    releaseAssertOrThrow(!opsToFlood.isZero());
+
+    return std::make_pair(opsToFlood, std::nullopt);
+}
+
+std::pair<Resource, std::optional<Resource>>
+ClassicTransactionQueue::getMaxResourcesToFloodThisPeriod() const
 {
     auto& cfg = mApp.getConfig();
     double opRatePerLedger = cfg.FLOOD_OP_RATE_PER_LEDGER;
@@ -939,7 +1027,8 @@ TransactionQueue::getMaxOpsToFloodThisPeriod() const
     int64_t opsToFloodLedger = static_cast<int64_t>(opsToFloodLedgerDbl);
 
     int64_t opsToFlood =
-        mBroadcastOpCarryover[SurgePricingPriorityQueue::GENERIC_LANE] +
+        mBroadcastOpCarryover[SurgePricingPriorityQueue::GENERIC_LANE]
+            .mResources[0] +
         bigDivideOrThrow(opsToFloodLedger, cfg.FLOOD_TX_PERIOD_MS,
                          cfg.getExpectedLedgerCloseTime().count() * 1000,
                          Rounding::ROUND_UP);
@@ -947,7 +1036,7 @@ TransactionQueue::getMaxOpsToFloodThisPeriod() const
                          opsToFlood <= std::numeric_limits<uint32_t>::max());
 
     auto maxDexOps = cfg.MAX_DEX_TX_OPERATIONS_IN_TX_SET;
-    std::optional<uint32_t> dexOpsToFlood;
+    std::optional<Resource> dexOpsToFlood;
     if (maxDexOps)
     {
         *maxDexOps = std::min(maxOps, *maxDexOps);
@@ -956,14 +1045,17 @@ TransactionQueue::getMaxOpsToFloodThisPeriod() const
         uint32_t dexOpsCarryover =
             mBroadcastOpCarryover.size() > DexLimitingLaneConfig::DEX_LANE
                 ? mBroadcastOpCarryover[DexLimitingLaneConfig::DEX_LANE]
+                      .mResources[0]
                 : 0;
-        dexOpsToFlood =
+        auto dexOpsToFloodUint =
             dexOpsCarryover +
             bigDivideOrThrow(dexOpsToFloodLedger, cfg.FLOOD_TX_PERIOD_MS,
                              cfg.getExpectedLedgerCloseTime().count() * 1000,
                              Rounding::ROUND_UP);
+        dexOpsToFlood = Resource(dexOpsToFloodUint);
     }
-    return std::make_pair(static_cast<uint32_t>(opsToFlood), dexOpsToFlood);
+    return std::make_pair(Resource(static_cast<uint32_t>(opsToFlood)),
+                          dexOpsToFlood);
 }
 
 TransactionQueue::BroadcastStatus
@@ -1102,11 +1194,11 @@ class TxQueueTracker : public TxStack
         skipToFirstNotBroadcasted();
     }
 
-    uint32_t
-    getNumOperations() const override
+    Resource
+    getResources() const override
     {
         // Operation count tracking is not relevant for this TxStack.
-        return 0;
+        return Resource(0);
     }
 
     TransactionQueue::AccountState&
@@ -1130,15 +1222,101 @@ class TxQueueTracker : public TxStack
     TransactionQueue::AccountState* mAccountState;
 };
 
+// TODO: for now, flood the whole ledger worth of trnasacitons so we can fill
+// the ledger Later we can update it
 bool
-TransactionQueue::broadcastSome()
+SorobanTransactionQueue::broadcastSome()
 {
     // broadcast transactions in surge pricing order:
     // loop over transactions by picking from the account queue with the
     // highest base fee not broadcasted so far.
     // This broadcasts from account queues in order as to maximize chances of
     // propagation.
-    auto [opsToFlood, dexOpsToFlood] = getMaxOpsToFloodThisPeriod();
+
+    // Vector of resources
+    auto resToFlood = getMaxResourcesToFloodThisPeriod().first;
+
+    Resource totalResToFlood =
+        Resource(std::vector<int64_t>(resToFlood.size(), 0));
+    std::vector<TxStackPtr> trackersToBroadcast;
+    for (auto& [_, accountState] : mAccountStates)
+    {
+        // Add to queue if it wasn't broadcasted yet
+        releaseAssert(accountState.mTransactions.size() <= 1);
+        if (!accountState.mTransactions.empty() &&
+            !accountState.mTransactions[0].mBroadcasted)
+        {
+            trackersToBroadcast.emplace_back(
+                std::make_shared<TxQueueTracker>(&accountState));
+            totalResToFlood +=
+                accountState.mTransactions[0].mTx->getNumResources();
+        }
+    }
+
+    std::vector<TransactionFrameBasePtr> banningTxs;
+
+    // TODO: refactor visitor
+    auto visitor = [this, &totalResToFlood,
+                    &banningTxs](TxStack const& txStack) {
+        auto const& curTracker = static_cast<TxQueueTracker const&>(txStack);
+        // look at the next candidate transaction for that account
+        auto& cur = curTracker.getCurrentTimestampedTx();
+        auto tx = curTracker.getTopTx();
+        releaseAssert(tx->isSoroban());
+        // by construction, cur points to non broadcasted transactions
+        releaseAssert(!cur.mBroadcasted);
+        auto bStatus = broadcastTx(curTracker.getAccountState(), cur);
+        if (bStatus == BroadcastStatus::BROADCAST_STATUS_SUCCESS)
+        {
+            totalResToFlood -= tx->getNumResources();
+            return SurgePricingPriorityQueue::VisitTxStackResult::TX_PROCESSED;
+        }
+        else if (bStatus == BroadcastStatus::BROADCAST_STATUS_SKIPPED)
+        {
+            // When skipping, we ban the transaction and skip the remainder of
+            // the stack.
+            banningTxs.emplace_back(tx);
+            return SurgePricingPriorityQueue::VisitTxStackResult::
+                TX_STACK_SKIPPED;
+        }
+        else
+        {
+            // Already broadcasted; don't invalidate the stack but also don't
+            // count transaction as processed.
+            return SurgePricingPriorityQueue::VisitTxStackResult::TX_SKIPPED;
+        }
+    };
+    SurgePricingPriorityQueue queue(
+        /* isHighestPriority */ true,
+        std::make_shared<DexLimitingLaneConfig>(resToFlood, std::nullopt),
+        mBroadcastSeed);
+    queue.visitTopTxs(trackersToBroadcast, visitor, mBroadcastOpCarryover);
+    ban(banningTxs);
+    for (auto& opsLeft : mBroadcastOpCarryover)
+    {
+        // TODO: deal with this later, MAX_OPS_PER_TX?
+        opsLeft = Resource(opsLeft.mResources);
+    }
+    return !totalResToFlood.isZero();
+}
+
+bool
+ClassicTransactionQueue::broadcastSome()
+{
+    // broadcast transactions in surge pricing order:
+    // loop over transactions by picking from the account queue with the
+    // highest base fee not broadcasted so far.
+    // This broadcasts from account queues in order as to maximize chances of
+    // propagation.
+    auto [opsToFlood, dexOpsToFlood] = getMaxResourcesToFloodThisPeriod();
+    releaseAssert(opsToFlood.mResources.size() == 1);
+    opsToFlood = opsToFlood.mResources[0];
+    if (dexOpsToFlood)
+    {
+        releaseAssert(dexOpsToFlood->mResources.size() == 1);
+        dexOpsToFlood =
+            std::make_optional<uint32_t>(dexOpsToFlood->mResources[0]);
+    }
 
     size_t totalOpsToFlood = 0;
     std::vector<TxStackPtr> trackersToBroadcast;
@@ -1183,17 +1361,19 @@ TransactionQueue::broadcastSome()
             return SurgePricingPriorityQueue::VisitTxStackResult::TX_SKIPPED;
         }
     };
-    SurgePricingPriorityQueue::visitTopTxs(
-        trackersToBroadcast,
+    SurgePricingPriorityQueue queue(
+        /* isHighestPriority */ true,
         std::make_shared<DexLimitingLaneConfig>(opsToFlood, dexOpsToFlood),
-        mBroadcastSeed, visitor, mBroadcastOpCarryover);
+        mBroadcastSeed);
+    queue.visitTopTxs(trackersToBroadcast, visitor, mBroadcastOpCarryover);
     ban(banningTxs);
     // carry over remainder, up to MAX_OPS_PER_TX ops
     // reason is that if we add 1 next round, we can flood a "worst case fee
     // bump" tx
     for (auto& opsLeft : mBroadcastOpCarryover)
     {
-        opsLeft = std::min(opsLeft, MAX_OPS_PER_TX + 1);
+        opsLeft = Resource(
+            std::min<int64_t>(opsLeft.mResources[0], MAX_OPS_PER_TX + 1));
     }
     return totalOpsToFlood != 0;
 }
@@ -1320,7 +1500,8 @@ TransactionQueue::getInQueueSeqNum(AccountID const& account) const
 size_t
 TransactionQueue::getMaxQueueSizeOps() const
 {
-    return mTxQueueLimiter->maxQueueSizeOps();
+    LedgerTxn ltx(mApp.getLedgerTxnRoot());
+    return mTxQueueLimiter->maxClassicQueueSizeOps(false, ltx).mResources[0];
 }
 
 }
