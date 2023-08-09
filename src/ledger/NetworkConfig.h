@@ -34,7 +34,7 @@ struct InitialSorobanNetworkConfig
 
     // Compute settings
     static constexpr int64_t TX_MAX_INSTRUCTIONS = 100'000'000;
-    static constexpr int64_t LEDGER_MAX_INSTRUCTIONS = 10 * TX_MAX_INSTRUCTIONS;
+    static constexpr int64_t LEDGER_MAX_INSTRUCTIONS = 1000 * TX_MAX_INSTRUCTIONS;
     static constexpr int64_t FEE_RATE_PER_INSTRUCTIONS_INCREMENT =
         100; // 0.2 XLM/max tx
     static constexpr uint32_t MEMORY_LIMIT = 100 * 1024 * 1024; // 100MB
@@ -45,11 +45,11 @@ struct InitialSorobanNetworkConfig
     static constexpr uint32_t TX_MAX_WRITE_LEDGER_ENTRIES = 20;
     static constexpr uint32_t TX_MAX_WRITE_BYTES = 100 * 1024;
     static constexpr uint32_t LEDGER_MAX_READ_LEDGER_ENTRIES =
-        100 * TX_MAX_READ_LEDGER_ENTRIES;
-    static constexpr uint32_t LEDGER_MAX_READ_BYTES = 100 * TX_MAX_READ_BYTES;
+        1000 * TX_MAX_READ_LEDGER_ENTRIES;
+    static constexpr uint32_t LEDGER_MAX_READ_BYTES = 1000 * TX_MAX_READ_BYTES;
     static constexpr uint32_t LEDGER_MAX_WRITE_LEDGER_ENTRIES =
-        100 * TX_MAX_WRITE_LEDGER_ENTRIES;
-    static constexpr uint32_t LEDGER_MAX_WRITE_BYTES = 100 * TX_MAX_WRITE_BYTES;
+        1000 * TX_MAX_WRITE_LEDGER_ENTRIES;
+    static constexpr uint32_t LEDGER_MAX_WRITE_BYTES = 1000 * TX_MAX_WRITE_BYTES;
     static constexpr int64_t FEE_READ_LEDGER_ENTRY = 5'000;   // 0.02 XLM/max tx
     static constexpr int64_t FEE_WRITE_LEDGER_ENTRY = 20'000; // 0.04 XLM/max tx
     static constexpr int64_t FEE_READ_1KB = 1'000;            // 0.02 XLM/max tx
@@ -71,7 +71,7 @@ struct InitialSorobanNetworkConfig
     // Bandwidth settings
     static constexpr uint32_t TX_MAX_SIZE_BYTES = 100 * 1024;
     static constexpr uint32_t LEDGER_MAX_TRANSACTION_SIZES_BYTES =
-        100 * TX_MAX_SIZE_BYTES;
+        1000 * TX_MAX_SIZE_BYTES;
     static constexpr int64_t FEE_TRANSACTION_SIZE_1KB =
         2'000; // 0.02 XLM/max tx
 
@@ -98,7 +98,7 @@ struct InitialSorobanNetworkConfig
     static constexpr int64_t TEMP_RENT_RATE_DENOMINATOR = 2'524'800;
 
     // General execution settings
-    static constexpr uint32_t LEDGER_MAX_TX_COUNT = 100;
+    static constexpr uint32_t LEDGER_MAX_TX_COUNT = 1000;
 };
 
 // Defines the minimum values allowed for the network configuration
