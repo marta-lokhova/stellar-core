@@ -45,11 +45,11 @@ struct InitialSorobanNetworkConfig
     static constexpr uint32_t TX_MAX_WRITE_LEDGER_ENTRIES = 20;
     static constexpr uint32_t TX_MAX_WRITE_BYTES = 100 * 1024;
     static constexpr uint32_t LEDGER_MAX_READ_LEDGER_ENTRIES =
-        10 * TX_MAX_READ_LEDGER_ENTRIES;
-    static constexpr uint32_t LEDGER_MAX_READ_BYTES = 10 * TX_MAX_READ_BYTES;
+        100 * TX_MAX_READ_LEDGER_ENTRIES;
+    static constexpr uint32_t LEDGER_MAX_READ_BYTES = 100 * TX_MAX_READ_BYTES;
     static constexpr uint32_t LEDGER_MAX_WRITE_LEDGER_ENTRIES =
-        10 * TX_MAX_WRITE_LEDGER_ENTRIES;
-    static constexpr uint32_t LEDGER_MAX_WRITE_BYTES = 10 * TX_MAX_WRITE_BYTES;
+        100 * TX_MAX_WRITE_LEDGER_ENTRIES;
+    static constexpr uint32_t LEDGER_MAX_WRITE_BYTES = 100 * TX_MAX_WRITE_BYTES;
     static constexpr int64_t FEE_READ_LEDGER_ENTRY = 5'000;   // 0.02 XLM/max tx
     static constexpr int64_t FEE_WRITE_LEDGER_ENTRY = 20'000; // 0.04 XLM/max tx
     static constexpr int64_t FEE_READ_1KB = 1'000;            // 0.02 XLM/max tx
@@ -71,7 +71,7 @@ struct InitialSorobanNetworkConfig
     // Bandwidth settings
     static constexpr uint32_t TX_MAX_SIZE_BYTES = 100 * 1024;
     static constexpr uint32_t LEDGER_MAX_TRANSACTION_SIZES_BYTES =
-        10 * TX_MAX_SIZE_BYTES;
+        100 * TX_MAX_SIZE_BYTES;
     static constexpr int64_t FEE_TRANSACTION_SIZE_1KB =
         2'000; // 0.02 XLM/max tx
 
@@ -98,7 +98,7 @@ struct InitialSorobanNetworkConfig
     static constexpr int64_t TEMP_RENT_RATE_DENOMINATOR = 2'524'800;
 
     // General execution settings
-    static constexpr uint32_t LEDGER_MAX_TX_COUNT = 10;
+    static constexpr uint32_t LEDGER_MAX_TX_COUNT = 100;
 };
 
 // Defines the minimum values allowed for the network configuration
