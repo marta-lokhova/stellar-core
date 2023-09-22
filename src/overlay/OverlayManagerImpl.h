@@ -81,7 +81,7 @@ class OverlayManagerImpl : public OverlayManager
     PeerManager mPeerManager;
     PeerDoor mDoor;
     PeerAuth mAuth;
-    bool mShuttingDown;
+    std::atomic<bool> mShuttingDown;
 
     OverlayMetrics mOverlayMetrics;
 

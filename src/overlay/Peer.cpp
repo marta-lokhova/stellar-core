@@ -170,13 +170,13 @@ Peer::endMessageProcessing(StellarMessage const& msg)
     mFlowControl->endMessageProcessing(msg, self);
 
     releaseAssert(canRead());
-    if (mIsPeerThrottled)
-    {
-        CLOG_DEBUG(Overlay, "Stop throttling reading from peer {}",
-                   mApp.getConfig().toShortString(getPeerID()));
-        mIsPeerThrottled = false;
-        scheduleRead();
-    }
+    // if (mIsPeerThrottled)
+    // {
+    //     CLOG_DEBUG(Overlay, "Stop throttling reading from peer {}",
+    //                mApp.getConfig().toShortString(getPeerID()));
+    //     mIsPeerThrottled = false;
+    //     scheduleRead();
+    // }
 }
 
 AuthCert
@@ -596,22 +596,6 @@ Peer::sendMessage(std::shared_ptr<StellarMessage const> msg, bool log)
     CLOG_TRACE(Overlay, "send: {} to : {}", msgSummary(*msg),
                mApp.getConfig().toShortString(mPeerID));
 
-    // There are really _two_ layers of queues, one in Scheduler for actions
-    // and one in Peer (and its subclasses) for outgoing writes. We enforce
-    // a similar load-shedding discipline here as in Scheduler: if there is
-    // more than the scheduler latency-window worth of material in the write
-    // queue, and we're being asked to add messages that are being generated
-    // _from_ a droppable action, we drop the message rather than enqueue
-    // it. This avoids growing our queues indefinitely.
-    if (mApp.getClock().currentSchedulerActionType() ==
-            Scheduler::ActionType::DROPPABLE_ACTION &&
-        sendQueueIsOverloaded())
-    {
-        getOverlayMetrics().mMessageDrop.Mark();
-        mPeerMetrics.mMessageDrop++;
-        return;
-    }
-
     switch (msg->type())
     {
     case ERROR_MSG:
@@ -683,51 +667,35 @@ Peer::sendMessage(std::shared_ptr<StellarMessage const> msg, bool log)
 void
 Peer::sendAuthenticatedMessage(StellarMessage const& msg)
 {
-    AuthenticatedMessage amsg;
-    amsg.v0().message = msg;
-    if (msg.type() != HELLO && msg.type() != ERROR_MSG)
-    {
-        ZoneNamedN(hmacZone, "message HMAC", true);
-        amsg.v0().sequence = mSendMacSeq;
-        amsg.v0().mac =
-            hmacSha256(mSendMacKey, xdr::xdr_to_opaque(mSendMacSeq, msg));
-        ++mSendMacSeq;
-    }
-    xdr::msg_ptr xdrBytes;
-    {
-        ZoneNamedN(xdrZone, "XDR serialize", true);
-        xdrBytes = xdr::xdr_to_msg(amsg);
-    }
-    this->sendMessage(std::move(xdrBytes));
-}
-
-void
-Peer::recvMessage(xdr::msg_ptr const& msg)
-{
-    ZoneScoped;
-    if (shouldAbort())
-    {
-        return;
-    }
-
-    try
-    {
-        ZoneNamedN(hmacZone, "message HMAC", true);
-        AuthenticatedMessage am;
-        {
-            ZoneNamedN(xdrZone, "XDR deserialize", true);
-            xdr::xdr_from_msg(msg, am);
-        }
-        recvMessage(am);
-    }
-    catch (xdr::xdr_runtime_error& e)
-    {
-        CLOG_ERROR(Overlay, "received corrupt xdr::msg_ptr {}", e.what());
-        drop("received corrupted message",
-             Peer::DropDirection::WE_DROPPED_REMOTE,
-             Peer::DropMode::IGNORE_WRITE_QUEUE);
-        return;
-    }
+    // Application can't do much here anymore, pass it to background
+    // thread for write logic
+    // TODO: copy now, switch to move later (audit places that use msg
+    // post-move)
+    mApp.postOnOverlayThread(
+        [weak = std::weak_ptr<Peer>(shared_from_this()), msg]() {
+            auto self = weak.lock();
+            if (self)
+            {
+                AuthenticatedMessage amsg;
+                amsg.v0().message = msg;
+                if (msg.type() != HELLO && msg.type() != ERROR_MSG)
+                {
+                    ZoneNamedN(hmacZone, "message HMAC", true);
+                    amsg.v0().sequence = self->mSendMacSeq;
+                    amsg.v0().mac =
+                        hmacSha256(self->mSendMacKey,
+                                   xdr::xdr_to_opaque(self->mSendMacSeq, msg));
+                    self->mSendMacSeq++;
+                }
+                xdr::msg_ptr xdrBytes;
+                {
+                    ZoneNamedN(xdrZone, "XDR serialize", true);
+                    xdrBytes = xdr::xdr_to_msg(amsg);
+                }
+                self->sendMessage(std::move(xdrBytes));
+            }
+        },
+        "send authenticated");
 }
 
 bool
@@ -785,7 +753,11 @@ Peer::recvMessage(AuthenticatedMessage const& msg)
         }
         ++mRecvMacSeq;
     }
-    recvMessage(msg.v0().message);
+
+    // TODO: copy for now, fix later if perf is problematic
+    auto f = [this, msg]() { this->recvMessage(msg.v0().message); };
+
+    getApp().postOnMainThread(f, "recvMessage");
 }
 
 void

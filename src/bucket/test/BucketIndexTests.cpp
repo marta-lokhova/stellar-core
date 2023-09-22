@@ -255,7 +255,6 @@ class BucketIndexTest
         templateEntry.data.contractData().body.bodyType(DATA_ENTRY);
 
         auto generateEntry = [&](ContractDataDurability t) {
-            static uint32_t expiration = 10000;
             auto le = templateEntry;
             le.data.contractData().durability = t;
 

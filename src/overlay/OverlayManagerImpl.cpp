@@ -921,6 +921,7 @@ void
 OverlayManagerImpl::removePeer(Peer* peer)
 {
     ZoneScoped;
+    assertThreadIsMain();
     getPeersList(peer).removePeer(peer);
     getPeerManager().removePeersWithManyFailures(
         Config::REALLY_DEAD_NUM_FAILURES_CUTOFF, &peer->getAddress());

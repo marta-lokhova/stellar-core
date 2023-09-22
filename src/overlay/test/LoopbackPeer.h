@@ -144,6 +144,7 @@ class LoopbackPeer : public Peer
     using Peer::sendAuth;
     using Peer::sendAuthenticatedMessage;
     using Peer::sendMessage;
+    void recvMessage(xdr::msg_ptr const& xdrBytes);
 
     friend class LoopbackPeerConnection;
 };

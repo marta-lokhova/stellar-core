@@ -172,7 +172,7 @@ class Peer : public std::enable_shared_from_this<Peer>,
     Application& mApp;
 
     PeerRole mRole;
-    PeerState mState;
+    std::atomic<PeerState> mState;
     NodeID mPeerID;
     uint256 mSendNonce;
     uint256 mRecvNonce;
@@ -192,7 +192,7 @@ class Peer : public std::enable_shared_from_this<Peer>,
     };
 
     // Is this peer currently throttled due to lack of capacity
-    bool mIsPeerThrottled{false};
+    // std::atomic<bool> mIsPeerThrottled{false};
 
     // Does local node have capacity to read from this peer
     bool canRead() const;
@@ -230,7 +230,6 @@ class Peer : public std::enable_shared_from_this<Peer>,
     void recvRawMessage(StellarMessage const& msg);
     void recvMessage(StellarMessage const& msg);
     void recvMessage(AuthenticatedMessage const& msg);
-    void recvMessage(xdr::msg_ptr const& xdrBytes);
 
     virtual void recvError(StellarMessage const& msg);
     void updatePeerRecordAfterEcho();
@@ -274,11 +273,6 @@ class Peer : public std::enable_shared_from_this<Peer>,
     virtual void
     connected()
     {
-    }
-    virtual bool
-    sendQueueIsOverloaded() const
-    {
-        return false;
     }
 
     virtual AuthCert getAuthCert();

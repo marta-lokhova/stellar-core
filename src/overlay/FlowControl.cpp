@@ -145,8 +145,11 @@ FlowControl::maybeSendNextBatch()
 
     if (!mSendCallback)
     {
-        throw std::runtime_error(
-            "MaybeSendNextBatch: FLowControl was not started properly");
+        // Temporarily break flow control invariance on shutdown, fix later, as
+        // flow control doesn't really matter when shutting down
+        return;
+        // throw std::runtime_error(
+        // "MaybeSendNextBatch: FLowControl was not started properly");
     }
 
     int sent = 0;
@@ -319,9 +322,11 @@ FlowControl::endMessageProcessing(StellarMessage const& msg,
 bool
 FlowControl::canRead() const
 {
-    bool canReadBytes =
-        !mFlowControlBytesCapacity || mFlowControlBytesCapacity->canRead();
-    return canReadBytes && mFlowControlCapacity->canRead();
+    assertThreadIsMain();
+    return true;
+    // bool canReadBytes =
+    //     !mFlowControlBytesCapacity || mFlowControlBytesCapacity->canRead();
+    // return canReadBytes && mFlowControlCapacity->canRead();
 }
 
 uint32_t

@@ -327,6 +327,7 @@ VirtualClock::shouldYield() const
 bool
 VirtualClock::isStopped()
 {
+    // This is thread safe
     return getIOContext().stopped();
 }
 
