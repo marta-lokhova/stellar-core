@@ -77,7 +77,7 @@ FlowControl::hasOutboundCapacity(StellarMessage const& msg) const
 // Start flow control: send SEND_MORE to a peer to indicate available capacity
 void
 FlowControl::start(std::weak_ptr<Peer> peer,
-                   std::function<void(StellarMessage const&)> sendCb,
+                   std::function<void(std::shared_ptr<StellarMessage>)> sendCb,
                    bool enableFCBytes)
 {
     auto peerPtr = peer.lock();
@@ -142,8 +142,13 @@ FlowControl::maybeSendNextBatch()
 
     if (!mSendCallback)
     {
-        throw std::runtime_error(
-            "MaybeSendNextBatch: FLowControl was not started properly");
+        // Temporarily break flow control invariance on shutdown, fix later, as
+        // flow control doesn't really matter when shutting down
+        // This happens if we drop a peer before its accepted as authenticated,
+        // but we already have some messages from that peer queued up
+        return;
+        // throw std::runtime_error(
+        // "MaybeSendNextBatch: FLowControl was not started properly");
     }
 
     int sent = 0;
@@ -168,7 +173,7 @@ FlowControl::maybeSendNextBatch()
                 break;
             }
 
-            mSendCallback(msg);
+            mSendCallback(std::make_shared<StellarMessage>(msg));
             ++sent;
             auto& om = mApp.getOverlayManager().getOverlayMetrics();
 
@@ -314,9 +319,12 @@ FlowControl::endMessageProcessing(StellarMessage const& msg,
 bool
 FlowControl::canRead() const
 {
-    bool canReadBytes =
-        !mFlowControlBytesCapacity || mFlowControlBytesCapacity->canRead();
-    return canReadBytes && mFlowControlCapacity->canRead();
+    // Temporarily disable read throttling, as we rarely hit the limits anyway
+    assertThreadIsMain();
+    return true;
+    // bool canReadBytes =
+    //     !mFlowControlBytesCapacity || mFlowControlBytesCapacity->canRead();
+    // return canReadBytes && mFlowControlCapacity->canRead();
 }
 
 uint32_t

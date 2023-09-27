@@ -217,7 +217,7 @@ TEST_CASE("peer churn", "[overlay][connectivity][!hide]")
 
     auto networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
     auto simulation =
-        std::make_shared<Simulation>(Simulation::OVER_LOOPBACK, networkID);
+        std::make_shared<Simulation>(Simulation::OVER_TCP, networkID);
 
     // Gradually add (randomized) peers, and ensure everyone can connect
     SECTION("add new peers")

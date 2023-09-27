@@ -63,6 +63,7 @@ class OverlayManagerImpl : public OverlayManager
 
         std::vector<Peer::pointer> mPending;
         std::map<NodeID, Peer::pointer> mAuthenticated;
+        std::unordered_set<Peer::pointer> mDropped;
 
         Peer::pointer byAddress(PeerBareAddress const& address) const;
         void removePeer(Peer* peer);
@@ -79,7 +80,7 @@ class OverlayManagerImpl : public OverlayManager
     PeerManager mPeerManager;
     PeerDoor mDoor;
     PeerAuth mAuth;
-    bool mShuttingDown;
+    std::atomic<bool> mShuttingDown;
 
     OverlayMetrics mOverlayMetrics;
 

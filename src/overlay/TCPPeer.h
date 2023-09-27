@@ -17,6 +17,9 @@ namespace stellar
 {
 
 static auto const MAX_UNAUTH_MESSAGE_SIZE = 0x1000;
+// action quee name must be uniform across all postOnMainThread calls to ensure
+// actions are executed in-order
+static auto const ACTION_QUEUE_NAME = "TCPPeer: main thread queue";
 
 // Peer that communicates via a TCP socket.
 class TCPPeer : public Peer
@@ -26,15 +29,27 @@ class TCPPeer : public Peer
     static constexpr size_t BUFSZ = 0x40000; // 256KB
 
   private:
+    // BACKGROUND
     std::shared_ptr<SocketType> mSocket;
     std::vector<uint8_t> mIncomingHeader;
     std::vector<uint8_t> mIncomingBody;
+    std::string const mIP;
 
+    std::shared_ptr<SocketType>
+    getSocket() const
+    {
+        return mSocket;
+    }
+
+    // TODO: any access to write queue/buffers struct must be from overlay
+    // thread
     std::vector<asio::const_buffer> mWriteBuffers;
     std::deque<TimestampedMessage> mWriteQueue;
-    bool mWriting{false};
-    bool mDelayedShutdown{false};
-    bool mShutdownScheduled{false};
+
+    // TODO: need to synchronize
+    std::atomic<bool> mWriting{false};
+    std::atomic<bool> mDelayedShutdown{false};
+    std::atomic<bool> mShutdownScheduled{false};
 
     void recvMessage();
     void sendMessage(xdr::msg_ptr&& xdrBytes) override;
@@ -43,8 +58,9 @@ class TCPPeer : public Peer
 
     size_t getIncomingMsgLength();
     virtual void connected() override;
+
+    // BACKGROUND ONLY
     void scheduleRead() override;
-    virtual bool sendQueueIsOverloaded() const override;
     void startRead();
 
     static constexpr size_t HDRSZ = 4;
@@ -63,16 +79,17 @@ class TCPPeer : public Peer
     void readBodyHandler(asio::error_code const& error,
                          std::size_t bytes_transferred,
                          std::size_t expected_length);
-    void shutdown();
+    virtual void shutdown() override;
 
   public:
     typedef std::shared_ptr<TCPPeer> pointer;
 
     TCPPeer(Application& app, Peer::PeerRole role,
-            std::shared_ptr<SocketType> socket); // hollow
-                                                 // constructor; use
-                                                 // `initiate` or
-                                                 // `accept` instead
+            std::shared_ptr<SocketType> socket,
+            std::string ip); // hollow
+                             // constructor; use
+                             // `initiate` or
+                             // `accept` instead
 
     static pointer initiate(Application& app, PeerBareAddress const& address);
     static pointer accept(Application& app, std::shared_ptr<SocketType> socket);

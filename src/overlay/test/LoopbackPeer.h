@@ -112,6 +112,12 @@ class LoopbackPeer : public Peer
 
     void clearInAndOutQueues();
 
+    virtual bool
+    useBackgroundThread() const override
+    {
+        return false;
+    }
+
     size_t
     getTxQueueByteCount() const
     {
@@ -144,6 +150,7 @@ class LoopbackPeer : public Peer
     using Peer::sendAuth;
     using Peer::sendAuthenticatedMessage;
     using Peer::sendMessage;
+    void recvMessage(xdr::msg_ptr const& xdrBytes);
 
     friend class LoopbackPeerConnection;
 };

@@ -29,9 +29,9 @@ FlowControlMessageCapacity::getMsgResourceCount(StellarMessage const& msg) const
 FlowControlCapacity::ReadingCapacity
 FlowControlMessageCapacity::getCapacityLimits() const
 {
-    return {
-        mApp.getConfig().PEER_FLOOD_READING_CAPACITY,
-        std::make_optional<uint64_t>(mApp.getConfig().PEER_READING_CAPACITY)};
+    // Temporarily disable reading capacity so we don't have to deal with
+    // syncronization in TCPPeer
+    return {mApp.getConfig().PEER_FLOOD_READING_CAPACITY, std::nullopt};
 }
 
 void

@@ -632,8 +632,10 @@ TEST_CASE("drop peers that dont respect capacity", "[overlay][flowcontrol]")
         REQUIRE(conn.getAcceptor()->isAuthenticated());
 
         // Acceptor sends too many flood messages, causing initiator to drop it
-        conn.getAcceptor()->sendAuthenticatedMessage(msg);
-        conn.getAcceptor()->sendAuthenticatedMessage(msg);
+        conn.getAcceptor()->sendAuthenticatedMessage(
+            std::make_shared<StellarMessage>(msg));
+        conn.getAcceptor()->sendAuthenticatedMessage(
+            std::make_shared<StellarMessage>(msg));
         testutil::crankSome(clock);
 
         REQUIRE(!conn.getInitiator()->isConnected());
@@ -2375,7 +2377,7 @@ TEST_CASE("disconnected topology recovery")
 
     auto doTest = [&](bool usePreferred) {
         auto simulation = Topologies::separate(
-            7, 0.5, Simulation::OVER_LOOPBACK,
+            7, 0.5, Simulation::OVER_TCP,
             sha256(getTestConfig().NETWORK_PASSPHRASE), 0, [&](int i) {
                 auto cfg = cfgs[i];
                 cfg.TARGET_PEER_CONNECTIONS = 1;
