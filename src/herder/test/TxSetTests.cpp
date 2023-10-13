@@ -36,7 +36,8 @@ TEST_CASE("generalized tx set XDR validation", "[txset]")
 
     SECTION("no phases")
     {
-        auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+        auto txSet =
+            TxSetFrame::makeFromWire(*app, xdrTxSet, std::nullopt, {}, {});
         REQUIRE(!txSet->checkValidStructure());
     }
     SECTION("too many phases")
@@ -44,7 +45,8 @@ TEST_CASE("generalized tx set XDR validation", "[txset]")
         xdrTxSet.v1TxSet().phases.emplace_back();
         xdrTxSet.v1TxSet().phases.emplace_back();
         xdrTxSet.v1TxSet().phases.emplace_back();
-        auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+        auto txSet =
+            TxSetFrame::makeFromWire(*app, xdrTxSet, std::nullopt, {}, {});
         REQUIRE(!txSet->checkValidStructure());
     }
     SECTION("incorrect base fee order")
@@ -103,7 +105,8 @@ TEST_CASE("generalized tx set XDR validation", "[txset]")
                         .txsMaybeDiscountedFee()
                         .txs.emplace_back();
 
-                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet,
+                                                          std::nullopt, {}, {});
                     REQUIRE(!txSet->checkValidStructure());
                 }
                 SECTION("non-discounted component out of place")
@@ -142,7 +145,8 @@ TEST_CASE("generalized tx set XDR validation", "[txset]")
                     xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
                         TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
 
-                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet,
+                                                          std::nullopt, {}, {});
                     REQUIRE(!txSet->checkValidStructure());
                 }
                 SECTION(
@@ -187,7 +191,8 @@ TEST_CASE("generalized tx set XDR validation", "[txset]")
                         .txsMaybeDiscountedFee()
                         .txs.emplace_back();
 
-                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet,
+                                                          std::nullopt, {}, {});
                     REQUIRE(!txSet->checkValidStructure());
                 }
             }
@@ -257,7 +262,8 @@ TEST_CASE("generalized tx set XDR validation", "[txset]")
                         .txsMaybeDiscountedFee()
                         .txs.emplace_back();
 
-                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet,
+                                                          std::nullopt, {}, {});
                     REQUIRE(!txSet->checkValidStructure());
                 }
                 SECTION("duplicate non-discounted components")
@@ -296,7 +302,8 @@ TEST_CASE("generalized tx set XDR validation", "[txset]")
                         .txsMaybeDiscountedFee()
                         .txs.emplace_back();
 
-                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet,
+                                                          std::nullopt, {}, {});
                     REQUIRE(!txSet->checkValidStructure());
                 }
             }
@@ -314,7 +321,8 @@ TEST_CASE("generalized tx set XDR validation", "[txset]")
                 xdrTxSet.v1TxSet().phases[i].v0Components().emplace_back(
                     TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE);
 
-                auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet,
+                                                      std::nullopt, {}, {});
                 REQUIRE(!txSet->checkValidStructure());
             }
         }
@@ -355,7 +363,8 @@ TEST_CASE("generalized tx set XDR validation", "[txset]")
             txEnv.v0().tx.operations.emplace_back();
             txEnv.v0().tx.operations.back().body.type(INVOKE_HOST_FUNCTION);
         }
-        auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+        auto txSet =
+            TxSetFrame::makeFromWire(*app, xdrTxSet, std::nullopt, {}, {});
         REQUIRE(!txSet->checkValidStructure());
     }
     SECTION("valid XDR")
@@ -384,7 +393,8 @@ TEST_CASE("generalized tx set XDR validation", "[txset]")
                 {
                     xdrTxSet.v1TxSet().phases.emplace_back();
                     xdrTxSet.v1TxSet().phases.emplace_back();
-                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet,
+                                                          std::nullopt, {}, {});
                     REQUIRE(txSet->checkValidStructure());
                 }
                 SECTION("single component")
@@ -400,7 +410,8 @@ TEST_CASE("generalized tx set XDR validation", "[txset]")
                         .txsMaybeDiscountedFee()
                         .txs.emplace_back();
                     maybeAddSorobanOp(xdrTxSet);
-                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet,
+                                                          std::nullopt, {}, {});
                     REQUIRE(txSet->checkValidStructure());
                 }
                 SECTION("multiple components")
@@ -465,7 +476,8 @@ TEST_CASE("generalized tx set XDR validation", "[txset]")
                         .txs.emplace_back();
                     maybeAddSorobanOp(xdrTxSet);
 
-                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+                    auto txSet = TxSetFrame::makeFromWire(*app, xdrTxSet,
+                                                          std::nullopt, {}, {});
                     REQUIRE(txSet->checkValidStructure());
                 }
             }
@@ -517,7 +529,8 @@ TEST_CASE("generalized tx set XDR conversion", "[txset]")
     };
 
     auto checkXdrRoundtrip = [&](GeneralizedTransactionSet const& txSetXdr) {
-        auto frame = TxSetFrame::makeFromWire(*app, txSetXdr);
+        auto frame =
+            TxSetFrame::makeFromWire(*app, txSetXdr, std::nullopt, {}, {});
         REQUIRE(frame->checkValid(*app, 0, 0));
         GeneralizedTransactionSet newXdr;
         frame->toXDR(newXdr);

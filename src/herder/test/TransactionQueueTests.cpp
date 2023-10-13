@@ -2377,13 +2377,20 @@ TEST_CASE("arbitrage tx identification",
     tx7.v1().tx.operations.emplace_back(
         txtest::pathPayment(bobPub, usd, 100, mxn, 100, {jpy, inr}));
 
-    auto tx1f = std::make_shared<TransactionFrame>(Hash(), tx1);
-    auto tx2f = std::make_shared<TransactionFrame>(Hash(), tx2);
-    auto tx3f = std::make_shared<TransactionFrame>(Hash(), tx3);
-    auto tx4f = std::make_shared<TransactionFrame>(Hash(), tx4);
-    auto tx5f = std::make_shared<TransactionFrame>(Hash(), tx5);
-    auto tx6f = std::make_shared<TransactionFrame>(Hash(), tx6);
-    auto tx7f = std::make_shared<TransactionFrame>(Hash(), tx7);
+    auto tx1f = std::make_shared<TransactionFrame>(Hash(), tx1, std::nullopt,
+                                                   std::nullopt);
+    auto tx2f = std::make_shared<TransactionFrame>(Hash(), tx2, std::nullopt,
+                                                   std::nullopt);
+    auto tx3f = std::make_shared<TransactionFrame>(Hash(), tx3, std::nullopt,
+                                                   std::nullopt);
+    auto tx4f = std::make_shared<TransactionFrame>(Hash(), tx4, std::nullopt,
+                                                   std::nullopt);
+    auto tx5f = std::make_shared<TransactionFrame>(Hash(), tx5, std::nullopt,
+                                                   std::nullopt);
+    auto tx6f = std::make_shared<TransactionFrame>(Hash(), tx6, std::nullopt,
+                                                   std::nullopt);
+    auto tx7f = std::make_shared<TransactionFrame>(Hash(), tx7, std::nullopt,
+                                                   std::nullopt);
 
     LOG_TRACE(DEFAULT_LOG, "Tx1 - 1 op / 3 asset contiguous loop");
     REQUIRE(
@@ -2485,7 +2492,8 @@ TEST_CASE("arbitrage tx identification benchmark",
         prev = lll;
     }
 
-    auto tx1f = std::make_shared<TransactionFrame>(Hash(), tx1);
+    auto tx1f = std::make_shared<TransactionFrame>(Hash(), tx1, std::nullopt,
+                                                   std::nullopt);
 
     namespace ch = std::chrono;
     using clock = ch::high_resolution_clock;

@@ -344,7 +344,8 @@ TEST_CASE("PendingEnvelopes recvSCPEnvelope", "[herder]")
     SECTION("can receive malformed tx set")
     {
         GeneralizedTransactionSet malformedXdrSet(1);
-        auto malformedTxSet = TxSetFrame::makeFromWire(*app, malformedXdrSet);
+        auto malformedTxSet = TxSetFrame::makeFromWire(*app, malformedXdrSet,
+                                                       std::nullopt, {}, {});
         auto p2 = makeTxPair(malformedTxSet, 10, STELLAR_VALUE_SIGNED);
         auto malformedEnvelope =
             makeEnvelope(p2, saneQSetHash, lcl.header.ledgerSeq + 1);

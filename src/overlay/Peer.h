@@ -84,6 +84,16 @@ class Peer : public std::enable_shared_from_this<Peer>,
         CLOSING = 4
     };
 
+    struct PossibleHashes
+    {
+        std::optional<Hash> mTxFullHash;
+        std::optional<Hash> mTxContentHash;
+        std::optional<Hash> mTxSetHash;
+        // phases -> components -> hashes
+        std::vector<std::vector<std::vector<Hash>>> mTxSetTxFullHashes;
+        std::vector<std::vector<std::vector<Hash>>> mTxSetTxContentHashes;
+    };
+
     static inline int
     format_as(PeerState const& s)
     {
@@ -233,8 +243,10 @@ class Peer : public std::enable_shared_from_this<Peer>,
     OverlayMetrics& getOverlayMetrics();
 
     bool shouldAbort() const;
-    void recvRawMessage(StellarMessage const& msg);
-    void recvMessage(StellarMessage const& msg);
+    void recvRawMessage(StellarMessage const& msg,
+                        std::shared_ptr<PossibleHashes> possibleHashes);
+    void recvMessage(StellarMessage const& msg,
+                     std::shared_ptr<PossibleHashes> possibleHashes);
     void recvMessage(AuthenticatedMessage&& msg);
 
     virtual void recvError(StellarMessage const& msg);
@@ -251,8 +263,11 @@ class Peer : public std::enable_shared_from_this<Peer>,
 
     void recvGetTxSet(StellarMessage const& msg);
     void recvTxSet(StellarMessage const& msg);
-    void recvGeneralizedTxSet(StellarMessage const& msg);
-    void recvTransaction(StellarMessage const& msg);
+    void recvGeneralizedTxSet(StellarMessage const& msg,
+                              std::shared_ptr<PossibleHashes> hashes);
+    void recvTransaction(StellarMessage const& msg,
+                         std::optional<Hash> fullHash,
+                         std::optional<Hash> contentsHash);
     void recvGetSCPQuorumSet(StellarMessage const& msg);
     void recvSCPQuorumSet(StellarMessage const& msg);
     void recvSCPMessage(StellarMessage const& msg);

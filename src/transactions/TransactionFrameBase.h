@@ -31,9 +31,9 @@ using TransactionFrameBaseConstPtr =
 class TransactionFrameBase
 {
   public:
-    static TransactionFrameBasePtr
-    makeTransactionFromWire(Hash const& networkID,
-                            TransactionEnvelope const& env);
+    static TransactionFrameBasePtr makeTransactionFromWire(
+        Hash const& networkID, TransactionEnvelope const& env,
+        std::optional<Hash> fullHash, std::optional<Hash> contentsHash);
 
     virtual bool apply(Application& app, AbstractLedgerTxn& ltx,
                        TransactionMetaFrame& meta,

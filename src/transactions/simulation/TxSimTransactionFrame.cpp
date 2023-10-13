@@ -22,7 +22,7 @@ namespace txsimulation
 TxSimTransactionFrame::TxSimTransactionFrame(
     Hash const& networkID, TransactionEnvelope const& envelope,
     TransactionResult simulationResult, uint32_t partition)
-    : TransactionFrame(networkID, envelope)
+    : TransactionFrame(networkID, envelope, std::nullopt, std::nullopt)
     , mSimulationResult(simulationResult)
     , mCount(partition)
 {

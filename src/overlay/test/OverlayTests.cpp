@@ -195,7 +195,8 @@ TEST_CASE("flow control byte capacity", "[overlay][flowcontrol]")
                         ->getOutboundCapacity() == expectedCapacity);
             REQUIRE(conn.getInitiator()->getTxQueueByteCount() == 0);
 
-            conn.getAcceptor()->recvMessage(tx1);
+            conn.getAcceptor()->recvMessage(
+                tx1, std::make_shared<Peer::PossibleHashes>());
             REQUIRE(conn.getAcceptor()
                         ->getFlowControl()
                         ->getCapacityBytes()

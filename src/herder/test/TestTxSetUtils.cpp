@@ -77,7 +77,7 @@ makeNonValidatedGeneralizedTxSet(
     Hash const& previousLedgerHash)
 {
     auto xdrTxSet = makeGeneralizedTxSetXDR(txsPerBaseFee, previousLedgerHash);
-    return TxSetFrame::makeFromWire(app, xdrTxSet);
+    return TxSetFrame::makeFromWire(app, xdrTxSet, std::nullopt, {}, {});
 }
 
 TxSetFrameConstPtr

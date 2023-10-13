@@ -132,7 +132,7 @@ applyCheck(TransactionFramePtr tx, Application& app, bool checkSeqNum)
     AccountEntry srcAccountBefore;
 
     auto checkedTx = TransactionFrameBase::makeTransactionFromWire(
-        app.getNetworkID(), tx->getEnvelope());
+        app.getNetworkID(), tx->getEnvelope(), std::nullopt, std::nullopt);
     bool checkedTxApplyRes = false;
     {
         LedgerTxn ltxFeeProc(ltx);
@@ -408,7 +408,7 @@ validateTxResults(TransactionFramePtr const& tx, Application& app,
     auto shouldValidateOk = validationResult.code == txSUCCESS;
 
     auto checkedTx = TransactionFrameBase::makeTransactionFromWire(
-        app.getNetworkID(), tx->getEnvelope());
+        app.getNetworkID(), tx->getEnvelope(), std::nullopt, std::nullopt);
     {
         LedgerTxn ltx(app.getLedgerTxnRoot());
         REQUIRE(checkedTx->checkValid(app, ltx, 0, 0, 0) == shouldValidateOk);
@@ -638,7 +638,8 @@ transactionFromOperationsV0(Application& app, SecretKey const& from,
               std::back_inserter(e.v0().tx.operations));
 
     auto res = std::static_pointer_cast<TransactionFrame>(
-        TransactionFrameBase::makeTransactionFromWire(app.getNetworkID(), e));
+        TransactionFrameBase::makeTransactionFromWire(
+            app.getNetworkID(), e, std::nullopt, std::nullopt));
     res->addSignature(from);
     return res;
 }
@@ -667,7 +668,8 @@ transactionFromOperationsV1(Application& app, SecretKey const& from,
     }
 
     auto res = std::static_pointer_cast<TransactionFrame>(
-        TransactionFrameBase::makeTransactionFromWire(app.getNetworkID(), e));
+        TransactionFrameBase::makeTransactionFromWire(
+            app.getNetworkID(), e, std::nullopt, std::nullopt));
     res->addSignature(from);
     return res;
 }
@@ -713,8 +715,8 @@ feeBump(Application& app, TestAccount& feeSource, TransactionFrameBasePtr tx,
     auto hash = sha256(xdr::xdr_to_opaque(
         app.getNetworkID(), ENVELOPE_TYPE_TX_FEE_BUMP, fb.feeBump().tx));
     fb.feeBump().signatures.emplace_back(SignatureUtils::sign(feeSource, hash));
-    return TransactionFrameBase::makeTransactionFromWire(app.getNetworkID(),
-                                                         fb);
+    return TransactionFrameBase::makeTransactionFromWire(
+        app.getNetworkID(), fb, std::nullopt, std::nullopt);
 }
 
 Operation
@@ -1668,7 +1670,8 @@ transactionFrameFromOps(Hash const& networkID, TestAccount& source,
                         std::optional<PreconditionsV2> cond)
 {
     return TransactionFrameBase::makeTransactionFromWire(
-        networkID, envelopeFromOps(networkID, source, ops, opKeys, cond));
+        networkID, envelopeFromOps(networkID, source, ops, opKeys, cond),
+        std::nullopt, std::nullopt);
 }
 
 TransactionFrameBasePtr
@@ -1680,8 +1683,10 @@ sorobanTransactionFrameFromOps(Hash const& networkID, TestAccount& source,
                                std::optional<std::string> memo)
 {
     return TransactionFrameBase::makeTransactionFromWire(
-        networkID, sorobanEnvelopeFromOps(networkID, source, ops, opKeys,
-                                          resources, fee, refundableFee, memo));
+        networkID,
+        sorobanEnvelopeFromOps(networkID, source, ops, opKeys, resources, fee,
+                               refundableFee, memo),
+        std::nullopt, std::nullopt);
 }
 
 LedgerUpgrade

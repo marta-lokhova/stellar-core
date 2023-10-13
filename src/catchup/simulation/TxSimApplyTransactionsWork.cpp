@@ -444,7 +444,8 @@ TxSimApplyTransactionsWork::scaleLedger(
             if (useInnerHash)
             {
                 auto innerTxFrame = std::make_shared<TransactionFrame>(
-                    mApp.getNetworkID(), txFrame->convertInnerTxToV1(newEnv));
+                    mApp.getNetworkID(), txFrame->convertInnerTxToV1(newEnv),
+                    std::nullopt, std::nullopt);
                 hash = innerTxFrame->getContentsHash();
             }
             else
@@ -455,7 +456,7 @@ TxSimApplyTransactionsWork::scaleLedger(
         else
         {
             auto txFrame = TransactionFrameBase::makeTransactionFromWire(
-                mApp.getNetworkID(), newEnv);
+                mApp.getNetworkID(), newEnv, std::nullopt, std::nullopt);
             hash = txFrame->getContentsHash();
         }
 
@@ -520,7 +521,8 @@ TxSimApplyTransactionsWork::getNextLedgerFromHistoryArchive()
         if (txHistoryEntry.ext.v() == 1)
         {
             txSetFrame = TxSetFrame::makeFromWire(
-                mApp, txHistoryEntry.ext.generalizedTxSet());
+                mApp, txHistoryEntry.ext.generalizedTxSet(), std::nullopt, {},
+                {});
         }
         else
         {

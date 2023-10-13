@@ -857,7 +857,7 @@ class FuzzTransactionFrame : public TransactionFrame
   public:
     FuzzTransactionFrame(Hash const& networkID,
                          TransactionEnvelope const& envelope)
-        : TransactionFrame(networkID, envelope){};
+        : TransactionFrame(networkID, envelope, std::nullopt, std::nullopt){};
 
     void
     attemptApplication(Application& app, AbstractLedgerTxn& ltx)

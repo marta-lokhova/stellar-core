@@ -328,7 +328,8 @@ TxSetFrame::makeFromTransactions(TxPhases const& txPhases, Application& app,
     {
         GeneralizedTransactionSet xdrTxSet;
         txSet->toXDR(xdrTxSet);
-        outputTxSet = TxSetFrame::makeFromWire(app, xdrTxSet);
+        outputTxSet =
+            TxSetFrame::makeFromWire(app, xdrTxSet, std::nullopt, {}, {});
     }
     else
     {
@@ -395,7 +396,7 @@ TxSetFrame::makeFromWire(Application& app, TransactionSet const& xdrTxSet)
         false, xdrTxSet.previousLedgerHash, {TxSetFrame::Transactions{}}));
     size_t encodedSize = xdr::xdr_argpack_size(xdrTxSet);
     if (!txSet->addTxsFromXdr(app, xdrTxSet.txs, false, std::nullopt,
-                              Phase::CLASSIC))
+                              Phase::CLASSIC, {}, {}))
     {
         CLOG_DEBUG(Herder,
                    "Got bad txSet: transactions are not "
@@ -410,15 +411,20 @@ TxSetFrame::makeFromWire(Application& app, TransactionSet const& xdrTxSet)
 }
 
 TxSetFrameConstPtr
-TxSetFrame::makeFromWire(Application& app,
-                         GeneralizedTransactionSet const& xdrTxSet)
+TxSetFrame::makeFromWire(
+    Application& app, GeneralizedTransactionSet const& xdrTxSet,
+    std::optional<Hash> hash,
+    std::vector<std::vector<std::vector<Hash>>> txHashes,
+    std::vector<std::vector<std::vector<Hash>>> txContentHashes)
 {
     ZoneScoped;
-    auto hash = xdrSha256(xdrTxSet);
+    auto fullHash = hash ? *hash : xdrSha256(xdrTxSet);
     size_t encodedSize = xdr::xdr_argpack_size(xdrTxSet);
+    releaseAssert(txHashes.size() == txContentHashes.size());
+
     if (!validateTxSetXDRStructure(xdrTxSet))
     {
-        return std::make_shared<InvalidTxSetFrame const>(xdrTxSet, hash,
+        return std::make_shared<InvalidTxSetFrame const>(xdrTxSet, fullHash,
                                                          encodedSize);
     }
 
@@ -433,14 +439,22 @@ TxSetFrame::makeFromWire(Application& app,
     {
         txSet->mFeesComputed[i] = true;
     }
-    txSet->mHash = hash;
+    txSet->mHash = fullHash;
     releaseAssert(phases.size() <= static_cast<size_t>(Phase::PHASE_COUNT));
     for (auto phaseId = 0; phaseId < phases.size(); phaseId++)
     {
         auto const& phase = phases[phaseId];
         auto const& components = phase.v0Components();
+        int i = 0;
         for (auto const& component : components)
         {
+            auto fullHashes =
+                txHashes.empty() ? std::vector<Hash>{} : txHashes[phaseId][i];
+            auto contentHashes = txContentHashes.empty()
+                                     ? std::vector<Hash>{}
+                                     : txContentHashes[phaseId][i];
+            i++;
+
             switch (component.type())
             {
             case TXSET_COMP_TXS_MAYBE_DISCOUNTED_FEE:
@@ -451,13 +465,14 @@ TxSetFrame::makeFromWire(Application& app,
                 }
                 if (!txSet->addTxsFromXdr(
                         app, component.txsMaybeDiscountedFee().txs, true,
-                        baseFee, static_cast<Phase>(phaseId)))
+                        baseFee, static_cast<Phase>(phaseId), fullHashes,
+                        contentHashes))
                 {
                     CLOG_DEBUG(Herder, "Got bad txSet: transactions are not "
                                        "ordered correctly or contain invalid "
                                        "phase transactions");
                     return std::make_shared<InvalidTxSetFrame const>(
-                        xdrTxSet, hash, encodedSize);
+                        xdrTxSet, fullHash, encodedSize);
                 }
                 break;
             }
@@ -477,7 +492,8 @@ TxSetFrame::makeFromStoredTxSet(StoredTransactionSet const& storedSet,
     }
     else
     {
-        cur = TxSetFrame::makeFromWire(app, storedSet.generalizedTxSet());
+        cur = TxSetFrame::makeFromWire(app, storedSet.generalizedTxSet(),
+                                       std::nullopt, {}, {});
     }
 
     return cur;
@@ -1107,8 +1123,10 @@ bool
 TxSetFrame::addTxsFromXdr(Application& app,
                           xdr::xvector<TransactionEnvelope> const& txs,
                           bool useBaseFee, std::optional<int64_t> baseFee,
-                          Phase phase)
+                          Phase phase, std::vector<Hash> txHashes,
+                          std::vector<Hash> txContentHashes)
 {
+    ZoneScoped;
     auto& phaseTxs = mTxPhases.at(static_cast<int>(phase));
     size_t oldSize = phaseTxs.size();
     phaseTxs.reserve(oldSize + txs.size());
@@ -1117,10 +1135,24 @@ TxSetFrame::addTxsFromXdr(Application& app,
                   TransactionMode::READ_ONLY_WITHOUT_SQL_TXN);
     auto ledgerVersion = ltx.loadHeader().current().ledgerVersion;
 
+    if (!txHashes.empty())
+    {
+        releaseAssert(txHashes.size() == txs.size());
+    }
+
+    int i = 0;
     for (auto const& env : txs)
     {
+        std::optional<Hash> hash = txHashes.empty()
+                                       ? std::nullopt
+                                       : std::make_optional<Hash>(txHashes[i]);
+        std::optional<Hash> contentHash =
+            txHashes.empty() ? std::nullopt
+                             : std::make_optional<Hash>(txContentHashes[i]);
+        i++;
+
         auto tx = TransactionFrameBase::makeTransactionFromWire(
-            app.getNetworkID(), env);
+            app.getNetworkID(), env, hash, contentHash);
 
         if (protocolVersionStartsFrom(ledgerVersion, SOROBAN_PROTOCOL_VERSION))
         {

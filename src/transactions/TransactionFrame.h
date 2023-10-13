@@ -139,8 +139,9 @@ class TransactionFrame : public TransactionFrameBase
     int64 sorobanRefundableFee() const;
 
   public:
-    TransactionFrame(Hash const& networkID,
-                     TransactionEnvelope const& envelope);
+    TransactionFrame(Hash const& networkID, TransactionEnvelope const& envelope,
+                     std::optional<Hash> fullHash,
+                     std::optional<Hash> contentsHash);
     TransactionFrame(TransactionFrame const&) = delete;
     TransactionFrame() = delete;
 

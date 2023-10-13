@@ -131,7 +131,8 @@ ApplyCheckpointWork::getCurrentTxSet()
             else
             {
                 return TxSetFrame::makeFromWire(
-                    mApp, mTxHistoryEntry.ext.generalizedTxSet());
+                    mApp, mTxHistoryEntry.ext.generalizedTxSet(), std::nullopt,
+                    {}, {});
             }
         }
     } while (mTxIn && mTxIn.readOne(mTxHistoryEntry));

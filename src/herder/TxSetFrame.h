@@ -73,7 +73,10 @@ class TxSetFrame : public NonMovableOrCopyable
     static TxSetFrameConstPtr makeFromWire(Application& app,
                                            TransactionSet const& xdrTxSet);
     static TxSetFrameConstPtr
-    makeFromWire(Application& app, GeneralizedTransactionSet const& xdrTxSet);
+    makeFromWire(Application& app, GeneralizedTransactionSet const& xdrTxSet,
+                 std::optional<Hash> hash,
+                 std::vector<std::vector<std::vector<Hash>>> txHashes,
+                 std::vector<std::vector<std::vector<Hash>>> txContentHashes);
 
     // Creates a TxSetFrame from StoredTransactionSet (internally persisted tx
     // set format).
@@ -193,7 +196,8 @@ class TxSetFrame : public NonMovableOrCopyable
     bool addTxsFromXdr(Application& app,
                        xdr::xvector<TransactionEnvelope> const& txs,
                        bool useBaseFee, std::optional<int64_t> baseFee,
-                       Phase phase);
+                       Phase phase, std::vector<Hash> txHashes,
+                       std::vector<Hash> txContentHashes);
     void applySurgePricing(Application& app);
 
     void computeTxFeesForNonGeneralizedSet(LedgerHeader const& lclHeader,

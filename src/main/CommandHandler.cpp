@@ -768,7 +768,7 @@ CommandHandler::tx(std::string const& params, std::string& retStr)
         }
 
         auto transaction = TransactionFrameBase::makeTransactionFromWire(
-            mApp.getNetworkID(), envelope);
+            mApp.getNetworkID(), envelope, std::nullopt, {});
         if (transaction)
         {
             // Add it to our current set and make sure it is valid.

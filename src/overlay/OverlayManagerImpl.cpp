@@ -113,7 +113,8 @@ OverlayManagerImpl::PeersList::removePeer(Peer* peer)
     {
         CLOG_TRACE(Overlay, "Dropping pending {} peer: {}", mDirectionString,
                    peer->toString());
-        // Prolong the lifetime of dropped peer for a bit until background thread is done processing it
+        // Prolong the lifetime of dropped peer for a bit until background
+        // thread is done processing it
         mDropped.insert(*pendingIt);
         mPending.erase(pendingIt);
         mConnectionsDropped.Mark();
@@ -125,7 +126,8 @@ OverlayManagerImpl::PeersList::removePeer(Peer* peer)
     {
         CLOG_DEBUG(Overlay, "Dropping authenticated {} peer: {}",
                    mDirectionString, peer->toString());
-        // Prolong the lifetime of dropped peer for a bit until background thread is done processing it
+        // Prolong the lifetime of dropped peer for a bit until background
+        // thread is done processing it
         mDropped.insert(authentiatedIt->second);
         mAuthenticated.erase(authentiatedIt);
 
@@ -630,7 +632,8 @@ OverlayManagerImpl::tick()
 
     // print dropped peer size
     CLOG_INFO(Overlay, "Dropped peer size: {}", mInboundPeers.mDropped.size());
-    CLOG_INFO(Overlay, "(OUTBOUND) Dropped peer size: {}", mOutboundPeers.mDropped.size());
+    CLOG_INFO(Overlay, "(OUTBOUND) Dropped peer size: {}",
+              mOutboundPeers.mDropped.size());
 
     // Cleanup unreferenced peers.
     for (auto it = mInboundPeers.mDropped.begin();

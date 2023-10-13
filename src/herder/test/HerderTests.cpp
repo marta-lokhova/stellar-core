@@ -2679,7 +2679,8 @@ testSCPDriver(uint32 protocolVersion, uint32_t maxTxSetSize, size_t expectedOps)
                             .txsMaybeDiscountedFee()
                             .txs;
             std::swap(txs[0], txs[1]);
-            malformedTxSet = TxSetFrame::makeFromWire(*app, xdrTxSet);
+            malformedTxSet =
+                TxSetFrame::makeFromWire(*app, xdrTxSet, std::nullopt, {}, {});
         }
         else
         {

@@ -765,15 +765,73 @@ Peer::recvMessage(AuthenticatedMessage&& msg)
         ++mRecvMacSeq;
     }
 
-    auto f = [this, msg = std::move(msg)]() {
-        this->recvMessage(msg.v0().message);
+    PossibleHashes ph;
+    if (msg.v0().message.type() == GENERALIZED_TX_SET)
+    {
+        ph.mTxSetHash = xdrSha256(msg.v0().message.generalizedTxSet());
+        std::vector<std::vector<std::vector<Hash>>> fullHashes;
+        std::vector<std::vector<std::vector<Hash>>> contentHashes;
+
+        for (auto const& phase :
+             msg.v0().message.generalizedTxSet().v1TxSet().phases)
+        {
+            std::vector<std::vector<Hash>> phaseFullHashes;
+            std::vector<std::vector<Hash>> phaseContentHashes;
+
+            for (auto const& component : phase.v0Components())
+            {
+                std::vector<Hash> componentFullHashes;
+                std::vector<Hash> componentContentHashes;
+
+                for (auto const& tx : component.txsMaybeDiscountedFee().txs)
+                {
+                    if (tx.type() == ENVELOPE_TYPE_TX)
+                    {
+                        componentFullHashes.push_back(xdrSha256(tx));
+                        componentContentHashes.push_back(sha256(
+                            xdr::xdr_to_opaque(mApp.getNetworkID(),
+                                               ENVELOPE_TYPE_TX, tx.v1().tx)));
+                    }
+                }
+                phaseFullHashes.push_back(componentFullHashes);
+                phaseContentHashes.push_back(componentContentHashes);
+            }
+            fullHashes.push_back(phaseFullHashes);
+            contentHashes.push_back(phaseContentHashes);
+        }
+    }
+    else if (msg.v0().message.type() == TRANSACTION &&
+             msg.v0().message.transaction().type() == ENVELOPE_TYPE_TX)
+    {
+        ph.mTxFullHash = xdrSha256(msg.v0().message.transaction());
+        ph.mTxContentHash =
+            sha256(xdr::xdr_to_opaque(mApp.getNetworkID(), ENVELOPE_TYPE_TX,
+                                      msg.v0().message.transaction().v1().tx));
+    }
+    else if (msg.v0().message.type() == SCP_MESSAGE)
+    {
+        // Cache signature in the background
+        auto& envelope = msg.v0().message.envelope();
+        PubKeyUtils::verifySig(envelope.statement.nodeID, envelope.signature,
+                               xdr::xdr_to_opaque(mApp.getNetworkID(),
+                                                  ENVELOPE_TYPE_SCP,
+                                                  envelope.statement));
+    }
+
+    auto ptr = std::make_shared<PossibleHashes>(ph);
+
+    auto f = [this, msg = std::move(msg), ptr]() {
+        // Pass has of XDR along to main thread, so it doesn't need to compute
+        // it on its own
+        this->recvMessage(msg.v0().message, ptr);
     };
 
     getApp().postOnMainThread(f, "recvMessage");
 }
 
 void
-Peer::recvMessage(StellarMessage const& stellarMsg)
+Peer::recvMessage(StellarMessage const& stellarMsg,
+                  std::shared_ptr<PossibleHashes> hashes)
 {
     ZoneScoped;
     assertThreadIsMain();
@@ -791,7 +849,7 @@ Peer::recvMessage(StellarMessage const& stellarMsg)
     // group messages used during handshake, process those synchronously
     case HELLO:
     case AUTH:
-        Peer::recvRawMessage(stellarMsg);
+        Peer::recvRawMessage(stellarMsg, hashes);
         return;
     // control messages
     case GET_PEERS:
@@ -844,7 +902,7 @@ Peer::recvMessage(StellarMessage const& stellarMsg)
     }
 
     mApp.postOnMainThread(
-        [msgTracker, cat, port = mApp.getConfig().PEER_PORT]() {
+        [msgTracker, cat, port = mApp.getConfig().PEER_PORT, hashes]() {
             auto self = msgTracker->getPeer().lock();
             if (!self)
             {
@@ -855,7 +913,7 @@ Peer::recvMessage(StellarMessage const& stellarMsg)
 
             try
             {
-                self->recvRawMessage(msgTracker->getMessage());
+                self->recvRawMessage(msgTracker->getMessage(), hashes);
             }
             catch (CryptoError const& e)
             {
@@ -881,7 +939,8 @@ Peer::recvSendMore(StellarMessage const& msg)
 }
 
 void
-Peer::recvRawMessage(StellarMessage const& stellarMsg)
+Peer::recvRawMessage(StellarMessage const& stellarMsg,
+                     std::shared_ptr<PossibleHashes> hashes)
 {
     ZoneScoped;
     assertThreadIsMain();
@@ -984,14 +1043,16 @@ Peer::recvRawMessage(StellarMessage const& stellarMsg)
     case GENERALIZED_TX_SET:
     {
         auto t = getOverlayMetrics().mRecvTxSetTimer.TimeScope();
-        recvGeneralizedTxSet(stellarMsg);
+        recvGeneralizedTxSet(stellarMsg, hashes);
     }
     break;
 
     case TRANSACTION:
     {
+        auto fullhash = hashes ? hashes->mTxFullHash : std::nullopt;
+        auto contentHash = hashes ? hashes->mTxContentHash : std::nullopt;
         auto t = getOverlayMetrics().mRecvTransactionTimer.TimeScope();
-        recvTransaction(stellarMsg);
+        recvTransaction(stellarMsg, fullhash, contentHash);
     }
     break;
 
@@ -1130,19 +1191,29 @@ Peer::recvTxSet(StellarMessage const& msg)
 }
 
 void
-Peer::recvGeneralizedTxSet(StellarMessage const& msg)
+Peer::recvGeneralizedTxSet(StellarMessage const& msg,
+                           std::shared_ptr<PossibleHashes> hashes)
 {
     ZoneScoped;
-    auto frame = TxSetFrame::makeFromWire(mApp, msg.generalizedTxSet());
+    auto txSetHash = hashes ? hashes->mTxSetHash : std::nullopt;
+    auto txFullhashes = hashes ? hashes->mTxSetTxFullHashes
+                               : std::vector<std::vector<std::vector<Hash>>>{};
+    auto txContenthashes = hashes
+                               ? hashes->mTxSetTxFullHashes
+                               : std::vector<std::vector<std::vector<Hash>>>{};
+
+    auto frame = TxSetFrame::makeFromWire(
+        mApp, msg.generalizedTxSet(), txSetHash, txFullhashes, txContenthashes);
     mApp.getHerder().recvTxSet(frame->getContentsHash(), frame);
 }
 
 void
-Peer::recvTransaction(StellarMessage const& msg)
+Peer::recvTransaction(StellarMessage const& msg, std::optional<Hash> fullHash,
+                      std::optional<Hash> contentsHash)
 {
     ZoneScoped;
     auto transaction = TransactionFrameBase::makeTransactionFromWire(
-        mApp.getNetworkID(), msg.transaction());
+        mApp.getNetworkID(), msg.transaction(), fullHash, contentsHash);
     if (transaction)
     {
         // record that this peer sent us this transaction

@@ -70,8 +70,8 @@ FeeBumpTransactionFrame::maybeComputeSorobanResourceFee(
 FeeBumpTransactionFrame::FeeBumpTransactionFrame(
     Hash const& networkID, TransactionEnvelope const& envelope)
     : mEnvelope(envelope)
-    , mInnerTx(std::make_shared<TransactionFrame>(networkID,
-                                                  convertInnerTxToV1(envelope)))
+    , mInnerTx(std::make_shared<TransactionFrame>(
+          networkID, convertInnerTxToV1(envelope), std::nullopt, std::nullopt))
     , mNetworkID(networkID)
 {
 }

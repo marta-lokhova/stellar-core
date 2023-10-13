@@ -52,7 +52,9 @@ using namespace std;
 using namespace stellar::txbridge;
 
 TransactionFrame::TransactionFrame(Hash const& networkID,
-                                   TransactionEnvelope const& envelope)
+                                   TransactionEnvelope const& envelope,
+                                   std::optional<Hash> fullHash,
+                                   std::optional<Hash> contentsHash)
     : mEnvelope(envelope), mNetworkID(networkID)
 {
     // Create operation frames with dummy results. Currently the proper results
@@ -73,6 +75,14 @@ TransactionFrame::TransactionFrame(Hash const& networkID,
 
     // Initialize the fee to 0, callers will compute the fee appropriately
     mSorobanResourceFee = std::make_optional<FeePair>();
+    if (fullHash)
+    {
+        mFullHash = *fullHash;
+    }
+    if (contentsHash)
+    {
+        mContentsHash = *contentsHash;
+    }
 }
 
 Hash const&
