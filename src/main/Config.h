@@ -326,6 +326,10 @@ class Config : public std::enable_shared_from_this<Config>
     // index.
     size_t EXPERIMENTAL_BUCKETLIST_DB_INDEX_CUTOFF;
 
+    // Number of threads to use for overlay processing. 0 indicates no
+    // parallelism is used, and everything is scheduled on the main thread
+    uint32_t EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING;
+
     // When set to true, BucketListDB indexes are persisted on-disk so that the
     // BucketList does not need to be reindexed on startup. Defaults to true.
     // This should only be set to false for testing purposes
