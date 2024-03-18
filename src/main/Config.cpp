@@ -143,6 +143,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     CATCHUP_COMPLETE = false;
     CATCHUP_RECENT = 0;
     EXPERIMENTAL_PRECAUTION_DELAY_META = false;
+    EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING = true;
     EXPERIMENTAL_BUCKETLIST_DB = false;
     EXPERIMENTAL_BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT = 14; // 2^14 == 16 kb
     EXPERIMENTAL_BUCKETLIST_DB_INDEX_CUTOFF = 20;             // 20 mb
@@ -1038,6 +1039,10 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
             else if (item.first == "EXPERIMENTAL_PRECAUTION_DELAY_META")
             {
                 EXPERIMENTAL_PRECAUTION_DELAY_META = readBool(item);
+            }
+            else if (item.first == "EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING")
+            {
+                EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING = readBool(item);
             }
             else if (item.first == "EXPERIMENTAL_BUCKETLIST_DB")
             {
