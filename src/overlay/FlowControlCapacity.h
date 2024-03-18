@@ -5,6 +5,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "overlay/StellarXDR.h"
+#include <mutex>
 #include <optional>
 
 namespace stellar
@@ -12,6 +13,7 @@ namespace stellar
 
 class Application;
 
+// FlowControlCapacity is thread-safe
 class FlowControlCapacity
 {
   protected:
@@ -25,6 +27,7 @@ class FlowControlCapacity
 
     // Capacity of local node configured by the operator
     ReadingCapacity mCapacity;
+    mutable std::recursive_mutex mCapacityMutex;
 
     // Capacity of a connected peer
     uint64_t mOutboundCapacity{0};

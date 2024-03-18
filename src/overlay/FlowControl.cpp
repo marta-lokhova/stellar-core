@@ -36,6 +36,9 @@ FlowControl::FlowControl(Application& app)
     , mNoOutboundCapacity(
           std::make_optional<VirtualClock::time_point>(app.getClock().now()))
 {
+    assertThreadIsMain();
+    // Subtle: initialize these on creation _before_ we do any reads in the
+    // background and access these member vars.
     mFlowControlCapacity =
         std::make_shared<FlowControlMessageCapacity>(mApp, mNodeID);
 }
@@ -43,6 +46,8 @@ FlowControl::FlowControl(Application& app)
 void
 FlowControl::sendSendMore(uint32_t numMessages, std::shared_ptr<Peer> peer)
 {
+    assertThreadIsMain();
+
     ZoneScoped;
     StellarMessage m;
     m.type(SEND_MORE);
@@ -55,6 +60,8 @@ void
 FlowControl::sendSendMore(uint32_t numMessages, uint32_t numBytes,
                           std::shared_ptr<Peer> peer)
 {
+    assertThreadIsMain();
+
     ZoneScoped;
     StellarMessage m;
     m.type(SEND_MORE_EXTENDED);
@@ -68,6 +75,8 @@ FlowControl::sendSendMore(uint32_t numMessages, uint32_t numBytes,
 bool
 FlowControl::hasOutboundCapacity(StellarMessage const& msg) const
 {
+    assertThreadIsMain();
+
     releaseAssert(mFlowControlCapacity);
     return mFlowControlCapacity->hasOutboundCapacity(msg) &&
            (!mFlowControlBytesCapacity ||
@@ -77,9 +86,12 @@ FlowControl::hasOutboundCapacity(StellarMessage const& msg) const
 // Start flow control: send SEND_MORE to a peer to indicate available capacity
 void
 FlowControl::start(std::weak_ptr<Peer> peer,
-                   std::function<void(StellarMessage const&)> sendCb,
+                   std::function<void(std::shared_ptr<StellarMessage>)> sendCb,
                    bool enableFCBytes)
 {
+    assertThreadIsMain();
+    std::lock_guard<std::mutex> guard(mCapacityMutex);
+
     auto peerPtr = peer.lock();
     if (!peerPtr)
     {
@@ -91,6 +103,8 @@ FlowControl::start(std::weak_ptr<Peer> peer,
 
     if (enableFCBytes)
     {
+        // TODO: this problem will go away once we enable flow control in bytes
+        // on mandatory , so the mutex above is not needed
         mFlowControlBytesCapacity =
             std::make_shared<FlowControlByteCapacity>(mApp, mNodeID);
         sendSendMore(
@@ -108,6 +122,7 @@ void
 FlowControl::maybeReleaseCapacityAndTriggerSend(StellarMessage const& msg)
 {
     ZoneScoped;
+    assertThreadIsMain();
 
     if (msg.type() == SEND_MORE || msg.type() == SEND_MORE_EXTENDED)
     {
@@ -146,6 +161,7 @@ void
 FlowControl::maybeSendNextBatch()
 {
     ZoneScoped;
+    assertThreadIsMain();
 
     if (!mSendCallback)
     {
@@ -175,7 +191,7 @@ FlowControl::maybeSendNextBatch()
                 break;
             }
 
-            mSendCallback(msg);
+            mSendCallback(std::make_shared<StellarMessage>(msg));
             ++sent;
             auto& om = mApp.getOverlayManager().getOverlayMetrics();
 
@@ -242,6 +258,8 @@ bool
 FlowControl::maybeSendMessage(std::shared_ptr<StellarMessage const> msg)
 {
     ZoneScoped;
+    assertThreadIsMain();
+
     if (mApp.getOverlayManager().isFloodMessage(*msg))
     {
         addMsgAndMaybeTrimQueue(msg);
@@ -255,6 +273,7 @@ void
 FlowControl::handleTxSizeIncrease(uint32_t increase, std::shared_ptr<Peer> peer)
 {
     ZoneScoped;
+    assertThreadIsMain();
     if (mFlowControlBytesCapacity)
     {
         releaseAssert(increase > 0);
@@ -270,6 +289,7 @@ bool
 FlowControl::beginMessageProcessing(StellarMessage const& msg)
 {
     ZoneScoped;
+    std::lock_guard<std::mutex> guard(mCapacityMutex);
 
     return mFlowControlCapacity->lockLocalCapacity(msg) &&
            (!mFlowControlBytesCapacity ||
@@ -281,6 +301,7 @@ FlowControl::endMessageProcessing(StellarMessage const& msg,
                                   std::weak_ptr<Peer> peer)
 {
     ZoneScoped;
+    assertThreadIsMain();
 
     mFloodDataProcessed += mFlowControlCapacity->releaseLocalCapacity(msg);
     if (mFlowControlBytesCapacity)
@@ -323,6 +344,8 @@ FlowControl::endMessageProcessing(StellarMessage const& msg,
 bool
 FlowControl::canRead() const
 {
+    // Thread-safe
+    std::lock_guard<std::mutex> guard(mCapacityMutex);
     bool canReadBytes =
         !mFlowControlBytesCapacity || mFlowControlBytesCapacity->canRead();
     return canReadBytes && mFlowControlCapacity->canRead();
@@ -339,6 +362,7 @@ bool
 FlowControl::isSendMoreValid(StellarMessage const& msg,
                              std::string& errorMsg) const
 {
+    assertThreadIsMain();
     bool sendMoreExtendedType =
         mFlowControlBytesCapacity && msg.type() == SEND_MORE_EXTENDED;
     bool sendMoreType = !mFlowControlBytesCapacity && msg.type() == SEND_MORE;
@@ -385,6 +409,7 @@ bool
 dropMessageAfterTimeout(FlowControl::QueuedOutboundMessage const& queuedMsg,
                         VirtualClock::time_point now)
 {
+    assertThreadIsMain();
     auto const& msg = *(queuedMsg.mMessage);
     bool dropType = msg.type() == TRANSACTION || msg.type() == FLOOD_ADVERT ||
                     msg.type() == FLOOD_DEMAND;
@@ -395,7 +420,7 @@ void
 FlowControl::addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg)
 {
     ZoneScoped;
-
+    assertThreadIsMain();
     releaseAssert(msg);
     auto type = msg->type();
     size_t msgQInd = 0;
@@ -554,6 +579,8 @@ FlowControl::addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg)
 Json::Value
 FlowControl::getFlowControlJsonInfo(bool compact) const
 {
+    assertThreadIsMain();
+
     Json::Value res;
     if (mFlowControlCapacity->getCapacity().mTotalCapacity)
     {
@@ -608,5 +635,6 @@ FlowControl::FlowControlMetrics::FlowControlMetrics()
                                               Peer::PEER_METRICS_RATE_UNIT,
                                               Peer::PEER_METRICS_WINDOW_SIZE))
 {
+    assertThreadIsMain();
 }
 }

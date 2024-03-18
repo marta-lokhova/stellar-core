@@ -29,15 +29,17 @@ FlowControlMessageCapacity::getMsgResourceCount(StellarMessage const& msg) const
 FlowControlCapacity::ReadingCapacity
 FlowControlMessageCapacity::getCapacityLimits() const
 {
-    return {
-        mApp.getConfig().PEER_FLOOD_READING_CAPACITY,
-        std::make_optional<uint64_t>(mApp.getConfig().PEER_READING_CAPACITY)};
+    std::lock_guard<std::recursive_mutex> guard(mCapacityMutex);
+    return {mApp.getConfig().PEER_FLOOD_READING_CAPACITY,
+            mApp.getConfig().PEER_READING_CAPACITY};
 }
 
 void
 FlowControlMessageCapacity::releaseOutboundCapacity(StellarMessage const& msg)
 {
     ZoneScoped;
+
+    std::lock_guard<std::recursive_mutex> guard(mCapacityMutex);
     releaseAssert(msg.type() == SEND_MORE || msg.type() == SEND_MORE_EXTENDED);
     auto numMessages = FlowControl::getNumMessages(msg);
     if (!hasOutboundCapacity(msg) && numMessages != 0)
@@ -52,6 +54,8 @@ bool
 FlowControlMessageCapacity::canRead() const
 {
     ZoneScoped;
+
+    std::lock_guard<std::recursive_mutex> guard(mCapacityMutex);
     releaseAssert(mCapacity.mTotalCapacity);
     return *mCapacity.mTotalCapacity > 0;
 }
@@ -69,6 +73,7 @@ FlowControlByteCapacity::FlowControlByteCapacity(Application& app,
 FlowControlCapacity::ReadingCapacity
 FlowControlByteCapacity::getCapacityLimits() const
 {
+    std::lock_guard<std::recursive_mutex> guard(mCapacityMutex);
     return mCapacityLimits;
 }
 
@@ -82,6 +87,8 @@ void
 FlowControlByteCapacity::releaseOutboundCapacity(StellarMessage const& msg)
 {
     ZoneScoped;
+    assertThreadIsMain();
+
     releaseAssert(msg.type() == SEND_MORE_EXTENDED);
     if (!hasOutboundCapacity(msg) &&
         (msg.sendMoreExtendedMessage().numBytes != 0))
@@ -95,6 +102,7 @@ FlowControlByteCapacity::releaseOutboundCapacity(StellarMessage const& msg)
 bool
 FlowControlByteCapacity::canRead() const
 {
+    std::lock_guard<std::recursive_mutex> guard(mCapacityMutex);
     releaseAssert(!mCapacity.mTotalCapacity);
     return true;
 }
@@ -102,6 +110,7 @@ FlowControlByteCapacity::canRead() const
 void
 FlowControlByteCapacity::handleTxSizeIncrease(uint32_t increase)
 {
+    std::lock_guard<std::recursive_mutex> guard(mCapacityMutex);
     mCapacity.mFloodCapacity += increase;
     mCapacityLimits.mFloodCapacity += increase;
 }
@@ -109,12 +118,15 @@ FlowControlByteCapacity::handleTxSizeIncrease(uint32_t increase)
 FlowControlCapacity::FlowControlCapacity(Application& app, NodeID const& nodeID)
     : mApp(app), mNodeID(nodeID)
 {
+    assertThreadIsMain();
 }
 
 void
 FlowControlCapacity::checkCapacityInvariants() const
 {
     ZoneScoped;
+    std::lock_guard<std::recursive_mutex> guard(mCapacityMutex);
+
     releaseAssert(getCapacityLimits().mFloodCapacity >=
                   mCapacity.mFloodCapacity);
     if (getCapacityLimits().mTotalCapacity)
@@ -133,6 +145,8 @@ void
 FlowControlCapacity::lockOutboundCapacity(StellarMessage const& msg)
 {
     ZoneScoped;
+    assertThreadIsMain();
+
     if (mApp.getOverlayManager().isFloodMessage(msg))
     {
         releaseAssert(hasOutboundCapacity(msg));
@@ -144,6 +158,8 @@ bool
 FlowControlCapacity::lockLocalCapacity(StellarMessage const& msg)
 {
     ZoneScoped;
+    std::lock_guard<std::recursive_mutex> guard(mCapacityMutex);
+
     checkCapacityInvariants();
     auto msgResources = getMsgResourceCount(msg);
     if (mCapacity.mTotalCapacity)
@@ -175,6 +191,8 @@ uint64_t
 FlowControlCapacity::releaseLocalCapacity(StellarMessage const& msg)
 {
     ZoneScoped;
+
+    std::lock_guard<std::recursive_mutex> guard(mCapacityMutex);
     uint64_t releasedFloodCapacity = 0;
     size_t resourcesFreed = getMsgResourceCount(msg);
     if (mCapacity.mTotalCapacity)
@@ -201,6 +219,7 @@ bool
 FlowControlCapacity::hasOutboundCapacity(StellarMessage const& msg) const
 {
     ZoneScoped;
+    assertThreadIsMain();
     return mOutboundCapacity >= getMsgResourceCount(msg);
 }
 
