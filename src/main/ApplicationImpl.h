@@ -78,11 +78,14 @@ class ApplicationImpl : public Application
     virtual StatusManager& getStatusManager() override;
 
     virtual asio::io_context& getWorkerIOContext() override;
+    virtual asio::io_context& getOverlayIOContext() override;
+
     virtual void postOnMainThread(std::function<void()>&& f, std::string&& name,
                                   Scheduler::ActionType type) override;
     virtual void postOnBackgroundThread(std::function<void()>&& f,
                                         std::string jobName) override;
-
+    virtual void postOnOverlayThread(std::function<void()>&& f,
+                                     std::string jobName) override;
     virtual void start() override;
     void startServices();
 
@@ -149,6 +152,9 @@ class ApplicationImpl : public Application
     asio::io_context mWorkerIOContext;
     std::unique_ptr<asio::io_context::work> mWork;
 
+    asio::io_context mHighPriorityIOContext;
+    std::unique_ptr<asio::io_context::work> mHighPriorityWork;
+
     std::unique_ptr<BucketManager> mBucketManager;
     std::unique_ptr<Database> mDatabase;
     std::unique_ptr<OverlayManager> mOverlayManager;
@@ -186,6 +192,7 @@ class ApplicationImpl : public Application
 #endif
 
     std::vector<std::thread> mWorkerThreads;
+    std::optional<std::thread> mOverlayThread;
 
     asio::signal_set mStopSignals;
 
@@ -198,6 +205,8 @@ class ApplicationImpl : public Application
     std::unique_ptr<medida::MetricsRegistry> mMetrics;
     medida::Timer& mPostOnMainThreadDelay;
     medida::Timer& mPostOnBackgroundThreadDelay;
+    medida::Timer& mPostOnOverlayThreadDelay;
+
     VirtualClock::system_time_point mStartedOn;
 
     Hash mNetworkID;
