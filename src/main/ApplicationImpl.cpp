@@ -644,6 +644,12 @@ ApplicationImpl::~ApplicationImpl()
         {
             mBucketManager->shutdown();
         }
+        // Peers continue reading and writing in the bakground, so we need to
+        // issue a signal to start wrapping up
+        if (mOverlayManager)
+        {
+            mOverlayManager->shutdown();
+        }
     }
     catch (std::exception const& e)
     {
@@ -923,7 +929,6 @@ ApplicationImpl::joinAllThreads()
         w.join();
     }
     LOG_INFO(DEFAULT_LOG, "Joining the overlay thread");
-    mHighPriorityIOContext.stop();
     mOverlayThread->join();
 
     LOG_INFO(DEFAULT_LOG, "Joined all {} threads", (mWorkerThreads.size() + 1));

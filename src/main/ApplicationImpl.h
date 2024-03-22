@@ -129,11 +129,6 @@ class ApplicationImpl : public Application
 
     virtual void resetDBForInMemoryMode() override;
 
-  protected:
-    std::unique_ptr<LedgerManager>
-        mLedgerManager;              // allow to change that for tests
-    std::unique_ptr<Herder> mHerder; // allow to change that for tests
-
   private:
     VirtualClock& mVirtualClock;
     Config mConfig;
@@ -240,5 +235,10 @@ class ApplicationImpl : public Application
 
     void upgradeToCurrentSchemaAndMaybeRebuildLedger(bool applyBuckets,
                                                      bool forceRebuild);
+
+  protected:
+    std::unique_ptr<LedgerManager>
+        mLedgerManager;              // allow to change that for tests
+    std::unique_ptr<Herder> mHerder; // allow to change that for tests
 };
 }

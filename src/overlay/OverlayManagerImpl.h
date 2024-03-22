@@ -63,6 +63,10 @@ class OverlayManagerImpl : public OverlayManager
 
         std::vector<Peer::pointer> mPending;
         std::map<NodeID, Peer::pointer> mAuthenticated;
+        // TODO: keep dropped peers alive, just so overlay thread can still
+        // safely perform delayed shutdown, etc; when overlay thread is done and
+        // main is the only user left, release all refeences
+        std::unordered_set<Peer::pointer> mDropped;
 
         Peer::pointer byAddress(PeerBareAddress const& address) const;
         void removePeer(Peer* peer);
@@ -75,13 +79,14 @@ class OverlayManagerImpl : public OverlayManager
     PeersList mOutboundPeers;
 
     std::shared_ptr<int> mLiveInboundPeersCounter;
+    mutable std::recursive_mutex mOverlayMutex;
 
     PeersList& getPeersList(Peer* peer);
 
     PeerManager mPeerManager;
     PeerDoor mDoor;
     PeerAuth mAuth;
-    bool mShuttingDown;
+    std::atomic<bool> mShuttingDown;
 
     OverlayMetrics mOverlayMetrics;
 
