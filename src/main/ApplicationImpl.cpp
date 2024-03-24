@@ -644,7 +644,7 @@ ApplicationImpl::~ApplicationImpl()
         {
             mBucketManager->shutdown();
         }
-        // Peers continue reading and writing in the bakground, so we need to
+        // Peers continue reading and writing in the background, so we need to
         // issue a signal to start wrapping up
         if (mOverlayManager)
         {

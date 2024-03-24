@@ -429,7 +429,7 @@ Peer::connectHandler(asio::error_code const& error)
     }
     else
     {
-        CLOG_DEBUG(Overlay, "Connected to {}", toString());
+        CLOG_DEBUG(Overlay, "Async connect to {}", toString());
         connected();
         mState = CONNECTED;
         // Always send auth from main thread
@@ -769,7 +769,7 @@ Peer::getLifeTime() const
 bool
 Peer::shouldAbort() const
 {
-    return mState == CLOSING;
+    return mState == CLOSING || mOverlayManager.isShuttingDown();
 }
 
 void
@@ -777,6 +777,11 @@ Peer::recvMessage(AuthenticatedMessage&& msg)
 {
     ZoneScoped;
     releaseAssert(!threadIsMain() || !useBackgroundThread());
+
+    if (shouldAbort())
+    {
+        return;
+    }
 
     if (mState >= GOT_HELLO && msg.v0().message.type() != ERROR_MSG)
     {
@@ -827,11 +832,8 @@ Peer::recvMessage(AuthenticatedMessage&& msg)
     auto msgTracker = std::make_shared<MsgCapacityTracker>(shared_from_this(),
                                                            msg.v0().message);
 
+    // std::this_thread::sleep_for(std::chrono::milliseconds(100));
     auto f = [this, msg = msg.v0().message, tx, msgTracker]() {
-        if (this->shouldAbort())
-        {
-            return;
-        }
         this->recvMessage(msg, msgTracker, tx);
     };
 

@@ -153,6 +153,12 @@ class ApplicationImpl : public Application
     std::unique_ptr<BucketManager> mBucketManager;
     std::unique_ptr<Database> mDatabase;
     std::unique_ptr<OverlayManager> mOverlayManager;
+
+  protected:
+    std::unique_ptr<LedgerManager>
+        mLedgerManager;              // allow to change that for tests
+    std::unique_ptr<Herder> mHerder; // allow to change that for tests
+  private:
     std::unique_ptr<CatchupManager> mCatchupManager;
     std::unique_ptr<HerderPersistence> mHerderPersistence;
     std::unique_ptr<HistoryArchiveManager> mHistoryArchiveManager;
@@ -235,10 +241,5 @@ class ApplicationImpl : public Application
 
     void upgradeToCurrentSchemaAndMaybeRebuildLedger(bool applyBuckets,
                                                      bool forceRebuild);
-
-  protected:
-    std::unique_ptr<LedgerManager>
-        mLedgerManager;              // allow to change that for tests
-    std::unique_ptr<Herder> mHerder; // allow to change that for tests
 };
 }

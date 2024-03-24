@@ -65,6 +65,13 @@ TCPPeer::initiate(Application& app, PeerBareAddress const& address)
     socket->next_layer().async_connect(
         endpoint, [result](asio::error_code const& error) {
             releaseAssert(!threadIsMain() || !result->useBackgroundThread());
+
+            // We might have been dropped while waiting to connect; in this
+            // case, do not execute handler and just exit
+            if (result->shouldAbort())
+            {
+                return;
+            }
             asio::error_code ec;
             asio::error_code lingerEc;
             if (!error)
@@ -251,7 +258,6 @@ TCPPeer::shutdown()
         {
             CLOG_DEBUG(Overlay, "TCPPeer::drop shutdown socket failed: {}",
                        ec.message());
-            return;
         }
         self->getApp().postOnOverlayThread(
             [self]() {
@@ -811,7 +817,9 @@ TCPPeer::recvMessage()
                     auto self = weak.lock();
                     if (self)
                     {
-                        // TODO: this is buggy now, delay in peer drop
+                        // Queue up a drop; we may still process new messages
+                        // from this peer, but it'll be dropped as soon as main
+                        // thread gets to it
                         self->sendErrorAndDrop(
                             ERR_DATA, errorMsg,
                             Peer::DropMode::IGNORE_WRITE_QUEUE);

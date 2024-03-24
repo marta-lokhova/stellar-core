@@ -156,7 +156,6 @@ OverlayManagerImpl::PeersList::removePeer(Peer* peer)
         // thread is done processing it
         mDropped.insert(authentiatedIt->second);
         mAuthenticated.erase(authentiatedIt);
-
         mConnectionsDropped.Mark();
         return;
     }
@@ -201,7 +200,7 @@ OverlayManagerImpl::PeersList::moveToAuthenticated(Peer::pointer peer)
     mPending.erase(pendingIt);
     mAuthenticated[peer->getPeerID()] = peer;
 
-    CLOG_INFO(Overlay, "Connected to {}", peer->toString());
+    CLOG_INFO(Overlay, "Authenticated to {}", peer->toString());
 
     return true;
 }
@@ -445,7 +444,7 @@ OverlayManagerImpl::connectToImpl(PeerBareAddress const& address,
     std::lock_guard<std::recursive_mutex> lock(mOverlayMutex);
 
     assertThreadIsMain();
-    CLOG_TRACE(Overlay, "Connect to {}", address.toString());
+    CLOG_TRACE(Overlay, "Initiate connect to {}", address.toString());
     auto currentConnection = getConnectedPeer(address);
     if (!currentConnection || (forceoutbound && currentConnection->getRole() ==
                                                     Peer::REMOTE_CALLED_US))
@@ -882,12 +881,7 @@ OverlayManagerImpl::availableOutboundAuthenticatedSlots() const
 {
     std::lock_guard<std::recursive_mutex> lock(mOverlayMutex);
 
-    auto adjustedTarget =
-        mInboundPeers.mAuthenticated.size() == 0 &&
-                !mApp.getConfig()
-                     .ARTIFICIALLY_SKIP_CONNECTION_ADJUSTMENT_FOR_TESTING
-            ? OverlayManager::MIN_INBOUND_FACTOR
-            : mApp.getConfig().TARGET_PEER_CONNECTIONS;
+    auto adjustedTarget = mApp.getConfig().TARGET_PEER_CONNECTIONS;
 
     if (mOutboundPeers.mAuthenticated.size() < adjustedTarget)
     {
@@ -1358,11 +1352,13 @@ OverlayManagerImpl::shutdown()
     {
         return;
     }
-    mShuttingDown = true;
     mDoor.close();
     mFloodGate.shutdown();
     mInboundPeers.shutdown();
     mOutboundPeers.shutdown();
+
+    // TODO: this was cauing shouldAbort()
+    mShuttingDown = true;
 
     mDemandTimer.cancel();
 
