@@ -1316,6 +1316,8 @@ OverlayManager::dropAll(Database& db)
 std::set<Peer::pointer>
 OverlayManagerImpl::getPeersKnows(Hash const& h)
 {
+    std::lock_guard<std::recursive_mutex> lock(mOverlayMutex);
+
     return mFloodGate.getPeersKnows(h);
 }
 

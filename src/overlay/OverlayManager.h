@@ -213,5 +213,7 @@ class OverlayManager
     virtual ~OverlayManager()
     {
     }
+
+    virtual std::recursive_mutex& getOverlayManagerMutex() = 0;
 };
 }

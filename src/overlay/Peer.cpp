@@ -425,6 +425,9 @@ void
 Peer::connectHandler(asio::error_code const& error)
 {
     // Thread-safe
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
+
     if (error)
     {
         drop("unable to connect: " + error.message(),
@@ -1466,6 +1469,9 @@ void
 Peer::recvHello(Hello const& elo)
 {
     ZoneScoped;
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
+
     if (mState >= GOT_HELLO)
     {
         drop("received unexpected HELLO",
@@ -1616,6 +1622,9 @@ Peer::recvAuth(StellarMessage const& msg)
 {
     ZoneScoped;
     releaseAssert(threadIsMain());
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
+
     if (mState != GOT_HELLO)
     {
         sendErrorAndDrop(ERR_MISC, "out-of-order AUTH message",

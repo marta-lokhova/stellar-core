@@ -33,6 +33,7 @@ FlowControl::getOutboundQueueByteLimit() const
 
 FlowControl::FlowControl(Application& app)
     : mApp(app)
+    , mOverlayManager(app.getOverlayManager())
     , mNoOutboundCapacity(
           std::make_optional<VirtualClock::time_point>(app.getClock().now()))
 {
@@ -90,7 +91,8 @@ FlowControl::start(std::weak_ptr<Peer> peer,
                    bool enableFCBytes)
 {
     releaseAssert(threadIsMain());
-    std::lock_guard<std::mutex> guard(mCapacityMutex);
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
 
     auto peerPtr = peer.lock();
     if (!peerPtr)
@@ -107,10 +109,9 @@ FlowControl::start(std::weak_ptr<Peer> peer,
         // on mandatory , so the mutex above is not needed
         mFlowControlBytesCapacity =
             std::make_shared<FlowControlByteCapacity>(mApp, mNodeID);
-        sendSendMore(
-            mApp.getConfig().PEER_FLOOD_READING_CAPACITY,
-            mApp.getOverlayManager().getFlowControlBytesConfig().mTotal,
-            peerPtr);
+        sendSendMore(mApp.getConfig().PEER_FLOOD_READING_CAPACITY,
+                     mOverlayManager.getFlowControlBytesConfig().mTotal,
+                     peerPtr);
     }
     else
     {
@@ -128,10 +129,8 @@ FlowControl::maybeReleaseCapacityAndTriggerSend(StellarMessage const& msg)
     {
         if (mNoOutboundCapacity)
         {
-            mApp.getOverlayManager()
-                .getOverlayMetrics()
-                .mConnectionFloodThrottle.Update(mApp.getClock().now() -
-                                                 *mNoOutboundCapacity);
+            mOverlayManager.getOverlayMetrics().mConnectionFloodThrottle.Update(
+                mApp.getClock().now() - *mNoOutboundCapacity);
         }
         mNoOutboundCapacity.reset();
 
@@ -194,7 +193,7 @@ FlowControl::maybeSendNextBatch()
 
             mSendCallback(std::make_shared<StellarMessage>(msg));
             ++sent;
-            auto& om = mApp.getOverlayManager().getOverlayMetrics();
+            auto& om = mOverlayManager.getOverlayMetrics();
 
             auto const& diff = mApp.getClock().now() - front.mTimeEmplaced;
             mFlowControlCapacity->lockOutboundCapacity(msg);
@@ -290,7 +289,8 @@ bool
 FlowControl::beginMessageProcessing(StellarMessage const& msg)
 {
     ZoneScoped;
-    std::lock_guard<std::mutex> guard(mCapacityMutex);
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
 
     return mFlowControlCapacity->lockLocalCapacity(msg) &&
            (!mFlowControlBytesCapacity ||
@@ -303,6 +303,8 @@ FlowControl::endMessageProcessing(StellarMessage const& msg,
 {
     ZoneScoped;
     releaseAssert(threadIsMain());
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
 
     mFloodDataProcessed += mFlowControlCapacity->releaseLocalCapacity(msg);
     if (mFlowControlBytesCapacity)
@@ -318,7 +320,7 @@ FlowControl::endMessageProcessing(StellarMessage const& msg,
     if (mFlowControlBytesCapacity)
     {
         auto const byteBatchSize =
-            mApp.getOverlayManager().getFlowControlBytesConfig().mBatchSize;
+            mOverlayManager.getFlowControlBytesConfig().mBatchSize;
         shouldSendMore =
             shouldSendMore || mFloodDataProcessedBytes >= byteBatchSize;
     }
@@ -346,7 +348,9 @@ bool
 FlowControl::canRead() const
 {
     // Thread-safe
-    std::lock_guard<std::mutex> guard(mCapacityMutex);
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
+
     bool canReadBytes =
         !mFlowControlBytesCapacity || mFlowControlBytesCapacity->canRead();
     return canReadBytes && mFlowControlCapacity->canRead();
@@ -474,7 +478,7 @@ FlowControl::addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg)
     size_t dropped = 0;
 
     uint32_t const limit = mApp.getLedgerManager().getLastMaxTxSetSizeOps();
-    auto& om = mApp.getOverlayManager().getOverlayMetrics();
+    auto& om = mOverlayManager.getOverlayMetrics();
     if (type == TRANSACTION)
     {
         auto isOverLimit = [&](auto const& queue) {
@@ -582,7 +586,8 @@ FlowControl::getFlowControlJsonInfo(bool compact) const
 {
     releaseAssert(threadIsMain());
 
-    std::lock_guard<std::mutex> guard(mCapacityMutex);
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
 
     Json::Value res;
     if (mFlowControlCapacity->getCapacity().mTotalCapacity)

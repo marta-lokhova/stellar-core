@@ -30,8 +30,7 @@ FlowControlCapacity::ReadingCapacity
 FlowControlMessageCapacity::getCapacityLimits() const
 {
     std::lock_guard<std::recursive_mutex> guard(mCapacityMutex);
-    return {mApp.getConfig().PEER_FLOOD_READING_CAPACITY,
-            mApp.getConfig().PEER_READING_CAPACITY};
+    return {mConfig.PEER_FLOOD_READING_CAPACITY, mConfig.PEER_READING_CAPACITY};
 }
 
 void
@@ -45,7 +44,7 @@ FlowControlMessageCapacity::releaseOutboundCapacity(StellarMessage const& msg)
     if (!hasOutboundCapacity(msg) && numMessages != 0)
     {
         CLOG_DEBUG(Overlay, "Got outbound message capacity for peer {}",
-                   mApp.getConfig().toShortString(mNodeID));
+                   mConfig.toShortString(mNodeID));
     }
     mOutboundCapacity += numMessages;
 }
@@ -94,7 +93,7 @@ FlowControlByteCapacity::releaseOutboundCapacity(StellarMessage const& msg)
         (msg.sendMoreExtendedMessage().numBytes != 0))
     {
         CLOG_DEBUG(Overlay, "Got outbound byte capacity for peer {}",
-                   mApp.getConfig().toShortString(mNodeID));
+                   mConfig.toShortString(mNodeID));
     }
     mOutboundCapacity += msg.sendMoreExtendedMessage().numBytes;
 };
@@ -116,7 +115,7 @@ FlowControlByteCapacity::handleTxSizeIncrease(uint32_t increase)
 }
 
 FlowControlCapacity::FlowControlCapacity(Application& app, NodeID const& nodeID)
-    : mApp(app), mNodeID(nodeID)
+    : mConfig(app.getConfig()), mNodeID(nodeID)
 {
     releaseAssert(threadIsMain());
 }
@@ -180,7 +179,7 @@ FlowControlCapacity::lockLocalCapacity(StellarMessage const& msg)
         if (mCapacity.mFloodCapacity == 0)
         {
             CLOG_DEBUG(Overlay, "No flood capacity for peer {}",
-                       mApp.getConfig().toShortString(mNodeID));
+                       mConfig.toShortString(mNodeID));
         }
     }
 
@@ -205,7 +204,7 @@ FlowControlCapacity::releaseLocalCapacity(StellarMessage const& msg)
         if (mCapacity.mFloodCapacity == 0)
         {
             CLOG_DEBUG(Overlay, "Got flood capacity for peer {} ({})",
-                       mApp.getConfig().toShortString(mNodeID),
+                       mConfig.toShortString(mNodeID),
                        mCapacity.mFloodCapacity + resourcesFreed);
         }
         releasedFloodCapacity = resourcesFreed;

@@ -248,5 +248,11 @@ class OverlayManagerImpl : public OverlayManager
     // Returns `true` iff the overlay can accept the outbound peer at `address`.
     // Logs whenever a peer cannot be accepted.
     bool canAcceptOutboundPeer(PeerBareAddress const& address) const;
+
+    virtual std::recursive_mutex&
+    getOverlayManagerMutex() override
+    {
+        return mOverlayMutex;
+    }
 };
 }

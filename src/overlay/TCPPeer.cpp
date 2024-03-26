@@ -514,14 +514,7 @@ TCPPeer::scheduleRead()
     ZoneScoped;
     releaseAssert(!threadIsMain() || !useBackgroundThread());
 
-    if (mLastThrottle)
-    {
-        return;
-    }
-
-    releaseAssert(canRead());
-
-    if (shouldAbort())
+    if (mLastThrottle || !canRead() || shouldAbort())
     {
         return;
     }
@@ -837,6 +830,9 @@ void
 TCPPeer::drop(std::string const& reason, DropDirection dropDirection,
               DropMode dropMode)
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
+
     if (shouldAbort())
     {
         return;

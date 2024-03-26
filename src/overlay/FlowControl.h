@@ -14,6 +14,7 @@ namespace stellar
 {
 
 class Peer;
+class OverlayManager;
 
 // The FlowControl class allows core to throttle flood traffic among its
 // connections. If a connections wants to use flow control, it should maintain
@@ -53,9 +54,9 @@ class FlowControl
     NodeID mNodeID;
     std::shared_ptr<FlowControlCapacity> mFlowControlCapacity;
     std::shared_ptr<FlowControlByteCapacity> mFlowControlBytesCapacity;
-    mutable std::mutex mCapacityMutex;
 
     Application& mApp;
+    OverlayManager& mOverlayManager;
 
     // Outbound queues indexes by priority
     // Priority 0 - SCP messages
