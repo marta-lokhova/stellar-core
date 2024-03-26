@@ -169,7 +169,7 @@ bool
 OverlayManagerImpl::PeersList::moveToAuthenticated(Peer::pointer peer)
 {
     ZoneScoped;
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
 
     CLOG_TRACE(Overlay, "Moving peer {} to authenticated  state: {}",
                peer->toString(), Peer::format_as(peer->getState()));
@@ -209,7 +209,7 @@ bool
 OverlayManagerImpl::PeersList::acceptAuthenticatedPeer(Peer::pointer peer)
 {
     ZoneScoped;
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
 
     CLOG_TRACE(Overlay, "Trying to promote peer to authenticated {}",
                peer->toString());
@@ -443,7 +443,7 @@ OverlayManagerImpl::connectToImpl(PeerBareAddress const& address,
 {
     std::lock_guard<std::recursive_mutex> lock(mOverlayMutex);
 
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
     CLOG_TRACE(Overlay, "Initiate connect to {}", address.toString());
     auto currentConnection = getConnectedPeer(address);
     if (!currentConnection || (forceoutbound && currentConnection->getRole() ==
@@ -548,7 +548,7 @@ OverlayManagerImpl::triggerPeerResolution()
 {
     std::lock_guard<std::recursive_mutex> lock(mOverlayMutex);
 
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
 
     ZoneScoped;
     releaseAssert(!mResolvedPeers.valid());
@@ -713,7 +713,7 @@ void
 OverlayManagerImpl::tick()
 {
     std::lock_guard<std::recursive_mutex> lock(mOverlayMutex);
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
 
     ZoneScoped;
     CLOG_TRACE(Overlay, "OverlayManagerImpl tick");

@@ -42,7 +42,7 @@ TCPPeer::TCPPeer(Application& app, Peer::PeerRole role,
           app.getOverlayManager().getLiveInboundPeersCounter())
     , mShutdownTimer(app.getOverlayIOContext())
 {
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
     if (mRole == REMOTE_CALLED_US)
     {
         (*mLiveInboundPeersCounter)++;
@@ -52,7 +52,7 @@ TCPPeer::TCPPeer(Application& app, Peer::PeerRole role,
 TCPPeer::pointer
 TCPPeer::initiate(Application& app, PeerBareAddress const& address)
 {
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
     releaseAssert(address.getType() == PeerBareAddress::Type::IPv4);
 
     CLOG_DEBUG(Overlay, "TCPPeer:initiate to {}", address.toString());
@@ -95,7 +95,7 @@ TCPPeer::initiate(Application& app, PeerBareAddress const& address)
 TCPPeer::pointer
 TCPPeer::accept(Application& app, shared_ptr<TCPPeer::SocketType> socket)
 {
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
 
     // First check if there's enough space to accept peer
     // If not, do not even create a peer instance as to not trigger any
@@ -145,7 +145,7 @@ TCPPeer::~TCPPeer()
     {
         CLOG_INFO(Tx, "NOT MAIN ");
     }
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
     Peer::shutdown();
     if (mRole == REMOTE_CALLED_US)
     {
@@ -238,7 +238,7 @@ TCPPeer::shutdown()
 
     // leave some time before actually calling shutdown
     mShutdownTimer.expires_from_now(std::chrono::seconds(5));
-    mShutdownTimer.async_wait([self](asio::error_code timer) {
+    mShutdownTimer.async_wait([self](asio::error_code) {
         // Gracefully shut down connection: this pushes a FIN packet into
         // TCP which, if we wanted to be really polite about, we would wait
         // for an ACK from by doing repeated reads until we get a 0-read.
@@ -361,11 +361,6 @@ TCPPeer::messageSender()
                 ec, length,
                 self->mBackgroundWriteQueue.getWriteBuffers().size());
 
-            if (ec)
-            {
-                return;
-            }
-
             // Walk through a _prefix_ of the write queue
             // _corresponding_ to the write buffers we just sent.
             // While walking, record the sent-time in metrics, but
@@ -389,7 +384,10 @@ TCPPeer::messageSender()
                 self->mBackgroundWriteQueue.getWriteQueue().begin(), i);
 
             // continue processing the queue
-            self->messageSender();
+            if (!ec)
+            {
+                self->messageSender();
+            }
         });
 }
 

@@ -87,7 +87,7 @@ void
 FlowControlByteCapacity::releaseOutboundCapacity(StellarMessage const& msg)
 {
     ZoneScoped;
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
 
     releaseAssert(msg.type() == SEND_MORE_EXTENDED);
     if (!hasOutboundCapacity(msg) &&
@@ -118,7 +118,7 @@ FlowControlByteCapacity::handleTxSizeIncrease(uint32_t increase)
 FlowControlCapacity::FlowControlCapacity(Application& app, NodeID const& nodeID)
     : mApp(app), mNodeID(nodeID)
 {
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
 }
 
 void
@@ -145,7 +145,7 @@ void
 FlowControlCapacity::lockOutboundCapacity(StellarMessage const& msg)
 {
     ZoneScoped;
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
 
     if (OverlayManager::isFloodMessage(msg))
     {
@@ -219,7 +219,7 @@ bool
 FlowControlCapacity::hasOutboundCapacity(StellarMessage const& msg) const
 {
     ZoneScoped;
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
     return mOutboundCapacity >= getMsgResourceCount(msg);
 }
 

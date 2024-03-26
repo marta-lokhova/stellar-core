@@ -195,12 +195,13 @@ class Peer : public std::enable_shared_from_this<Peer>,
     {
         std::weak_ptr<Peer> mWeakPeer;
         StellarMessage mMsg;
+        bool mFinished{false};
 
       public:
         MsgCapacityTracker(std::weak_ptr<Peer> peer, StellarMessage const& msg);
-        ~MsgCapacityTracker();
         StellarMessage const& getMessage();
         std::weak_ptr<Peer> getPeer();
+        void finish();
     };
 
     // Is this peer currently throttled due to lack of capacity

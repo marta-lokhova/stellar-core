@@ -29,6 +29,7 @@
 #include "util/Logging.h"
 #include "util/ProtocolVersion.h"
 #include "util/XDROperators.h"
+#include "util/finally.h"
 
 #include "herder/HerderUtils.h"
 #include "medida/meter.h"
@@ -106,12 +107,15 @@ Peer::MsgCapacityTracker::MsgCapacityTracker(std::weak_ptr<Peer> peer,
     self->beginMessageProcessing(mMsg);
 }
 
-Peer::MsgCapacityTracker::~MsgCapacityTracker()
+void
+Peer::MsgCapacityTracker::finish()
 {
+    releaseAssert(!mFinished);
     auto self = mWeakPeer.lock();
     if (self)
     {
         self->endMessageProcessing(mMsg);
+        mFinished = true;
     }
 }
 
@@ -170,7 +174,7 @@ Peer::endMessageProcessing(StellarMessage const& msg)
         return;
     }
 
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
     releaseAssert(mFlowControl);
     mFlowControl->endMessageProcessing(msg, shared_from_this());
 
@@ -255,7 +259,7 @@ Peer::receivedBytes(size_t byteCount, bool gotFullMessage)
 void
 Peer::startRecurrentTimer()
 {
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
 
     constexpr std::chrono::seconds RECURRENT_TIMER_PERIOD(5);
 
@@ -276,7 +280,7 @@ Peer::startRecurrentTimer()
 void
 Peer::recurrentTimerExpired(asio::error_code const& error)
 {
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
 
     if (!error)
     {
@@ -383,7 +387,7 @@ Peer::getJsonInfo(bool compact) const
 void
 Peer::sendAuth()
 {
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
 
     ZoneScoped;
     StellarMessage msg;
@@ -405,7 +409,7 @@ Peer::toString()
 void
 Peer::shutdown()
 {
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
 
     if (mShuttingDown)
     {
@@ -549,8 +553,9 @@ Peer::sendErrorAndDrop(ErrorCode error, std::string const& message,
                        DropMode dropMode)
 {
     ZoneScoped;
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
     sendError(error, message);
+    // TODO: flush write queue drop mode doesn't work
     drop(message, DropDirection::WE_DROPPED_REMOTE, dropMode);
 }
 
@@ -832,7 +837,6 @@ Peer::recvMessage(AuthenticatedMessage&& msg)
     auto msgTracker = std::make_shared<MsgCapacityTracker>(shared_from_this(),
                                                            msg.v0().message);
 
-    // std::this_thread::sleep_for(std::chrono::milliseconds(100));
     auto f = [this, msg = msg.v0().message, tx, msgTracker]() {
         this->recvMessage(msg, msgTracker, tx);
     };
@@ -846,9 +850,10 @@ Peer::recvMessage(StellarMessage const& stellarMsg,
                   TransactionFrameBasePtr tx)
 {
     ZoneScoped;
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
     if (shouldAbort())
     {
+        msgTracker->finish();
         return;
     }
 
@@ -862,6 +867,7 @@ Peer::recvMessage(StellarMessage const& stellarMsg,
     case HELLO:
     case AUTH:
         Peer::recvRawMessage(stellarMsg);
+        msgTracker->finish();
         return;
     // control messages
     case GET_PEERS:
@@ -907,11 +913,16 @@ Peer::recvMessage(StellarMessage const& stellarMsg,
     {
         // For transactions, exit early during the state rebuild, as we
         // can't properly verify them
+        msgTracker->finish();
         return;
     }
 
+    // Regardless, time to clean up msgTracker
     mApp.postOnMainThread(
         [msgTracker, cat, tx]() {
+            auto cleanup =
+                gsl::finally([msgTracker]() { msgTracker->finish(); });
+
             auto self = msgTracker->getPeer().lock();
             if (!self)
             {
@@ -952,7 +963,7 @@ Peer::recvRawMessage(StellarMessage const& stellarMsg,
                      TransactionFrameBasePtr tx)
 {
     ZoneScoped;
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
 
     auto peerStr = toString();
     ZoneText(peerStr.c_str(), peerStr.size());
@@ -1604,7 +1615,7 @@ void
 Peer::recvAuth(StellarMessage const& msg)
 {
     ZoneScoped;
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
     if (mState != GOT_HELLO)
     {
         sendErrorAndDrop(ERR_MISC, "out-of-order AUTH message",

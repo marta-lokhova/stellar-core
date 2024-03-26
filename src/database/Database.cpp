@@ -469,7 +469,7 @@ soci::session&
 Database::getSession()
 {
     // global session can only be used from the main thread
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
     return mSession;
 }
 
