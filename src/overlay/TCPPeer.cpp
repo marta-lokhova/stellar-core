@@ -809,8 +809,30 @@ TCPPeer::recvMessage()
 
     if (!errorMsg.empty())
     {
-        sendErrorAndDrop(ERR_DATA, errorMsg,
-                         Peer::DropMode::IGNORE_WRITE_QUEUE);
+        if (useBackgroundThread())
+        {
+            std::weak_ptr<TCPPeer> weak(
+                std::static_pointer_cast<TCPPeer>(shared_from_this()));
+            getApp().postOnMainThread(
+                [weak, errorMsg]() {
+                    auto self = weak.lock();
+                    if (self)
+                    {
+                        // Queue up a drop; we may still process new messages
+                        // from this peer, but it'll be dropped as soon as main
+                        // thread gets to it
+                        self->sendErrorAndDrop(
+                            ERR_DATA, errorMsg,
+                            Peer::DropMode::IGNORE_WRITE_QUEUE);
+                    }
+                },
+                ACTION_QUEUE_NAME);
+        }
+        else
+        {
+            sendErrorAndDrop(ERR_DATA, errorMsg,
+                             Peer::DropMode::IGNORE_WRITE_QUEUE);
+        }
     }
 }
 

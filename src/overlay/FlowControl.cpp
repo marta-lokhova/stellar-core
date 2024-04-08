@@ -22,6 +22,8 @@ constexpr std::chrono::seconds const OUTBOUND_QUEUE_TIMEOUT =
 size_t
 FlowControl::getOutboundQueueByteLimit() const
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
 #ifdef BUILD_TESTS
     if (mOutboundQueueLimit)
     {
@@ -77,7 +79,7 @@ FlowControl::sendSendMore(uint32_t numMessages, uint32_t numBytes,
 bool
 FlowControl::hasOutboundCapacity(StellarMessage const& msg) const
 {
-    releaseAssert(threadIsMain());
+    releaseAssert(!threadIsMain());
 
     releaseAssert(mFlowControlCapacity);
     return mFlowControlCapacity->hasOutboundCapacity(msg) &&
@@ -149,7 +151,20 @@ FlowControl::maybeReleaseCapacityAndTriggerSend(StellarMessage const& msg)
 
         // SEND_MORE means we can free some capacity, and dump the next batch of
         // messages onto the writing queue
-        maybeSendNextBatch();
+        if (mApp.getConfig().EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING)
+        {
+            mApp.postOnOverlayThread(
+                [this]() {
+                    std::lock_guard<std::recursive_mutex> guard(
+                        mOverlayManager.getOverlayManagerMutex());
+                    this->maybeSendNextBatch();
+                },
+                "FlowControl::maybeSendNextBatch");
+        }
+        else
+        {
+            maybeSendNextBatch();
+        }
     }
 }
 
@@ -157,7 +172,10 @@ void
 FlowControl::maybeSendNextBatch()
 {
     ZoneScoped;
-    releaseAssert(threadIsMain());
+    releaseAssert(!threadIsMain());
+
+    std::lock_guard<std::recursive_mutex> guard(
+            mOverlayManager.getOverlayManagerMutex());
 
     if (!mSendCallback)
     {
@@ -260,7 +278,20 @@ FlowControl::maybeSendMessage(std::shared_ptr<StellarMessage const> msg)
     if (OverlayManager::isFloodMessage(*msg))
     {
         addMsgAndMaybeTrimQueue(msg);
-        maybeSendNextBatch();
+        if (mApp.getConfig().EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING)
+        {
+            mApp.postOnOverlayThread(
+                [this, msg]() {
+                    std::lock_guard<std::recursive_mutex> guard(
+                        mOverlayManager.getOverlayManagerMutex());
+                    maybeSendNextBatch();
+                },
+                "FlowControl::maybeSendMessage");
+        }
+        else
+        {
+            maybeSendNextBatch();
+        }
         return true;
     }
     return false;
@@ -271,6 +302,8 @@ FlowControl::handleTxSizeIncrease(uint32_t increase, std::shared_ptr<Peer> peer)
 {
     ZoneScoped;
     releaseAssert(threadIsMain());
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
     if (mFlowControlBytesCapacity)
     {
         releaseAssert(increase > 0);
@@ -415,6 +448,8 @@ FlowControl::addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg)
 {
     ZoneScoped;
     releaseAssert(threadIsMain());
+    std::lock_guard<std::recursive_mutex> guard(
+            mOverlayManager.getOverlayManagerMutex());
     releaseAssert(msg);
     auto type = msg->type();
     size_t msgQInd = 0;
