@@ -33,6 +33,7 @@ FlowControl::getOutboundQueueByteLimit() const
 
 FlowControl::FlowControl(Application& app)
     : mApp(app)
+    , mOverlayMetrics(app.getOverlayManager().getOverlayMetrics())
     , mOverlayManager(app.getOverlayManager())
     , mNoOutboundCapacity(
           std::make_optional<VirtualClock::time_point>(app.getClock().now()))
@@ -91,8 +92,6 @@ FlowControl::start(std::weak_ptr<Peer> peer,
                    bool enableFCBytes)
 {
     releaseAssert(threadIsMain());
-    std::lock_guard<std::recursive_mutex> guard(
-        mOverlayManager.getOverlayManagerMutex());
 
     auto peerPtr = peer.lock();
     if (!peerPtr)
@@ -105,8 +104,6 @@ FlowControl::start(std::weak_ptr<Peer> peer,
 
     if (enableFCBytes)
     {
-        // TODO: this problem will go away once we enable flow control in bytes
-        // on mandatory , so the mutex above is not needed
         mFlowControlBytesCapacity =
             std::make_shared<FlowControlByteCapacity>(mApp, mNodeID);
         sendSendMore(mApp.getConfig().PEER_FLOOD_READING_CAPACITY,
@@ -289,8 +286,6 @@ bool
 FlowControl::beginMessageProcessing(StellarMessage const& msg)
 {
     ZoneScoped;
-    std::lock_guard<std::recursive_mutex> guard(
-        mOverlayManager.getOverlayManagerMutex());
 
     return mFlowControlCapacity->lockLocalCapacity(msg) &&
            (!mFlowControlBytesCapacity ||
@@ -303,8 +298,6 @@ FlowControl::endMessageProcessing(StellarMessage const& msg,
 {
     ZoneScoped;
     releaseAssert(threadIsMain());
-    std::lock_guard<std::recursive_mutex> guard(
-        mOverlayManager.getOverlayManagerMutex());
 
     mFloodDataProcessed += mFlowControlCapacity->releaseLocalCapacity(msg);
     if (mFlowControlBytesCapacity)
@@ -347,10 +340,6 @@ FlowControl::endMessageProcessing(StellarMessage const& msg,
 bool
 FlowControl::canRead() const
 {
-    // Thread-safe
-    std::lock_guard<std::recursive_mutex> guard(
-        mOverlayManager.getOverlayManagerMutex());
-
     bool canReadBytes =
         !mFlowControlBytesCapacity || mFlowControlBytesCapacity->canRead();
     return canReadBytes && mFlowControlCapacity->canRead();
@@ -585,9 +574,6 @@ Json::Value
 FlowControl::getFlowControlJsonInfo(bool compact) const
 {
     releaseAssert(threadIsMain());
-
-    std::lock_guard<std::recursive_mutex> guard(
-        mOverlayManager.getOverlayManagerMutex());
 
     Json::Value res;
     if (mFlowControlCapacity->getCapacity().mTotalCapacity)

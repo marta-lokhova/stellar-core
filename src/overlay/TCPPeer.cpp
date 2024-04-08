@@ -259,6 +259,8 @@ TCPPeer::shutdown()
             CLOG_DEBUG(Overlay, "TCPPeer::drop shutdown socket failed: {}",
                        ec.message());
         }
+
+        // asio::post does not need to guarantee sequential execution.
         self->getApp().postOnOverlayThread(
             [self]() {
                 // Close fd associated with socket. Socket is already shut
@@ -344,6 +346,7 @@ TCPPeer::messageSender()
         [weak, expected_length](asio::error_code const& ec,
                                 std::size_t length) {
             auto self = weak.lock();
+
             if (!self)
             {
                 return;
@@ -411,6 +414,8 @@ TCPPeer::writeHandler(asio::error_code const& error,
                       size_t messages_transferred)
 {
     ZoneScoped;
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
     releaseAssert(!threadIsMain() || !useBackgroundThread());
     mLastWrite = mApp.getClock().now();
 
@@ -513,8 +518,9 @@ TCPPeer::scheduleRead()
     // this will be throttled to try to balance input rates across peers.
     ZoneScoped;
     releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(canRead());
 
-    if (mLastThrottle || !canRead() || shouldAbort())
+    if (shouldAbort())
     {
         return;
     }
@@ -604,6 +610,8 @@ TCPPeer::startRead()
                 recvMessage();
                 if (!canRead())
                 {
+                    std::lock_guard<std::recursive_mutex> guard(
+                        mOverlayManager.getOverlayManagerMutex());
                     // Break and wait until more capacity frees up
                     // When it does, read will get rescheduled automatically
                     CLOG_DEBUG(Overlay, "Throttle reading from peer {}!",
@@ -740,6 +748,8 @@ TCPPeer::readBodyHandler(asio::error_code const& error,
         // the per-peer scheduler queue here, to balance input across peers.
         if (!canRead())
         {
+            std::lock_guard<std::recursive_mutex> guard(
+                mOverlayManager.getOverlayManagerMutex());
             // No more capacity after processing this message
             CLOG_DEBUG(Overlay,
                        "TCPPeer::readBodyHandler: throttle reading from {}",
@@ -799,30 +809,8 @@ TCPPeer::recvMessage()
 
     if (!errorMsg.empty())
     {
-        if (useBackgroundThread())
-        {
-            std::weak_ptr<TCPPeer> weak(
-                std::static_pointer_cast<TCPPeer>(shared_from_this()));
-            getApp().postOnMainThread(
-                [weak, errorMsg]() {
-                    auto self = weak.lock();
-                    if (self)
-                    {
-                        // Queue up a drop; we may still process new messages
-                        // from this peer, but it'll be dropped as soon as main
-                        // thread gets to it
-                        self->sendErrorAndDrop(
-                            ERR_DATA, errorMsg,
-                            Peer::DropMode::IGNORE_WRITE_QUEUE);
-                    }
-                },
-                ACTION_QUEUE_NAME);
-        }
-        else
-        {
-            sendErrorAndDrop(ERR_DATA, errorMsg,
-                             Peer::DropMode::IGNORE_WRITE_QUEUE);
-        }
+        sendErrorAndDrop(ERR_DATA, errorMsg,
+                         Peer::DropMode::IGNORE_WRITE_QUEUE);
     }
 }
 

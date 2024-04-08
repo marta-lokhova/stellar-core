@@ -86,12 +86,16 @@ Peer::Peer(Application& app, PeerRole role)
 bool
 Peer::peerKnowsHash(Hash const& hash)
 {
+    releaseAssert(threadIsMain());
+
     return mAdvertHistory.exists(hash);
 }
 
 void
 Peer::rememberHash(Hash const& hash, uint32_t ledgerSeq)
 {
+    releaseAssert(threadIsMain());
+
     mAdvertHistory.put(hash, ledgerSeq);
 }
 
@@ -110,12 +114,10 @@ Peer::MsgCapacityTracker::MsgCapacityTracker(std::weak_ptr<Peer> peer,
 void
 Peer::MsgCapacityTracker::finish()
 {
-    releaseAssert(!mFinished);
     auto self = mWeakPeer.lock();
     if (self)
     {
         self->endMessageProcessing(mMsg);
-        mFinished = true;
     }
 }
 
@@ -156,6 +158,9 @@ Peer::sendHello()
 void
 Peer::beginMessageProcessing(StellarMessage const& msg)
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
+
     releaseAssert(mFlowControl);
     auto success = mFlowControl->beginMessageProcessing(msg);
     if (!success)
@@ -169,6 +174,9 @@ Peer::beginMessageProcessing(StellarMessage const& msg)
 void
 Peer::endMessageProcessing(StellarMessage const& msg)
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
+
     if (shouldAbort())
     {
         return;
@@ -211,6 +219,9 @@ Peer::endMessageProcessing(StellarMessage const& msg)
 AuthCert
 Peer::getAuthCert()
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
+
     return mApp.getOverlayManager().getPeerAuth().getAuthCert();
 }
 
@@ -223,6 +234,8 @@ Peer::getOverlayMetrics()
 std::chrono::seconds
 Peer::getIOTimeout() const
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
     if (isAuthenticated())
     {
         // Normally willing to wait 30s to hear anything
@@ -241,6 +254,8 @@ Peer::getIOTimeout() const
 void
 Peer::receivedBytes(size_t byteCount, bool gotFullMessage)
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
     if (shouldAbort())
     {
         return;
@@ -259,6 +274,8 @@ Peer::receivedBytes(size_t byteCount, bool gotFullMessage)
 void
 Peer::startRecurrentTimer()
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
     releaseAssert(threadIsMain());
 
     constexpr std::chrono::seconds RECURRENT_TIMER_PERIOD(5);
@@ -280,6 +297,8 @@ Peer::startRecurrentTimer()
 void
 Peer::recurrentTimerExpired(asio::error_code const& error)
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
     releaseAssert(threadIsMain());
 
     if (!error)
@@ -329,6 +348,8 @@ Peer::startExecutionDelayedTimer(
 Json::Value
 Peer::getJsonInfo(bool compact) const
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
     Json::Value res;
     res["address"] = mAddress.toString();
     res["elapsed"] = (int)getLifeTime().count();
@@ -403,6 +424,8 @@ Peer::sendAuth()
 std::string const&
 Peer::toString()
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
     return mAddress.toString();
 }
 
@@ -731,9 +754,9 @@ Peer::sendAuthenticatedMessage(std::shared_ptr<StellarMessage const> msg)
             {
                 ZoneNamedN(hmacZone, "message HMAC", true);
                 amsg.v0().sequence = self->mSendMacSeq;
-                amsg.v0().mac =
-                    hmacSha256(self->mSendMacKey,
-                               xdr::xdr_to_opaque(self->mSendMacSeq, *msg));
+                amsg.v0().mac = hmacSha256(
+                    self->mSendMacKey,
+                    xdr::xdr_to_opaque(self->mSendMacSeq.load(), *msg));
                 self->mSendMacSeq++;
             }
             xdr::msg_ptr xdrBytes;
@@ -745,7 +768,9 @@ Peer::sendAuthenticatedMessage(std::shared_ptr<StellarMessage const> msg)
         }
     };
 
-    if (useBackgroundThread())
+    // If we're already on the background thread (i.e. via flow control), move
+    // msg to the queue right away
+    if (useBackgroundThread() && threadIsMain())
     {
         mApp.postOnOverlayThread(cb, "sendAuthenticatedMessage");
     }
@@ -791,7 +816,14 @@ Peer::recvMessage(AuthenticatedMessage&& msg)
         return;
     }
 
-    if (mState >= GOT_HELLO && msg.v0().message.type() != ERROR_MSG)
+    bool cond = false;
+    {
+        std::lock_guard<std::recursive_mutex> guard(
+            mOverlayManager.getOverlayManagerMutex());
+        cond = mState >= GOT_HELLO && msg.v0().message.type() != ERROR_MSG;
+    }
+
+    if (cond)
     {
         if (msg.v0().sequence != mRecvMacSeq)
         {
@@ -852,8 +884,11 @@ Peer::recvMessage(StellarMessage const& stellarMsg,
                   std::shared_ptr<MsgCapacityTracker> msgTracker,
                   TransactionFrameBasePtr tx)
 {
+    // TODO: careful with mutex here, as to not block main thread for too long
     ZoneScoped;
     releaseAssert(threadIsMain());
+    // std::lock_guard<std::recursive_mutex> guard(
+    //     mOverlayManager.getOverlayManagerMutex());
     if (shouldAbort())
     {
         msgTracker->finish();
@@ -957,6 +992,8 @@ Peer::recvMessage(StellarMessage const& stellarMsg,
 void
 Peer::recvSendMore(StellarMessage const& msg)
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
     releaseAssert(mFlowControl);
     mFlowControl->maybeReleaseCapacityAndTriggerSend(msg);
 }
@@ -968,28 +1005,34 @@ Peer::recvRawMessage(StellarMessage const& stellarMsg,
     ZoneScoped;
     releaseAssert(threadIsMain());
 
-    auto peerStr = toString();
-    ZoneText(peerStr.c_str(), peerStr.size());
-
-    if (shouldAbort())
     {
-        return;
-    }
+        std::lock_guard<std::recursive_mutex> guard(
+            mOverlayManager.getOverlayManagerMutex());
+        auto peerStr = toString();
+        ZoneText(peerStr.c_str(), peerStr.size());
 
-    if (!isAuthenticated() && (stellarMsg.type() != HELLO) &&
-        (stellarMsg.type() != AUTH) && (stellarMsg.type() != ERROR_MSG))
-    {
-        drop(fmt::format(FMT_STRING("received {} before completed handshake"),
-                         stellarMsg.type()),
-             Peer::DropDirection::WE_DROPPED_REMOTE,
-             Peer::DropMode::IGNORE_WRITE_QUEUE);
-        return;
-    }
+        if (shouldAbort())
+        {
+            return;
+        }
 
-    releaseAssert(isAuthenticated() || stellarMsg.type() == HELLO ||
-                  stellarMsg.type() == AUTH || stellarMsg.type() == ERROR_MSG);
-    mApp.getOverlayManager().recordMessageMetric(stellarMsg,
-                                                 shared_from_this());
+        if (!isAuthenticated() && (stellarMsg.type() != HELLO) &&
+            (stellarMsg.type() != AUTH) && (stellarMsg.type() != ERROR_MSG))
+        {
+            drop(fmt::format(
+                     FMT_STRING("received {} before completed handshake"),
+                     stellarMsg.type()),
+                 Peer::DropDirection::WE_DROPPED_REMOTE,
+                 Peer::DropMode::IGNORE_WRITE_QUEUE);
+            return;
+        }
+
+        releaseAssert(isAuthenticated() || stellarMsg.type() == HELLO ||
+                      stellarMsg.type() == AUTH ||
+                      stellarMsg.type() == ERROR_MSG);
+        mApp.getOverlayManager().recordMessageMetric(stellarMsg,
+                                                     shared_from_this());
+    }
 
     switch (stellarMsg.type())
     {
@@ -1107,6 +1150,8 @@ Peer::recvRawMessage(StellarMessage const& stellarMsg,
     case SEND_MORE:
     case SEND_MORE_EXTENDED:
     {
+        std::lock_guard<std::recursive_mutex> guard(
+            mOverlayManager.getOverlayManagerMutex());
         std::string errorMsg;
         releaseAssert(mFlowControl);
         if (!mFlowControl->isSendMoreValid(stellarMsg, errorMsg))
@@ -1266,6 +1311,8 @@ Peer::pingIDfromTimePoint(VirtualClock::time_point const& tp)
 void
 Peer::pingPeer()
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
     if (isAuthenticated() && mPingSentTime == PING_NOT_SENT)
     {
         mPingSentTime = mApp.getClock().now();
@@ -1301,6 +1348,8 @@ Peer::getPing() const
 bool
 Peer::canRead() const
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
     releaseAssert(mFlowControl);
     return mFlowControl->canRead();
 }
@@ -1452,6 +1501,7 @@ Peer::updatePeerRecordAfterEcho()
 void
 Peer::updatePeerRecordAfterAuthentication()
 {
+    releaseAssert(threadIsMain());
     releaseAssert(!getAddress().isEmpty());
 
     if (mRole == WE_CALLED_REMOTE)
@@ -1469,6 +1519,7 @@ void
 Peer::recvHello(Hello const& elo)
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
     std::lock_guard<std::recursive_mutex> guard(
         mOverlayManager.getOverlayManagerMutex());
 
@@ -1689,6 +1740,8 @@ void
 Peer::recvGetPeers(StellarMessage const& msg)
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
+
     sendPeers();
 }
 
@@ -1696,6 +1749,8 @@ void
 Peer::recvPeers(StellarMessage const& msg)
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
+
     for (auto const& peer : msg.peers())
     {
         if (peer.port == 0 || peer.port > UINT16_MAX)
@@ -1743,6 +1798,8 @@ void
 Peer::recvSurveyRequestMessage(StellarMessage const& msg)
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
+
     mApp.getOverlayManager().getSurveyManager().relayOrProcessRequest(
         msg, shared_from_this());
 }
@@ -1751,6 +1808,8 @@ void
 Peer::recvSurveyResponseMessage(StellarMessage const& msg)
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
+
     mApp.getOverlayManager().getSurveyManager().relayOrProcessResponse(
         msg, shared_from_this());
 }
@@ -1758,6 +1817,8 @@ Peer::recvSurveyResponseMessage(StellarMessage const& msg)
 void
 Peer::recvFloodAdvert(StellarMessage const& msg)
 {
+    releaseAssert(threadIsMain());
+
     auto seq = mApp.getHerder().trackingConsensusLedgerIndex();
     for (auto const& hash : msg.floodAdvert().txHashes)
     {
@@ -1769,6 +1830,8 @@ Peer::recvFloodAdvert(StellarMessage const& msg)
 void
 Peer::clearBelow(uint32_t ledgerSeq)
 {
+    releaseAssert(threadIsMain());
+
     mAdvertHistory.erase_if(
         [&](uint32_t const& seq) { return seq < ledgerSeq; });
 }
@@ -1776,6 +1839,8 @@ Peer::clearBelow(uint32_t ledgerSeq)
 void
 Peer::recvFloodDemand(StellarMessage const& msg)
 {
+    releaseAssert(threadIsMain());
+
     fulfillDemand(msg.floodDemand());
 }
 
@@ -1819,6 +1884,8 @@ Peer::PeerMetrics::PeerMetrics(VirtualClock::time_point connectedTime)
 void
 Peer::queueTxHashToAdvertise(Hash const& txHash)
 {
+    releaseAssert(threadIsMain());
+
     if (mTxHashesToAdvertise.empty())
     {
         startAdvertTimer();
@@ -1847,6 +1914,7 @@ Peer::queueTxHashToAdvertise(Hash const& txHash)
 void
 Peer::startAdvertTimer()
 {
+    releaseAssert(threadIsMain());
     if (shouldAbort())
     {
         return;
@@ -1863,6 +1931,7 @@ Peer::startAdvertTimer()
 void
 Peer::sendTxDemand(TxDemandVector&& demands)
 {
+    releaseAssert(threadIsMain());
     if (demands.size() > 0)
     {
         auto msg = std::make_shared<StellarMessage>();
@@ -1887,6 +1956,7 @@ Peer::sendTxDemand(TxDemandVector&& demands)
 void
 Peer::flushAdvert()
 {
+    releaseAssert(threadIsMain());
     if (mTxHashesToAdvertise.size() > 0)
     {
         StellarMessage adv;
@@ -1912,6 +1982,8 @@ void
 Peer::fulfillDemand(FloodDemand const& dmd)
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
+
     auto& herder = mApp.getHerder();
 
     for (auto const& h : dmd.txHashes)
@@ -1952,6 +2024,8 @@ Peer::fulfillDemand(FloodDemand const& dmd)
 void
 Peer::handleMaxTxSizeIncrease(uint32_t increase)
 {
+    std::lock_guard<std::recursive_mutex> guard(
+        mOverlayManager.getOverlayManagerMutex());
     if (increase > 0)
     {
         mFlowControl->handleTxSizeIncrease(increase, shared_from_this());

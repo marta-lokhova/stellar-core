@@ -28,7 +28,6 @@ class FlowControlCapacity
 
     // Capacity of local node configured by the operator
     ReadingCapacity mCapacity;
-    mutable std::recursive_mutex mCapacityMutex;
 
     // Capacity of a connected peer
     uint64_t mOutboundCapacity{0};

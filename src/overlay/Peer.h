@@ -65,7 +65,6 @@ class FlowControl;
 class Peer : public std::enable_shared_from_this<Peer>,
              public NonMovableOrCopyable
 {
-
   public:
     static constexpr std::chrono::seconds PEER_SEND_MODE_IDLE_TIMEOUT =
         std::chrono::seconds(60);
@@ -183,7 +182,7 @@ class Peer : public std::enable_shared_from_this<Peer>,
     OverlayManager& mOverlayManager;
     Config const mConfig;
 
-    PeerRole mRole;
+    std::atomic<PeerRole> mRole;
     std::atomic<PeerState> mState;
     NodeID mPeerID;
     uint256 mSendNonce;
@@ -195,7 +194,6 @@ class Peer : public std::enable_shared_from_this<Peer>,
     {
         std::weak_ptr<Peer> mWeakPeer;
         StellarMessage mMsg;
-        bool mFinished{false};
 
       public:
         MsgCapacityTracker(std::weak_ptr<Peer> peer, StellarMessage const& msg);
@@ -218,8 +216,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
 
     HmacSha256Key mSendMacKey;
     HmacSha256Key mRecvMacKey;
-    uint64_t mSendMacSeq{0};
-    uint64_t mRecvMacSeq{0};
+    std::atomic<uint64_t> mSendMacSeq{0};
+    std::atomic<uint64_t> mRecvMacSeq{0};
 
     std::string mRemoteVersion;
     uint32_t mRemoteOverlayMinVersion;

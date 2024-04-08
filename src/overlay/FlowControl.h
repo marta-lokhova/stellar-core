@@ -7,6 +7,7 @@
 #include "lib/json/json.h"
 #include "medida/timer.h"
 #include "overlay/FlowControlCapacity.h"
+#include "overlay/OverlayMetrics.h"
 #include "util/Timer.h"
 #include <optional>
 
@@ -56,6 +57,7 @@ class FlowControl
     std::shared_ptr<FlowControlByteCapacity> mFlowControlBytesCapacity;
 
     Application& mApp;
+    OverlayMetrics& mOverlayMetrics;
     OverlayManager& mOverlayManager;
 
     // Outbound queues indexes by priority
