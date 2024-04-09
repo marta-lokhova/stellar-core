@@ -208,7 +208,7 @@ TCPPeer::sendMessage(xdr::msg_ptr&& xdrBytes)
     }
 
     TimestampedMessage msg;
-    msg.mEnqueuedTime = mApp.getClock().now();
+    msg.mEnqueuedTime = std::chrono::steady_clock::now();
     msg.mMessage = std::move(xdrBytes);
     mBackgroundWriteQueue.getWriteQueue().emplace_back(std::move(msg));
 
@@ -314,7 +314,7 @@ TCPPeer::messageSender()
     // mBackgroundWriteQueue.getWriteQueue() (though it may have grown a bit in
     // the meantime -- we remove only a prefix).
     releaseAssert(mBackgroundWriteQueue.getWriteBuffers().empty());
-    auto now = mApp.getClock().now();
+    auto now = std::chrono::steady_clock::now();
     size_t expected_length = 0;
     size_t maxQueueSize = mConfig.MAX_BATCH_WRITE_COUNT;
     releaseAssert(maxQueueSize > 0);
@@ -370,7 +370,7 @@ TCPPeer::messageSender()
             // also advance iterator 'i' so we wind up with an
             // iterator range to erase from the front of the write
             // queue.
-            auto now = self->mApp.getClock().now();
+            auto now = std::chrono::steady_clock::now();
             auto i = self->mBackgroundWriteQueue.getWriteQueue().begin();
             while (!self->mBackgroundWriteQueue.getWriteBuffers().empty())
             {
@@ -417,7 +417,7 @@ TCPPeer::writeHandler(asio::error_code const& error,
     std::lock_guard<std::recursive_mutex> guard(
         mOverlayManager.getOverlayManagerMutex());
     releaseAssert(!threadIsMain() || !useBackgroundThread());
-    mLastWrite = mApp.getClock().now();
+    mLastWrite = std::chrono::steady_clock::now();
 
     if (error)
     {
@@ -616,7 +616,7 @@ TCPPeer::startRead()
                     // When it does, read will get rescheduled automatically
                     CLOG_DEBUG(Overlay, "Throttle reading from peer {}!",
                                mConfig.toShortString(getPeerID()));
-                    mLastThrottle = mApp.getClock().now();
+                    mLastThrottle = std::chrono::steady_clock::now();
                     return;
                 }
             }
@@ -754,7 +754,7 @@ TCPPeer::readBodyHandler(asio::error_code const& error,
             CLOG_DEBUG(Overlay,
                        "TCPPeer::readBodyHandler: throttle reading from {}",
                        mConfig.toShortString(getPeerID()));
-            mLastThrottle = mApp.getClock().now();
+            mLastThrottle = std::chrono::steady_clock::now();
             return;
         }
 

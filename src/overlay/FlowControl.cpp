@@ -175,7 +175,7 @@ FlowControl::maybeSendNextBatch()
     releaseAssert(!threadIsMain());
 
     std::lock_guard<std::recursive_mutex> guard(
-            mOverlayManager.getOverlayManagerMutex());
+        mOverlayManager.getOverlayManagerMutex());
 
     if (!mSendCallback)
     {
@@ -449,7 +449,7 @@ FlowControl::addMsgAndMaybeTrimQueue(std::shared_ptr<StellarMessage const> msg)
     ZoneScoped;
     releaseAssert(threadIsMain());
     std::lock_guard<std::recursive_mutex> guard(
-            mOverlayManager.getOverlayManagerMutex());
+        mOverlayManager.getOverlayManagerMutex());
     releaseAssert(msg);
     auto type = msg->type();
     size_t msgQInd = 0;

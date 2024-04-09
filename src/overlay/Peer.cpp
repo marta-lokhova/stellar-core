@@ -862,9 +862,8 @@ Peer::recvMessage(AuthenticatedMessage&& msg)
     {
         tx = TransactionFrameBase::makeTransactionFromWire(
             mApp.getNetworkID(), msg.v0().message.transaction());
-        CLOG_TRACE(Overlay, "recvMessage: transaction: {} {}",
-                   hexAbbrev(tx->getFullHash()),
-                   hexAbbrev(tx->getContentsHash()));
+        auto fullHash = tx->getFullHash();
+        auto contentHash = tx->getContentsHash();
     }
 
     // Start tracking capacity here, so read throttling is applied appropriately
