@@ -67,6 +67,9 @@ class LoopbackPeer : public Peer
     }
     LoopbackPeer(Application& app, PeerRole role);
 
+    void recvMessage(std::shared_ptr<MsgCapacityTracker> msgTracker,
+                     TransactionFrameBasePtr tx = nullptr);
+
     static std::pair<std::shared_ptr<LoopbackPeer>,
                      std::shared_ptr<LoopbackPeer>>
     initiate(Application& app, Application& otherApp);
@@ -113,6 +116,12 @@ class LoopbackPeer : public Peer
 
     void clearInAndOutQueues();
 
+    virtual bool
+    useBackgroundThread() const override
+    {
+        return false;
+    }
+
     size_t
     getTxQueueByteCount() const
     {
@@ -141,6 +150,13 @@ class LoopbackPeer : public Peer
 
     std::string getIP() const;
 
+    Config const&
+    getConfig() const
+    {
+        return mConfig;
+    }
+
+    using Peer::MsgCapacityTracker;
     using Peer::recvMessage;
     using Peer::sendAuth;
     using Peer::sendAuthenticatedMessage;

@@ -49,8 +49,8 @@ TEST_CASE("TCPPeer can communicate", "[overlay][acceptance]")
 
     REQUIRE(p0);
     REQUIRE(p1);
-    REQUIRE(p0->isAuthenticated());
-    REQUIRE(p1->isAuthenticated());
+    REQUIRE(p0->isAuthenticatedForTesting());
+    REQUIRE(p1->isAuthenticatedForTesting());
     s->stopAllNodes();
 }
 }

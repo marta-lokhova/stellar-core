@@ -34,7 +34,8 @@ class FlowControlStub : public FlowControl
   public:
     int mSent = 0;
 
-    FlowControlStub(Application& app) : FlowControl(app)
+    FlowControlStub(OverlayAppConnector& connector)
+        : FlowControl(connector, false)
     {
     }
     virtual ~FlowControlStub() = default;
@@ -57,7 +58,7 @@ class PeerStub : public Peer
         mPeerID = SecretKey::pseudoRandomForTesting().getPublicKey();
         mState = GOT_AUTH;
         mAddress = address;
-        mFlowControl = std::make_shared<FlowControlStub>(app);
+        mFlowControl = std::make_shared<FlowControlStub>(mAppConnector);
     }
     virtual void
     drop(std::string const&, DropDirection, DropMode) override

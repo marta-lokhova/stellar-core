@@ -26,6 +26,9 @@ using namespace std;
 
 LoopbackPeer::LoopbackPeer(Application& app, PeerRole role) : Peer(app, role)
 {
+    // TODO: LoopbackPeer isn't thread-safe yet
+    mFlowControl =
+        std::make_shared<FlowControl>(mAppConnector, useBackgroundThread());
 }
 
 std::string
@@ -47,10 +50,10 @@ LoopbackPeer::initiate(Application& app, Application& otherApp)
     otherPeer->mRemote = peer;
     otherPeer->mState = Peer::CONNECTED;
 
-    peer->mAddress = PeerBareAddress(otherPeer->getIP(),
-                                     otherPeer->getApp().getConfig().PEER_PORT);
+    peer->mAddress =
+        PeerBareAddress(otherPeer->getIP(), otherPeer->mConfig.PEER_PORT);
     otherPeer->mAddress =
-        PeerBareAddress{peer->getIP(), peer->getApp().getConfig().PEER_PORT};
+        PeerBareAddress{peer->getIP(), peer->mConfig.PEER_PORT};
 
     app.getOverlayManager().addOutboundConnection(peer);
     otherApp.getOverlayManager().maybeAddInboundConnection(otherPeer);
@@ -65,7 +68,7 @@ LoopbackPeer::initiate(Application& app, Application& otherApp)
     otherPeer->startRecurrentTimer();
 
     std::weak_ptr<LoopbackPeer> init = peer;
-    peer->getApp().postOnMainThread(
+    peer->mAppConnector.postOnMainThread(
         [init]() {
             auto inC = init.lock();
             if (inC)
@@ -113,7 +116,7 @@ LoopbackPeer::sendMessage(xdr::msg_ptr&& msg)
 
     TimestampedMessage tsm;
     tsm.mMessage = std::move(msg);
-    tsm.mEnqueuedTime = mApp.getClock().now();
+    tsm.mEnqueuedTime = mAppConnector.now();
     mOutQueue.emplace_back(std::move(tsm));
     // Possibly flush some queued messages if queue's full.
     while (mOutQueue.size() > mMaxQueueDepth && !mCorked)
@@ -170,12 +173,12 @@ LoopbackPeer::drop(std::string const& reason, DropDirection direction, DropMode)
     mDropReason = reason;
     mState = CLOSING;
     Peer::shutdown();
-    getApp().getOverlayManager().removePeer(this);
+    mAppConnector.getOverlayManager().removePeer(this);
 
     auto remote = mRemote.lock();
     if (remote)
     {
-        remote->getApp().postOnMainThread(
+        remote->mAppConnector.postOnMainThread(
             [remW = mRemote, reason, direction]() {
                 auto remS = remW.lock();
                 if (remS)
@@ -231,7 +234,7 @@ LoopbackPeer::processInQueue()
 {
     if (!canRead())
     {
-        mLastThrottle = mApp.getClock().now();
+        mFlowControl->throttleRead();
         return;
     }
 
@@ -245,8 +248,8 @@ LoopbackPeer::processInQueue()
         if (!mInQueue.empty())
         {
             auto self = static_pointer_cast<LoopbackPeer>(shared_from_this());
-            mApp.postOnMainThread([self]() { self->processInQueue(); },
-                                  "LoopbackPeer: processInQueue");
+            mAppConnector.postOnMainThread([self]() { self->processInQueue(); },
+                                           "LoopbackPeer: processInQueue");
         }
     }
 }
@@ -255,7 +258,7 @@ void
 LoopbackPeer::recvMessage(xdr::msg_ptr const& msg)
 {
     ZoneScoped;
-    if (shouldAbort())
+    if (shouldAbortForTesting())
     {
         return;
     }
@@ -268,16 +271,27 @@ LoopbackPeer::recvMessage(xdr::msg_ptr const& msg)
             ZoneNamedN(xdrZone, "XDR deserialize", true);
             xdr::xdr_from_msg(msg, am);
         }
-        recvMessage(am);
+        recvAuthenticatedMessage(std::move(am));
     }
     catch (xdr::xdr_runtime_error& e)
     {
         CLOG_ERROR(Overlay, "received corrupt xdr::msg_ptr {}", e.what());
-        drop("received corrupted message",
+        drop("git received corrupted message",
              Peer::DropDirection::WE_DROPPED_REMOTE,
              Peer::DropMode::IGNORE_WRITE_QUEUE);
         return;
     }
+}
+
+void
+LoopbackPeer::recvMessage(std::shared_ptr<MsgCapacityTracker> msgTracker,
+                          TransactionFrameBasePtr tx)
+{
+    mAppConnector.postOnMainThread(
+        [self = shared_from_this(), msgTracker, tx]() {
+            self->recvMessage(msgTracker, tx);
+        },
+        "LoopbackPeer: processInQueue");
 }
 
 void
@@ -339,7 +353,7 @@ LoopbackPeer::deliverOne()
         {
             // move msg to remote's in queue
             remote->mInQueue.emplace(std::move(msg.mMessage));
-            remote->getApp().postOnMainThread(
+            remote->mAppConnector.postOnMainThread(
                 [remW = mRemote]() {
                     auto remS = remW.lock();
                     if (remS)
@@ -349,9 +363,9 @@ LoopbackPeer::deliverOne()
                 },
                 "LoopbackPeer: processInQueue in deliverOne");
         }
-        mLastWrite = mApp.getClock().now();
-        getOverlayMetrics().mMessageWrite.Mark();
-        getOverlayMetrics().mByteWrite.Mark(nBytes);
+        mLastWrite = mAppConnector.now();
+        mOverlayMetrics.mMessageWrite.Mark();
+        mOverlayMetrics.mByteWrite.Mark(nBytes);
         ++mPeerMetrics.mMessageWrite;
         mPeerMetrics.mByteWrite += nBytes;
     }
@@ -558,14 +572,12 @@ LoopbackPeer::checkCapacity(std::shared_ptr<LoopbackPeer> otherPeer) const
     // Outbound capacity is equal to the config on the other node
     bool flowControlInBytes = getFlowControl()->getCapacityBytes() &&
                               otherPeer->getFlowControl()->getCapacityBytes();
-    bool isValid =
-        otherPeer->getApp().getConfig().PEER_FLOOD_READING_CAPACITY ==
-        getFlowControl()->getCapacity()->getOutboundCapacity();
+    bool isValid = otherPeer->mConfig.PEER_FLOOD_READING_CAPACITY ==
+                   getFlowControl()->getCapacity()->getOutboundCapacity();
     if (flowControlInBytes)
     {
         isValid = isValid &&
-                  (otherPeer->getApp()
-                       .getOverlayManager()
+                  (otherPeer->mAppConnector.getOverlayManager()
                        .getFlowControlBytesConfig()
                        .mTotal ==
                    getFlowControl()->getCapacityBytes()->getOutboundCapacity());

@@ -122,7 +122,9 @@ Floodgate::broadcast(StellarMessage const& msg, std::optional<Hash> const& hash)
     auto smsg = std::make_shared<StellarMessage const>(msg);
     for (auto peer : peers)
     {
-        releaseAssert(peer.second->isAuthenticated());
+        // Assert must hold since only main thread is allowed to modify
+        // authenticated peers and peer state during drop
+        peer.second->assertAuthenticated();
         bool pullMode = msg.type() == TRANSACTION;
         bool hasAdvert = pullMode && peer.second->peerKnowsHash(hash.value());
 
@@ -138,6 +140,9 @@ Floodgate::broadcast(StellarMessage const& msg, std::optional<Hash> const& hash)
                 mSendFromBroadcast.Mark();
                 std::weak_ptr<Peer> weak(
                     std::static_pointer_cast<Peer>(peer.second));
+                // This is an async operation, and peer might get dropped by the
+                // time we actually try to send the message This is fine, as
+                // sendMessage will just be a no-op in that case
                 mApp.postOnMainThread(
                     [smsg, weak, log = !broadcasted]() {
                         auto strong = weak.lock();

@@ -646,6 +646,12 @@ ApplicationImpl::~ApplicationImpl()
         {
             mBucketManager->shutdown();
         }
+        // Peers continue reading and writing in the background, so we need to
+        // issue a signal to start wrapping up
+        if (mOverlayManager)
+        {
+            mOverlayManager->shutdown();
+        }
     }
     catch (std::exception const& e)
     {

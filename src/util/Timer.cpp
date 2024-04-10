@@ -29,6 +29,9 @@ VirtualClock::VirtualClock(Mode mode)
 {
 }
 
+// TODO: loopback peer doesn't support multi-threading yet;
+// Real time clock is thread-safe, because std::chrono::steady_clock::now() is
+// thread-safe
 VirtualClock::time_point
 VirtualClock::now() const noexcept
 {

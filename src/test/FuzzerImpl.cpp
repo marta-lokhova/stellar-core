@@ -2110,23 +2110,24 @@ OverlayFuzzer::inject(std::string const& filename)
     auto initiator = loopbackPeerConnection->getInitiator();
     auto acceptor = loopbackPeerConnection->getAcceptor();
 
-    initiator->getApp().getClock().postAction(
-        [initiator, msg]() {
-            initiator->Peer::sendMessage(
-                std::make_shared<StellarMessage const>(msg));
-        },
-        "main", Scheduler::ActionType::NORMAL_ACTION);
+    // TODO: deal with fuzzer later
+    // initiator->getApp().getClock().postAction(
+    //     [initiator, msg]() {
+    //         initiator->Peer::sendMessage(
+    //             std::make_shared<StellarMessage const>(msg));
+    //     },
+    //     "main", Scheduler::ActionType::NORMAL_ACTION);
 
-    mSimulation->crankForAtMost(std::chrono::milliseconds{500}, false);
+    // mSimulation->crankForAtMost(std::chrono::milliseconds{500}, false);
 
-    // clear all queues and cancel all events
-    initiator->clearInAndOutQueues();
-    acceptor->clearInAndOutQueues();
+    // // clear all queues and cancel all events
+    // initiator->clearInAndOutQueues();
+    // acceptor->clearInAndOutQueues();
 
-    while (initiator->getApp().getClock().cancelAllEvents())
-        ;
-    while (acceptor->getApp().getClock().cancelAllEvents())
-        ;
+    // while (initiator->getApp().getClock().cancelAllEvents())
+    //     ;
+    // while (acceptor->getApp().getClock().cancelAllEvents())
+    //     ;
 }
 
 int

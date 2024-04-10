@@ -30,11 +30,24 @@ class TCPPeer : public Peer
     std::vector<uint8_t> mIncomingHeader;
     std::vector<uint8_t> mIncomingBody;
 
-    std::vector<asio::const_buffer> mWriteBuffers;
-    std::deque<TimestampedMessage> mWriteQueue;
-    bool mWriting{false};
-    bool mDelayedShutdown{false};
-    bool mShutdownScheduled{false};
+    class OverlayThreadWriteQueue
+    {
+        std::deque<TimestampedMessage> mWriteQueue;
+        std::vector<asio::const_buffer> mWriteBuffers;
+        bool const mUseBackgroundThread;
+
+      public:
+        std::deque<TimestampedMessage>& getWriteQueue();
+        std::vector<asio::const_buffer>& getWriteBuffers();
+        OverlayThreadWriteQueue(bool useBackgroundThread)
+            : mUseBackgroundThread(useBackgroundThread)
+        {
+        }
+    };
+
+    std::atomic<bool> mWriting{false};
+    std::atomic<bool> mDelayedShutdown{false};
+    std::atomic<bool> mShutdownScheduled{false};
 
     void recvMessage();
     void sendMessage(xdr::msg_ptr&& xdrBytes) override;
@@ -43,8 +56,10 @@ class TCPPeer : public Peer
 
     size_t getIncomingMsgLength();
     virtual void connected() override;
+
+    OverlayThreadWriteQueue mBackgroundWriteQueue;
+
     void scheduleRead() override;
-    virtual bool sendQueueIsOverloaded() const override;
     void startRead();
 
     static constexpr size_t HDRSZ = 4;
@@ -63,7 +78,7 @@ class TCPPeer : public Peer
     void readBodyHandler(asio::error_code const& error,
                          std::size_t bytes_transferred,
                          std::size_t expected_length);
-    void shutdown();
+    virtual void shutdown() override;
 
     // This tracks the count of TCPPeers that are live and and originate in
     // inbound connections.
@@ -87,6 +102,8 @@ class TCPPeer : public Peer
     // because any other central place we might track the live count (overlay
     // manager or metrics) may be dead before the TCPPeer destructor runs.
     std::shared_ptr<int> mLiveInboundPeersCounter;
+
+    asio::steady_timer mShutdownTimer;
 
   public:
     typedef std::shared_ptr<TCPPeer> pointer;

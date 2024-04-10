@@ -54,6 +54,10 @@ Simulation::~Simulation()
     // kill scheduler before the io service
     testutil::shutdownWorkScheduler(*mIdleApp);
 
+    // shutdown overlay service such that it doesn't post anything to
+    // soon-to-be-dead main io service killed right below
+    mIdleApp->getOverlayManager().shutdown();
+
     // tear down main app/clock
     mClock.getIOContext().poll_one();
     mClock.getIOContext().stop();
@@ -213,12 +217,10 @@ Simulation::dropAllConnections(NodeID const& id)
                                // use app's IDs here as connections may be
                                // incomplete
                                return c->getAcceptor()
-                                              ->getApp()
-                                              .getConfig()
+                                              ->getConfig()
                                               .NODE_SEED.getPublicKey() == id ||
                                       c->getInitiator()
-                                              ->getApp()
-                                              .getConfig()
+                                              ->getConfig()
                                               .NODE_SEED.getPublicKey() == id;
                            }),
             mLoopbackConnections.end());
@@ -286,14 +288,10 @@ Simulation::getLoopbackConnection(NodeID const& initiator,
     auto it = std::find_if(
         std::begin(mLoopbackConnections), std::end(mLoopbackConnections),
         [&](std::shared_ptr<LoopbackPeerConnection> const& conn) {
-            return conn->getInitiator()
-                           ->getApp()
-                           .getConfig()
-                           .NODE_SEED.getPublicKey() == initiator &&
-                   conn->getAcceptor()
-                           ->getApp()
-                           .getConfig()
-                           .NODE_SEED.getPublicKey() == acceptor;
+            return conn->getInitiator()->getConfig().NODE_SEED.getPublicKey() ==
+                       initiator &&
+                   conn->getAcceptor()->getConfig().NODE_SEED.getPublicKey() ==
+                       acceptor;
         });
 
     return it == std::end(mLoopbackConnections) ? nullptr : *it;
@@ -305,14 +303,10 @@ Simulation::dropLoopbackConnection(NodeID initiator, NodeID acceptor)
     auto it = std::find_if(
         std::begin(mLoopbackConnections), std::end(mLoopbackConnections),
         [&](std::shared_ptr<LoopbackPeerConnection> const& conn) {
-            return conn->getInitiator()
-                           ->getApp()
-                           .getConfig()
-                           .NODE_SEED.getPublicKey() == initiator &&
-                   conn->getAcceptor()
-                           ->getApp()
-                           .getConfig()
-                           .NODE_SEED.getPublicKey() == acceptor;
+            return conn->getInitiator()->getConfig().NODE_SEED.getPublicKey() ==
+                       initiator &&
+                   conn->getAcceptor()->getConfig().NODE_SEED.getPublicKey() ==
+                       acceptor;
         });
     if (it != std::end(mLoopbackConnections))
     {
@@ -778,7 +772,7 @@ LoopbackOverlayManager::connectToImpl(PeerBareAddress const& address,
             return false;
         }
         auto res = LoopbackPeer::initiate(mApp, *otherApp);
-        return res.first->getState() == Peer::CONNECTED;
+        return res.first->isConnectedForTesting();
     }
     else
     {

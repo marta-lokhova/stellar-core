@@ -104,9 +104,12 @@ Tracker::tryNextPeer()
         mLastAskedPeer.reset();
     }
 
+    // canAskPeer is best effort and send happens asyncronously; worst case
+    // we'll place something in the outbound queue that will subsequently get
+    // dropped of peer's state changes to shutting down
     auto canAskPeer = [&](Peer::pointer const& p, bool peerHas) {
         auto it = mPeersAsked.find(p);
-        return (p->isAuthenticated() &&
+        return (p->isAuthenticatedAtomic() &&
                 (it == mPeersAsked.end() || (peerHas && !it->second)));
     };
 

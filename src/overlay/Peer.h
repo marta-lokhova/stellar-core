@@ -8,9 +8,11 @@
 #include "database/Database.h"
 #include "lib/json/json.h"
 #include "medida/timer.h"
+#include "overlay/OverlayAppConnector.h"
 #include "overlay/PeerBareAddress.h"
 #include "overlay/StellarXDR.h"
 #include "overlay/TxAdvertQueue.h"
+#include "transactions/TransactionFrameBase.h"
 #include "util/HashOfHash.h"
 #include "util/NonCopyable.h"
 #include "util/RandomEvictionCache.h"
@@ -64,7 +66,6 @@ class FlowControl;
 class Peer : public std::enable_shared_from_this<Peer>,
              public NonMovableOrCopyable
 {
-
   public:
     static constexpr std::chrono::seconds PEER_SEND_MODE_IDLE_TIMEOUT =
         std::chrono::seconds(60);
@@ -127,38 +128,38 @@ class Peer : public std::enable_shared_from_this<Peer>,
     struct PeerMetrics
     {
         PeerMetrics(VirtualClock::time_point connectedTime);
-        uint64_t mMessageRead;
-        uint64_t mMessageWrite;
-        uint64_t mByteRead;
-        uint64_t mByteWrite;
-        uint64_t mAsyncRead;
-        uint64_t mAsyncWrite;
-        uint64_t mMessageDrop;
+        std::atomic<uint64_t> mMessageRead;
+        std::atomic<uint64_t> mMessageWrite;
+        std::atomic<uint64_t> mByteRead;
+        std::atomic<uint64_t> mByteWrite;
+        std::atomic<uint64_t> mAsyncRead;
+        std::atomic<uint64_t> mAsyncWrite;
+        std::atomic<uint64_t> mMessageDrop;
 
         medida::Timer mMessageDelayInWriteQueueTimer;
         medida::Timer mMessageDelayInAsyncWriteTimer;
         medida::Timer mAdvertQueueDelay;
         medida::Timer mPullLatency;
 
-        uint64_t mDemandTimeouts;
-        uint64_t mUniqueFloodBytesRecv;
-        uint64_t mDuplicateFloodBytesRecv;
-        uint64_t mUniqueFetchBytesRecv;
-        uint64_t mDuplicateFetchBytesRecv;
+        std::atomic<uint64_t> mDemandTimeouts;
+        std::atomic<uint64_t> mUniqueFloodBytesRecv;
+        std::atomic<uint64_t> mDuplicateFloodBytesRecv;
+        std::atomic<uint64_t> mUniqueFetchBytesRecv;
+        std::atomic<uint64_t> mDuplicateFetchBytesRecv;
 
-        uint64_t mUniqueFloodMessageRecv;
-        uint64_t mDuplicateFloodMessageRecv;
-        uint64_t mUniqueFetchMessageRecv;
-        uint64_t mDuplicateFetchMessageRecv;
+        std::atomic<uint64_t> mUniqueFloodMessageRecv;
+        std::atomic<uint64_t> mDuplicateFloodMessageRecv;
+        std::atomic<uint64_t> mUniqueFetchMessageRecv;
+        std::atomic<uint64_t> mDuplicateFetchMessageRecv;
 
-        uint64_t mTxHashReceived;
-        uint64_t mTxDemandSent;
+        std::atomic<uint64_t> mTxHashReceived;
+        std::atomic<uint64_t> mTxDemandSent;
 
-        VirtualClock::time_point mConnectedTime;
+        std::atomic<VirtualClock::time_point> mConnectedTime;
 
-        uint64_t mMessagesFulfilled;
-        uint64_t mBannedMessageUnfulfilled;
-        uint64_t mUnknownMessageUnfulfilled;
+        std::atomic<uint64_t> mMessagesFulfilled;
+        std::atomic<uint64_t> mBannedMessageUnfulfilled;
+        std::atomic<uint64_t> mUnknownMessageUnfulfilled;
     };
 
     struct TimestampedMessage
@@ -178,16 +179,6 @@ class Peer : public std::enable_shared_from_this<Peer>,
     Json::Value getJsonInfo(bool compact) const;
 
   protected:
-    Application& mApp;
-
-    PeerRole mRole;
-    PeerState mState;
-    NodeID mPeerID;
-    uint256 mSendNonce;
-    uint256 mRecvNonce;
-
-    std::shared_ptr<FlowControl> mFlowControl;
-
     class MsgCapacityTracker : private NonMovableOrCopyable
     {
         std::weak_ptr<Peer> mWeakPeer;
@@ -195,21 +186,62 @@ class Peer : public std::enable_shared_from_this<Peer>,
 
       public:
         MsgCapacityTracker(std::weak_ptr<Peer> peer, StellarMessage const& msg);
-        ~MsgCapacityTracker();
         StellarMessage const& getMessage();
         std::weak_ptr<Peer> getPeer();
+        void finish();
     };
 
-    // Is this peer currently throttled due to lack of capacity
-    std::optional<VirtualClock::time_point> mLastThrottle;
+    OverlayAppConnector mAppConnector;
 
-    // Does local node have capacity to read from this peer
-    bool canRead() const;
+    // Anything protected must either be thread-safe or only called from main
+    Config const mConfig;
+    Hash const mNetworkID;
+    std::shared_ptr<FlowControl> mFlowControl;
+    std::atomic<VirtualClock::time_point> mLastRead;
+    std::atomic<VirtualClock::time_point> mLastWrite;
+    std::atomic<VirtualClock::time_point> mEnqueueTimeOfLastWrite;
+
+    PeerRole const mRole;
+    OverlayMetrics& mOverlayMetrics;
+    PeerMetrics mPeerMetrics;
+
+    std::recursive_mutex mutable mStateMutex;
 
     HmacSha256Key mSendMacKey;
     HmacSha256Key mRecvMacKey;
-    uint64_t mSendMacSeq{0};
-    uint64_t mRecvMacSeq{0};
+    std::atomic<uint64_t> mSendMacSeq{0};
+    std::atomic<uint64_t> mRecvMacSeq{0};
+    // Does local node have capacity to read from this peer
+    bool canRead() const;
+    // helper method to acknowledge that some bytes were received
+    void receivedBytes(size_t byteCount, bool gotFullMessage);
+    virtual bool
+    useBackgroundThread() const
+    {
+        return mConfig.EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING;
+    }
+
+    void initialize(PeerBareAddress const& address);
+    void dropHelper(std::string const& reason, DropDirection dropDirection,
+                    DropMode dropMode);
+
+    // Subclasses can only read state, but not modify it
+    PeerState
+    getState(std::lock_guard<std::recursive_mutex>& stateGuard) const
+    {
+        return mState;
+    }
+    void setState(std::lock_guard<std::recursive_mutex>& stateGuard,
+                  PeerState newState);
+    bool shouldAbort(std::lock_guard<std::recursive_mutex>& stateGuard) const;
+
+    void recvAuthenticatedMessage(AuthenticatedMessage&& msg);
+
+  private:
+    PeerState mState;
+    NodeID mPeerID;
+    uint256 mSendNonce;
+    uint256 mRecvNonce;
 
     std::string mRemoteVersion;
     uint32_t mRemoteOverlayMinVersion;
@@ -221,24 +253,14 @@ class Peer : public std::enable_shared_from_this<Peer>,
     VirtualTimer mRecurringTimer;
     VirtualTimer mDelayedExecutionTimer;
 
-    VirtualClock::time_point mLastRead;
-    VirtualClock::time_point mLastWrite;
-    VirtualClock::time_point mEnqueueTimeOfLastWrite;
-
     static Hash pingIDfromTimePoint(VirtualClock::time_point const& tp);
     void pingPeer();
     void maybeProcessPingResponse(Hash const& id);
     VirtualClock::time_point mPingSentTime;
     std::chrono::milliseconds mLastPing;
 
-    PeerMetrics mPeerMetrics;
-
-    OverlayMetrics& getOverlayMetrics();
-
-    bool shouldAbort() const;
-    void recvRawMessage(StellarMessage const& msg);
-    void recvMessage(StellarMessage const& msg);
-    void recvMessage(AuthenticatedMessage const& msg);
+    void recvRawMessage(StellarMessage const& msg,
+                        TransactionFrameBasePtr tx = nullptr);
 
     virtual void recvError(StellarMessage const& msg);
     void updatePeerRecordAfterEcho();
@@ -255,7 +277,8 @@ class Peer : public std::enable_shared_from_this<Peer>,
     void recvGetTxSet(StellarMessage const& msg);
     void recvTxSet(StellarMessage const& msg);
     void recvGeneralizedTxSet(StellarMessage const& msg);
-    void recvTransaction(StellarMessage const& msg);
+    void recvTransaction(StellarMessage const& msg,
+                         TransactionFrameBasePtr tx = nullptr);
     void recvGetSCPQuorumSet(StellarMessage const& msg);
     void recvSCPQuorumSet(StellarMessage const& msg);
     void recvSCPMessage(StellarMessage const& msg);
@@ -270,6 +293,9 @@ class Peer : public std::enable_shared_from_this<Peer>,
     void sendPeers();
     void sendError(ErrorCode error, std::string const& message);
 
+    void recvMessage(std::shared_ptr<MsgCapacityTracker> msgTracker,
+                     TransactionFrameBasePtr tx = nullptr);
+
     // NB: This is a move-argument because the write-buffer has to travel
     // with the write-request through the async IO system, and we might have
     // several queued at once. We have carefully arranged this to not copy
@@ -283,25 +309,18 @@ class Peer : public std::enable_shared_from_this<Peer>,
     connected()
     {
     }
-    virtual bool
-    sendQueueIsOverloaded() const
-    {
-        return false;
-    }
 
     virtual AuthCert getAuthCert();
 
     void startRecurrentTimer();
     void recurrentTimerExpired(asio::error_code const& error);
     std::chrono::seconds getIOTimeout() const;
-    void rememberHash(Hash const& hash, uint32_t ledgerSeq);
 
-    // helper method to acknownledge that some bytes were received
-    void receivedBytes(size_t byteCount, bool gotFullMessage);
-
-    void sendAuthenticatedMessage(StellarMessage const& msg);
+    void sendAuthenticatedMessage(std::shared_ptr<StellarMessage const> msg);
     void beginMessageProcessing(StellarMessage const& msg);
     void endMessageProcessing(StellarMessage const& msg);
+
+    void rememberHash(Hash const& hash, uint32_t ledgerSeq);
     TxAdvertQueue mTxAdvertQueue;
 
     // As of MIN_OVERLAY_VERSION_FOR_FLOOD_ADVERT, peers accumulate an _advert_
@@ -321,13 +340,7 @@ class Peer : public std::enable_shared_from_this<Peer>,
   public:
     Peer(Application& app, PeerRole role);
 
-    Application&
-    getApp()
-    {
-        return mApp;
-    }
-
-    void shutdown();
+    virtual void shutdown();
     void clearBelow(uint32_t ledgerSeq);
 
     std::string msgSummary(StellarMessage const& stellarMsg);
@@ -337,18 +350,21 @@ class Peer : public std::enable_shared_from_this<Peer>,
     void sendGetScpState(uint32 ledgerSeq);
     void sendErrorAndDrop(ErrorCode error, std::string const& message,
                           DropMode dropMode);
+    void sendSendMore(uint32_t numMessages);
+    void sendSendMore(uint32_t numMessages, uint32_t numBytes);
 
     void sendMessage(std::shared_ptr<StellarMessage const> msg,
                      bool log = true);
-
     PeerRole
     getRole() const
     {
         return mRole;
     }
 
-    bool isConnected() const;
-    bool isAuthenticated() const;
+    bool isConnected(std::lock_guard<std::recursive_mutex>& stateGuard) const;
+    bool
+    isAuthenticated(std::lock_guard<std::recursive_mutex>& stateGuard) const;
+    // bool ifAuthenticatedDo(std::function<bool()>) const;
 
     VirtualClock::time_point
     getCreationTime() const
@@ -357,12 +373,6 @@ class Peer : public std::enable_shared_from_this<Peer>,
     }
     std::chrono::seconds getLifeTime() const;
     std::chrono::milliseconds getPing() const;
-
-    PeerState
-    getState() const
-    {
-        return mState;
-    }
 
     std::string const&
     getRemoteVersion() const
@@ -425,6 +435,7 @@ class Peer : public std::enable_shared_from_this<Peer>,
     void handleMaxTxSizeIncrease(uint32_t increase);
 
     friend class LoopbackPeer;
+    friend class PeerStub;
 
 #ifdef BUILD_TESTS
     std::shared_ptr<FlowControl>
@@ -432,6 +443,37 @@ class Peer : public std::enable_shared_from_this<Peer>,
     {
         return mFlowControl;
     }
+    bool isAuthenticatedForTesting() const;
+    bool shouldAbortForTesting() const;
+    bool isConnectedForTesting() const;
 #endif
+
+    void
+    assertAuthenticated() const
+    {
+        std::lock_guard<std::recursive_mutex> guard(mStateMutex);
+        releaseAssert(isAuthenticated(guard));
+    }
+
+    // equivalent to isAuthenticated being an atomic flag; i.e. it can be safely
+    // loaded, but once it's loaded, there are no guarantees on its value If the
+    // code block depends on isAuthenticated value being constant, use
+    // `doIfAuthenticated`
+    bool
+    isAuthenticatedAtomic() const
+    {
+        std::lock_guard<std::recursive_mutex> guard(mStateMutex);
+        return isAuthenticated(guard);
+    }
+
+    void
+    doIfAuthenticated(std::function<void()> f)
+    {
+        std::lock_guard<std::recursive_mutex> guard(mStateMutex);
+        if (isAuthenticated(guard))
+        {
+            f();
+        }
+    }
 };
 }
