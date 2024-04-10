@@ -934,7 +934,7 @@ std::string
 ApplicationImpl::manualClose(std::optional<uint32_t> const& manualLedgerSeq,
                              std::optional<TimePoint> const& manualCloseTime)
 {
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
 
     // Manual close only makes sense for validating nodes
     if (!mConfig.NODE_IS_VALIDATOR)
@@ -1488,7 +1488,7 @@ ApplicationImpl::createDatabase()
 AbstractLedgerTxnParent&
 ApplicationImpl::getLedgerTxnRoot()
 {
-    assertThreadIsMain();
+    releaseAssert(threadIsMain());
     return mConfig.MODE_USES_IN_MEMORY_LEDGER ? *mNeverCommittingLedgerTxn
                                               : *mLedgerTxnRoot;
 }
