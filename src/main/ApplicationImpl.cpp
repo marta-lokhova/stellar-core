@@ -87,9 +87,10 @@ ApplicationImpl::ApplicationImpl(VirtualClock& clock, Config const& cfg)
     , mWorkerIOContext(mConfig.EXPERIMENTAL_BACKGROUND_EVICTION_SCAN
                            ? mConfig.WORKER_THREADS - 1
                            : mConfig.WORKER_THREADS)
-    , mEvictionIOContext(mConfig.EXPERIMENTAL_BACKGROUND_EVICTION_SCAN
-                             ? std::make_unique<asio::io_context>(DEFAULT_THREAD_COUNT)
-                             : nullptr)
+    , mEvictionIOContext(
+          mConfig.EXPERIMENTAL_BACKGROUND_EVICTION_SCAN
+              ? std::make_unique<asio::io_context>(DEFAULT_THREAD_COUNT)
+              : nullptr)
     , mWork(std::make_unique<asio::io_context::work>(mWorkerIOContext))
     , mEvictionWork(
           mEvictionIOContext
