@@ -42,7 +42,7 @@ class PeerStub : public Peer
         mAddress = address;
     }
     virtual void
-    drop(std::string const&, DropDirection, DropMode) override
+    drop(std::string const&, DropDirection) override
     {
     }
     virtual void
