@@ -234,7 +234,8 @@ TransactionQueue::sourceAccountPending(AccountID const& accountID) const
 TransactionQueue::AddResult
 TransactionQueue::canAdd(TransactionFrameBasePtr tx,
                          AccountStates::iterator& stateIter,
-                         std::vector<std::pair<TxStackPtr, bool>>& txsToEvict)
+                         std::vector<std::pair<TxStackPtr, bool>>& txsToEvict,
+                         bool submittedFromSelf)
 {
     ZoneScoped;
     if (isBanned(tx->getFullHash()))
@@ -356,7 +357,8 @@ TransactionQueue::canAdd(TransactionFrameBasePtr tx,
     }
 
     if (!tx->checkValid(mApp, ltx, 0, 0,
-                        getUpperBoundCloseTimeOffset(mApp, closeTime)))
+                        getUpperBoundCloseTimeOffset(mApp, closeTime),
+                        submittedFromSelf))
     {
         return TransactionQueue::AddResult::ADD_STATUS_ERROR;
     }
@@ -536,7 +538,7 @@ TransactionQueue::tryAdd(TransactionFrameBasePtr tx, bool submittedFromSelf)
     AccountStates::iterator stateIter;
 
     std::vector<std::pair<TxStackPtr, bool>> txsToEvict;
-    auto const res = canAdd(tx, stateIter, txsToEvict);
+    auto const res = canAdd(tx, stateIter, txsToEvict, submittedFromSelf);
     if (res != TransactionQueue::AddResult::ADD_STATUS_PENDING)
     {
         return res;

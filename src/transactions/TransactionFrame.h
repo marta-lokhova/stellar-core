@@ -109,14 +109,12 @@ class TransactionFrame : public TransactionFrameBase
 
     virtual bool isBadSeq(LedgerTxnHeader const& header, int64_t seqNum) const;
 
-    ValidationType commonValid(Application& app,
-                               SignatureChecker& signatureChecker,
-                               AbstractLedgerTxn& ltxOuter,
-                               SequenceNumber current, bool applying,
-                               bool chargeFee,
-                               uint64_t lowerBoundCloseTimeOffset,
-                               uint64_t upperBoundCloseTimeOffset,
-                               std::optional<FeePair> sorobanResourceFee);
+    ValidationType commonValid(
+        Application& app, SignatureChecker& signatureChecker,
+        AbstractLedgerTxn& ltxOuter, SequenceNumber current, bool applying,
+        bool chargeFee, uint64_t lowerBoundCloseTimeOffset,
+        uint64_t upperBoundCloseTimeOffset,
+        std::optional<FeePair> sorobanResourceFee, bool submittedFromSelf);
 
     virtual std::shared_ptr<OperationFrame>
     makeOperation(Operation const& op, OperationResult& res, size_t index);
@@ -250,15 +248,14 @@ class TransactionFrame : public TransactionFrameBase
                                  AccountID const& accountID);
     bool checkExtraSigners(SignatureChecker& signatureChecker);
 
-    bool checkValidWithOptionallyChargedFee(Application& app,
-                                            AbstractLedgerTxn& ltxOuter,
-                                            SequenceNumber current,
-                                            bool chargeFee,
-                                            uint64_t lowerBoundCloseTimeOffset,
-                                            uint64_t upperBoundCloseTimeOffset);
+    bool checkValidWithOptionallyChargedFee(
+        Application& app, AbstractLedgerTxn& ltxOuter, SequenceNumber current,
+        bool chargeFee, uint64_t lowerBoundCloseTimeOffset,
+        uint64_t upperBoundCloseTimeOffset, bool submittedFromSelf);
     bool checkValid(Application& app, AbstractLedgerTxn& ltxOuter,
                     SequenceNumber current, uint64_t lowerBoundCloseTimeOffset,
-                    uint64_t upperBoundCloseTimeOffset) override;
+                    uint64_t upperBoundCloseTimeOffset,
+                    bool submittedFromSelf = false) override;
     bool checkSorobanResourceAndSetError(Application& app,
                                          uint32_t ledgerVersion) override;
 

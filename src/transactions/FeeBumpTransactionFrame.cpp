@@ -206,7 +206,8 @@ FeeBumpTransactionFrame::checkValid(Application& app,
                                     AbstractLedgerTxn& ltxOuter,
                                     SequenceNumber current,
                                     uint64_t lowerBoundCloseTimeOffset,
-                                    uint64_t upperBoundCloseTimeOffset)
+                                    uint64_t upperBoundCloseTimeOffset,
+                                    bool submittedFromSelf)
 {
     if (!XDRProvidesValidFee())
     {
@@ -233,7 +234,7 @@ FeeBumpTransactionFrame::checkValid(Application& app,
 
     bool res = mInnerTx->checkValidWithOptionallyChargedFee(
         app, ltx, current, false, lowerBoundCloseTimeOffset,
-        upperBoundCloseTimeOffset);
+        upperBoundCloseTimeOffset, submittedFromSelf);
     updateResult(getResult(), mInnerTx);
     return res;
 }

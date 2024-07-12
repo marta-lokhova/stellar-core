@@ -1345,14 +1345,12 @@ TransactionFrame::isBadSeq(LedgerTxnHeader const& header, int64_t seqNum) const
 }
 
 TransactionFrame::ValidationType
-TransactionFrame::commonValid(Application& app,
-                              SignatureChecker& signatureChecker,
-                              AbstractLedgerTxn& ltxOuter,
-                              SequenceNumber current, bool applying,
-                              bool chargeFee,
-                              uint64_t lowerBoundCloseTimeOffset,
-                              uint64_t upperBoundCloseTimeOffset,
-                              std::optional<FeePair> sorobanResourceFee)
+TransactionFrame::commonValid(
+    Application& app, SignatureChecker& signatureChecker,
+    AbstractLedgerTxn& ltxOuter, SequenceNumber current, bool applying,
+    bool chargeFee, uint64_t lowerBoundCloseTimeOffset,
+    uint64_t upperBoundCloseTimeOffset,
+    std::optional<FeePair> sorobanResourceFee, bool submittedFromSelf)
 {
     ZoneScoped;
     LedgerTxn ltx(ltxOuter);
@@ -1399,20 +1397,28 @@ TransactionFrame::commonValid(Application& app,
         return res;
     }
 
-    if (!checkSignature(
-            signatureChecker, sourceAccount,
-            sourceAccount.current().data.account().thresholds[THRESHOLD_LOW]))
+    // During loadgen, skip signature verification of generated transactions
+    bool canSkipSignatureVerification =
+        !applying && app.getConfig().ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING &&
+        submittedFromSelf;
+    if (!canSkipSignatureVerification)
     {
-        getResult().result.code(txBAD_AUTH);
-        return res;
-    }
+        if (!checkSignature(signatureChecker, sourceAccount,
+                            sourceAccount.current()
+                                .data.account()
+                                .thresholds[THRESHOLD_LOW]))
+        {
+            getResult().result.code(txBAD_AUTH);
+            return res;
+        }
 
-    if (protocolVersionStartsFrom(header.current().ledgerVersion,
-                                  ProtocolVersion::V_19) &&
-        !checkExtraSigners(signatureChecker))
-    {
-        getResult().result.code(txBAD_AUTH);
-        return res;
+        if (protocolVersionStartsFrom(header.current().ledgerVersion,
+                                      ProtocolVersion::V_19) &&
+            !checkExtraSigners(signatureChecker))
+        {
+            getResult().result.code(txBAD_AUTH);
+            return res;
+        }
     }
 
     res = ValidationType::kInvalidPostAuth;
@@ -1549,7 +1555,7 @@ bool
 TransactionFrame::checkValidWithOptionallyChargedFee(
     Application& app, AbstractLedgerTxn& ltxOuter, SequenceNumber current,
     bool chargeFee, uint64_t lowerBoundCloseTimeOffset,
-    uint64_t upperBoundCloseTimeOffset)
+    uint64_t upperBoundCloseTimeOffset, bool submittedFromSelf)
 {
     ZoneScoped;
     mCachedAccount.reset();
@@ -1581,10 +1587,10 @@ TransactionFrame::checkValidWithOptionallyChargedFee(
             ltx.loadHeader().current().ledgerVersion,
             app.getLedgerManager().getSorobanNetworkConfig(), app.getConfig());
     }
-    bool res =
-        commonValid(app, signatureChecker, ltx, current, false, chargeFee,
-                    lowerBoundCloseTimeOffset, upperBoundCloseTimeOffset,
-                    sorobanResourceFee) == ValidationType::kMaybeValid;
+    bool res = commonValid(app, signatureChecker, ltx, current, false,
+                           chargeFee, lowerBoundCloseTimeOffset,
+                           upperBoundCloseTimeOffset, sorobanResourceFee,
+                           submittedFromSelf) == ValidationType::kMaybeValid;
     if (res)
     {
         for (auto& op : mOperations)
@@ -1612,11 +1618,12 @@ bool
 TransactionFrame::checkValid(Application& app, AbstractLedgerTxn& ltxOuter,
                              SequenceNumber current,
                              uint64_t lowerBoundCloseTimeOffset,
-                             uint64_t upperBoundCloseTimeOffset)
+                             uint64_t upperBoundCloseTimeOffset,
+                             bool submittedFromSelf)
 {
-    return checkValidWithOptionallyChargedFee(app, ltxOuter, current, true,
-                                              lowerBoundCloseTimeOffset,
-                                              upperBoundCloseTimeOffset);
+    return checkValidWithOptionallyChargedFee(
+        app, ltxOuter, current, true, lowerBoundCloseTimeOffset,
+        upperBoundCloseTimeOffset, submittedFromSelf);
 }
 
 bool
@@ -1947,7 +1954,7 @@ TransactionFrame::apply(Application& app, AbstractLedgerTxn& ltx,
         }
         LedgerTxn ltxTx(ltx);
         auto cv = commonValid(app, signatureChecker, ltxTx, 0, true, chargeFee,
-                              0, 0, sorobanResourceFee);
+                              0, 0, sorobanResourceFee, false);
         if (cv >= ValidationType::kInvalidUpdateSeqNum)
         {
             processSeqNum(ltxTx);

@@ -42,7 +42,8 @@ class TransactionFrameBase
     virtual bool checkValid(Application& app, AbstractLedgerTxn& ltxOuter,
                             SequenceNumber current,
                             uint64_t lowerBoundCloseTimeOffset,
-                            uint64_t upperBoundCloseTimeOffset) = 0;
+                            uint64_t upperBoundCloseTimeOffset,
+                            bool submittedFromSelf = false) = 0;
     virtual bool checkSorobanResourceAndSetError(Application& app,
                                                  uint32_t ledgerVersion) = 0;
 

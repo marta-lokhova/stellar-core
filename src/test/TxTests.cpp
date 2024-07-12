@@ -697,11 +697,8 @@ transactionFromOperations(Application& app, SecretKey const& from,
                           SequenceNumber seq, const std::vector<Operation>& ops,
                           uint32_t fee)
 {
-    uint32_t ledgerVersion;
-    {
-        LedgerTxn ltx(app.getLedgerTxnRoot());
-        ledgerVersion = ltx.loadHeader().current().ledgerVersion;
-    }
+    uint32_t ledgerVersion =
+        app.getLedgerManager().getLastClosedLedgerHeader().header.ledgerVersion;
     if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_13))
     {
         return transactionFromOperationsV0(app, from, seq, ops, fee);
