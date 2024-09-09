@@ -884,7 +884,7 @@ ApplicationImpl::validateAndLogConfig()
             "and RUN_STANDALONE is not set");
     }
 
-    if (getHistoryArchiveManager().hasAnyWritableHistoryArchive())
+    if (getHistoryArchiveManager().publishEnabled())
     {
         if (!mConfig.modeStoresAllHistory())
         {
