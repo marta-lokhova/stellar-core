@@ -76,6 +76,7 @@ HistoryManagerImpl::HistoryManagerImpl(Application& app)
           app.getMetrics().NewMeter({"history", "publish", "failure"}, "event"))
     , mEnqueueToPublishTimer(
           app.getMetrics().NewTimer({"history", "publish", "time"}))
+    , mCheckpoint(std::make_unique<CheckpointBuilder>(app))
 {
 }
 
@@ -347,6 +348,20 @@ HistoryManagerImpl::publishQueuedHistory()
     return 0;
 }
 
+void
+HistoryManagerImpl::maybeCheckpointComplete()
+{
+    uint32_t lcl = mApp.getLedgerManager().getLastClosedLedgerNum();
+    if (!publishCheckpointOnLedgerClose(lcl) ||
+        !mApp.getHistoryArchiveManager().publishEnabled())
+    {
+        return;
+    }
+
+    releaseAssert(mCheckpoint);
+    mCheckpoint->checkpointComplete(lcl);
+}
+
 std::vector<HistoryArchiveState>
 HistoryManagerImpl::getPublishQueueStates()
 {
@@ -420,6 +435,26 @@ HistoryManagerImpl::getMissingBucketsReferencedByPublishQueue()
 }
 
 void
+HistoryManagerImpl::deletePublishedFiles(uint32_t ledgerSeq, Config const& cfg)
+{
+    releaseAssert(isLastLedgerInCheckpoint(ledgerSeq));
+    FileTransferInfo res(FileType::HISTORY_FILE_TYPE_RESULTS, ledgerSeq,
+                         mApp.getConfig());
+    FileTransferInfo txs(FileType::HISTORY_FILE_TYPE_TRANSACTIONS, ledgerSeq,
+                         mApp.getConfig());
+    FileTransferInfo headers(FileType::HISTORY_FILE_TYPE_LEDGER, ledgerSeq,
+                             mApp.getConfig());
+    // Dirty files shouldn't exist, but cleanup just in case
+    std::remove(res.localPath_nogz_dirty().c_str());
+    std::remove(txs.localPath_nogz_dirty().c_str());
+    std::remove(headers.localPath_nogz_dirty().c_str());
+    // Remove published files
+    std::remove(res.localPath_nogz().c_str());
+    std::remove(txs.localPath_nogz().c_str());
+    std::remove(headers.localPath_nogz().c_str());
+}
+
+void
 HistoryManagerImpl::historyPublished(
     uint32_t ledgerSeq, std::vector<std::string> const& originalBuckets,
     bool success)
@@ -451,6 +486,7 @@ HistoryManagerImpl::historyPublished(
         }
 
         mPublishQueueBuckets.removeBuckets(originalBuckets);
+        deletePublishedFiles(ledgerSeq, mApp.getConfig());
     }
     else
     {
@@ -459,6 +495,47 @@ HistoryManagerImpl::historyPublished(
     mPublishWork.reset();
     mApp.postOnMainThread([this]() { this->publishQueuedHistory(); },
                           "HistoryManagerImpl: publishQueuedHistory");
+}
+
+void
+HistoryManagerImpl::appendTransactionSet(uint32_t ledgerSeq,
+                                         TxSetXDRFrameConstPtr const& txSet,
+                                         TransactionResultSet const& resultSet)
+{
+    if (mApp.getHistoryArchiveManager().publishEnabled())
+    {
+        releaseAssert(mCheckpoint);
+        mCheckpoint->appendTransactionSet(ledgerSeq, txSet, resultSet);
+    }
+}
+
+void
+HistoryManagerImpl::appendLedgerHeader(LedgerHeader const& header)
+{
+    if (mApp.getHistoryArchiveManager().publishEnabled())
+    {
+        releaseAssert(mCheckpoint);
+        mCheckpoint->appendLedgerHeader(header);
+#ifdef BUILD_TESTS
+        if (mThrowOnLastAppend && isLastLedgerInCheckpoint(header.ledgerSeq))
+        {
+            throw std::runtime_error("Throwing for testing");
+        }
+#endif
+    }
+}
+
+void
+HistoryManagerImpl::restoreCheckpoint(uint32_t lcl)
+{
+    if (mApp.getHistoryArchiveManager().publishEnabled())
+    {
+        releaseAssert(mCheckpoint);
+        mCheckpoint->cleanup(lcl);
+        // Maybe finalize checkpoint if we're at a checkpoint boundary and
+        // haven't rotated yet. No-op if checkpoint has been rotated already
+        maybeCheckpointComplete();
+    }
 }
 
 void

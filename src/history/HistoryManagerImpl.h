@@ -5,6 +5,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "bucket/PublishQueueBuckets.h"
+#include "history/CheckpointBuilder.h"
 #include "history/HistoryManager.h"
 #include "util/TmpDir.h"
 #include "work/Work.h"
@@ -13,6 +14,7 @@
 namespace medida
 {
 class Meter;
+class Timer;
 }
 
 namespace stellar
@@ -36,6 +38,7 @@ class HistoryManagerImpl : public HistoryManager
 
     medida::Timer& mEnqueueToPublishTimer;
     UnorderedMap<uint32_t, std::chrono::steady_clock::time_point> mEnqueueTimes;
+    std::unique_ptr<CheckpointBuilder> mCheckpoint;
 
     PublishQueueBuckets::BucketCount loadBucketsReferencedByPublishQueue();
 #ifdef BUILD_TESTS
@@ -64,6 +67,8 @@ class HistoryManagerImpl : public HistoryManager
 
     size_t publishQueuedHistory() override;
 
+    void maybeCheckpointComplete() override;
+
     std::vector<std::string>
     getMissingBucketsReferencedByPublishQueue() override;
 
@@ -74,7 +79,12 @@ class HistoryManagerImpl : public HistoryManager
     void historyPublished(uint32_t ledgerSeq,
                           std::vector<std::string> const& originalBuckets,
                           bool success) override;
-
+    void appendTransactionSet(uint32_t ledgerSeq,
+                              TxSetXDRFrameConstPtr const& txSet,
+                              TransactionResultSet const& resultSet) override;
+    void appendLedgerHeader(LedgerHeader const& header) override;
+    void restoreCheckpoint(uint32_t lcl) override;
+    void deletePublishedFiles(uint32_t ledgerSeq, Config const& cfg) override;
     void deleteCheckpointsNewerThan(uint32_t ledgerSeq) override;
 
     std::string const& getTmpDir() override;
@@ -87,6 +97,13 @@ class HistoryManagerImpl : public HistoryManager
 
 #ifdef BUILD_TESTS
     void setPublicationEnabled(bool enabled) override;
+    bool mThrowOnLastAppend{false};
+    CheckpointBuilder&
+    getCheckpointBuilder() const
+    {
+        releaseAssert(mCheckpoint);
+        return *mCheckpoint;
+    }
 #endif
 };
 }

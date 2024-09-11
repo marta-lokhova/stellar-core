@@ -18,20 +18,9 @@ void storeTransaction(Database& db, uint32_t ledgerSeq,
                       TransactionFrameBasePtr const& tx,
                       TransactionMeta const& tm,
                       TransactionResultSet const& resultSet, Config const& cfg);
-
-void storeTxSet(Database& db, uint32_t ledgerSeq, TxSetXDRFrame const& txSet);
-
-TransactionResultSet getTransactionHistoryResults(Database& db,
-                                                  uint32 ledgerSeq);
-
-size_t copyTransactionsToStream(Application& app, soci::session& sess,
-                                uint32_t ledgerSeq, uint32_t ledgerCount,
-                                XDROutputFileStream& txOut,
-                                XDROutputFileStream& txResultOut);
-
 void createTxSetHistoryTable(Database& db);
-
-void deprecateTransactionFeeHistory(Database& db);
+void dropSupportTransactionFeeHistory(Database& db);
+void dropSupportTxSetHistory(Database& db);
 
 void dropTransactionHistory(Database& db, Config const& cfg);
 

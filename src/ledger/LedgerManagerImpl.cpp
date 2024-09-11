@@ -392,6 +392,11 @@ LedgerManagerImpl::loadLastKnownLedger(bool restoreBucketlist,
     // Step 4. Restore LedgerManager's internal state
     advanceLedgerPointers(*latestLedgerHeader);
 
+    // Maybe truncate checkpoint files if we're restarting after a crash
+    // in closeLedger (in which case any modifications to the ledger state have
+    // been rolled back)
+    mApp.getHistoryManager().restoreCheckpoint(latestLedgerHeader->ledgerSeq);
+
     if (protocolVersionStartsFrom(latestLedgerHeader->ledgerVersion,
                                   SOROBAN_PROTOCOL_VERSION))
     {
@@ -918,8 +923,9 @@ LedgerManagerImpl::closeLedger(LedgerCloseData const& ledgerData)
                       ledgerCloseMeta);
     if (mApp.getConfig().MODE_STORES_HISTORY_MISC)
     {
-        storeTxSet(mApp.getDatabase(), ltx.loadHeader().current().ledgerSeq,
-                   *txSet);
+        auto ledgerSeq = ltx.loadHeader().current().ledgerSeq;
+        mApp.getHistoryManager().appendTransactionSet(ledgerSeq, txSet,
+                                                      txResultSet);
     }
 
     ltx.loadHeader().current().txSetResultHash = xdrSha256(txResultSet);
@@ -1028,16 +1034,21 @@ LedgerManagerImpl::closeLedger(LedgerCloseData const& ledgerData)
     //
     // 2. Commit the current transaction.
     //
-    // 3. Start background eviction scan for the next ledger, _after_ the commit
-    //    so that it takes its snapshot of network setting from the
-    //    committed state.
+    // 3. Finalize any new checkpoint files _after_ the commit. If a crash
+    // occurs
+    //   between commit and this step, core will try to rotate files again on
+    //   restart.
     //
     // 4. Start any queued checkpoint publishing, _after_ the commit so that
     //    it takes its snapshot of history-rows from the committed state, but
     //    _before_ we GC any buckets (because this is the step where the
     //    bucket refcounts are incremented for the duration of the publish).
     //
-    // 5. GC unreferenced buckets. Only do this once publishes are in progress.
+    // 5. Start background eviction scan for the next ledger, _after_ the commit
+    //    so that it takes its snapshot of network setting from the
+    //    committed state.
+    //
+    // 6. GC unreferenced buckets. Only do this once publishes are in progress.
 
     // step 1
     auto& hm = mApp.getHistoryManager();
@@ -1051,6 +1062,13 @@ LedgerManagerImpl::closeLedger(LedgerCloseData const& ledgerData)
 #endif
 
     // step 3
+    hm.maybeCheckpointComplete();
+
+    // step 4
+    hm.publishQueuedHistory();
+    hm.logAndUpdatePublishStatus();
+
+    // step 5
     if (protocolVersionStartsFrom(initialLedgerVers,
                                   SOROBAN_PROTOCOL_VERSION) &&
         mApp.getConfig().isUsingBackgroundEviction())
@@ -1058,11 +1076,7 @@ LedgerManagerImpl::closeLedger(LedgerCloseData const& ledgerData)
         mApp.getBucketManager().startBackgroundEvictionScan(ledgerSeq + 1);
     }
 
-    // step 4
-    hm.publishQueuedHistory();
-    hm.logAndUpdatePublishStatus();
-
-    // step 5
+    // step 6
     mApp.getBucketManager().forgetUnreferencedBuckets();
 
     if (!mApp.getConfig().OP_APPLY_SLEEP_TIME_WEIGHT_FOR_TESTING.empty())
@@ -1676,6 +1690,7 @@ LedgerManagerImpl::storeCurrentLedger(LedgerHeader const& header,
     if (mApp.getConfig().MODE_STORES_HISTORY_LEDGERHEADERS && storeHeader)
     {
         LedgerHeaderUtils::storeInDatabase(mApp.getDatabase(), header);
+        mApp.getHistoryManager().appendLedgerHeader(header);
     }
 }
 

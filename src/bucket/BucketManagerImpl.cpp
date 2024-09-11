@@ -33,6 +33,7 @@
 #include <set>
 #include <thread>
 
+#include "history/FileTransferInfo.h"
 #include "medida/counter.h"
 #include "medida/meter.h"
 #include "medida/metrics_registry.h"
@@ -133,6 +134,16 @@ BucketManagerImpl::initialize()
                 mApp.getConfig().QUERY_SNAPSHOT_LEDGERS);
         }
     }
+
+    // Create persistent publish directories
+    // Note: HISTORY_FILE_TYPE_BUCKET is already tracked by BucketList in
+    // BUCKET_DIR_PATH, HISTORY_FILE_TYPE_SCP is persisted to the database
+    // so create the remaining ledger header, transactions and results
+    // directories
+    createPublishDir(FileType::HISTORY_FILE_TYPE_LEDGER, mApp.getConfig());
+    createPublishDir(FileType::HISTORY_FILE_TYPE_TRANSACTIONS,
+                     mApp.getConfig());
+    createPublishDir(FileType::HISTORY_FILE_TYPE_RESULTS, mApp.getConfig());
 }
 
 void
