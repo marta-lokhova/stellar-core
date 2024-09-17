@@ -241,6 +241,8 @@ class Application
                                                 std::string jobName) = 0;
     virtual void postOnOverlayThread(std::function<void()>&& f,
                                      std::string jobName) = 0;
+    virtual void postOnLedgerCloseThread(std::function<void()>&& f,
+                                         std::string jobName) = 0;
 
     // Perform actions necessary to transition from BOOTING_STATE to other
     // states. In particular: either reload or reinitialize the database, and

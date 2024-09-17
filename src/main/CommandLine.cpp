@@ -945,11 +945,16 @@ runCatchup(CommandLineArgs const& args)
                     // startNewLedger completes later on
                     {
                         auto& ps = app->getPersistentState();
-                        ps.setState(PersistentState::kLastClosedLedger, "");
-                        ps.setState(PersistentState::kHistoryArchiveState, "");
-                        ps.setState(PersistentState::kLastSCPData, "");
-                        ps.setState(PersistentState::kLastSCPDataXDR, "");
-                        ps.setState(PersistentState::kLedgerUpgrades, "");
+                        ps.setState(PersistentState::kLastClosedLedger, "",
+                                    app->getDatabase().getSession());
+                        ps.setState(PersistentState::kHistoryArchiveState, "",
+                                    app->getDatabase().getSession());
+                        ps.setState(PersistentState::kLastSCPData, "",
+                                    app->getDatabase().getMiscSession());
+                        ps.setState(PersistentState::kLastSCPDataXDR, "",
+                                    app->getDatabase().getMiscSession());
+                        ps.setState(PersistentState::kLedgerUpgrades, "",
+                                    app->getDatabase().getMiscSession());
                     }
 
                     LOG_INFO(

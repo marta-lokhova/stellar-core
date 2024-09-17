@@ -201,7 +201,18 @@ Database::open()
 {
     mSession.open(mApp.getConfig().DATABASE.value);
     DatabaseConfigureSessionOp op(mSession);
-    doDatabaseTypeSpecificOperation(op);
+    doDatabaseTypeSpecificOperation(op, mSession);
+
+    std::string miscDB = mApp.getConfig().DATABASE.value;
+    if (canUsePool())
+    {
+        miscDB = mApp.getConfig().DATABASE.value.substr(
+                     0, mApp.getConfig().DATABASE.value.length() - 3) +
+                 "-misc.db";
+    }
+    mMiscSession.open(miscDB);
+    DatabaseConfigureSessionOp op2(mMiscSession);
+    doDatabaseTypeSpecificOperation(op2, mMiscSession);
 }
 
 void
@@ -288,7 +299,8 @@ Database::dropTxMetaIfExists()
                     "column_name = 'txmeta');";
     }
 
-    auto& st = getPreparedStatement(selectStr).statement();
+    auto prep = getPreparedStatement(selectStr);
+    auto& st = prep.statement();
     st.exchange(soci::into(txMetaExists));
     st.define_and_bind();
     st.execute(true);
@@ -304,7 +316,8 @@ void
 Database::putSchemaVersion(unsigned long vers)
 {
     mApp.getPersistentState().setState(PersistentState::kDatabaseSchema,
-                                       std::to_string(vers));
+                                       std::to_string(vers),
+                                       mApp.getDatabase().getSession());
 }
 
 unsigned long
@@ -337,17 +350,16 @@ Database::getAppSchemaVersion()
 medida::TimerContext
 Database::getInsertTimer(std::string const& entityName)
 {
-    mEntityTypes.insert(entityName);
     mQueryMeter.Mark();
     return mApp.getMetrics()
         .NewTimer({"database", "insert", entityName})
         .TimeScope();
 }
 
+// TODO: no lazy init
 medida::TimerContext
 Database::getSelectTimer(std::string const& entityName)
 {
-    mEntityTypes.insert(entityName);
     mQueryMeter.Mark();
     return mApp.getMetrics()
         .NewTimer({"database", "select", entityName})
@@ -357,7 +369,6 @@ Database::getSelectTimer(std::string const& entityName)
 medida::TimerContext
 Database::getDeleteTimer(std::string const& entityName)
 {
-    mEntityTypes.insert(entityName);
     mQueryMeter.Mark();
     return mApp.getMetrics()
         .NewTimer({"database", "delete", entityName})
@@ -367,7 +378,6 @@ Database::getDeleteTimer(std::string const& entityName)
 medida::TimerContext
 Database::getUpdateTimer(std::string const& entityName)
 {
-    mEntityTypes.insert(entityName);
     mQueryMeter.Mark();
     return mApp.getMetrics()
         .NewTimer({"database", "update", entityName})
@@ -377,7 +387,6 @@ Database::getUpdateTimer(std::string const& entityName)
 medida::TimerContext
 Database::getUpsertTimer(std::string const& entityName)
 {
-    mEntityTypes.insert(entityName);
     mQueryMeter.Mark();
     return mApp.getMetrics()
         .NewTimer({"database", "upsert", entityName})
@@ -442,31 +451,36 @@ Database::initialize()
     if (isSqlite())
     {
         // delete the sqlite file directly if possible
-        std::string fn;
+        auto cleanup = [&](soci::session& sess) {
+            std::string fn;
 
-        {
-            int i;
-            std::string databaseName, databaseLocation;
-            soci::statement st =
-                (mSession.prepare << "PRAGMA database_list;", soci::into(i),
-                 soci::into(databaseName), soci::into(databaseLocation));
-            st.execute(true);
-            while (st.got_data())
             {
-                if (databaseName == "main")
+                int i;
+                std::string databaseName, databaseLocation;
+                soci::statement st =
+                    (sess.prepare << "PRAGMA database_list;", soci::into(i),
+                     soci::into(databaseName), soci::into(databaseLocation));
+                st.execute(true);
+                while (st.got_data())
                 {
-                    fn = databaseLocation;
-                    break;
+                    if (databaseName == "main")
+                    {
+                        fn = databaseLocation;
+                        break;
+                    }
                 }
             }
-        }
-        if (!fn.empty() && fs::exists(fn))
-        {
-            mSession.close();
-            std::remove(fn.c_str());
-            open();
-        }
+            if (!fn.empty() && fs::exists(fn))
+            {
+                sess.close();
+                std::remove(fn.c_str());
+            }
+        };
+        cleanup(mSession);
+        cleanup(mMiscSession);
+        open();
     }
+
     // normally you do not want to touch this section as
     // schema updates are done in applySchemaUpgrade
 
@@ -482,7 +496,7 @@ Database::initialize()
     HerderPersistence::dropAll(*this);
     BanManager::dropAll(*this);
     putSchemaVersion(MIN_SCHEMA_VERSION);
-    mApp.getHerderPersistence().createQuorumTrackingTable(mSession);
+    mApp.getHerderPersistence().createQuorumTrackingTable(mMiscSession);
 
     LOG_INFO(DEFAULT_LOG, "* ");
     LOG_INFO(DEFAULT_LOG, "* The database has been initialized");
@@ -495,6 +509,14 @@ Database::getSession()
     // global session can only be used from the main thread
     releaseAssert(threadIsMain());
     return mSession;
+}
+
+soci::session&
+Database::getMiscSession()
+{
+    // global session can only be used from the main thread
+    releaseAssert(threadIsMain());
+    return mMiscSession;
 }
 
 soci::connection_pool&
@@ -565,20 +587,27 @@ class SQLLogContext : NonCopyable
 StatementContext
 Database::getPreparedStatement(std::string const& query)
 {
-    auto i = mStatements.find(query);
+    return getPreparedStatement(query, mSession);
+}
+
+StatementContext
+Database::getPreparedStatement(std::string const& query, soci::session& session)
+{
+    // auto i = mStatements.find(query);
     std::shared_ptr<soci::statement> p;
-    if (i == mStatements.end())
+    // TODO: cache later
+    // if (i == mStatements.end())
     {
-        p = std::make_shared<soci::statement>(mSession);
+        p = std::make_shared<soci::statement>(session);
         p->alloc();
         p->prepare(query);
-        mStatements.insert(std::make_pair(query, p));
-        mStatementsSize.set_count(mStatements.size());
+        // mStatements.insert(std::make_pair(query, p));
+        // mStatementsSize.set_count(mStatements.size());
     }
-    else
-    {
-        p = i->second;
-    }
+    // else
+    // {
+    //     p = i->second;
+    // }
     StatementContext sc(p);
     return sc;
 }

@@ -2629,7 +2629,7 @@ TEST_CASE("remove applied", "[herder][transactionqueue]")
     herder.recvTransaction(tx3, false);
 
     {
-        auto const& lcl = lm.getLastClosedLedgerHeader();
+        auto lcl = lm.getLastClosedLedgerHeader();
         auto ledgerSeq = lcl.header.ledgerSeq + 1;
 
         root.loadSequenceNumber();

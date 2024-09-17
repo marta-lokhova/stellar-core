@@ -138,7 +138,7 @@ CatchupWork::doReset()
     mTransactionsVerifyApplySeq.reset();
     mGetHistoryArchiveStateWork.reset();
     mApplyBufferedLedgersWork.reset();
-    auto const& lcl = mApp.getLedgerManager().getLastClosedLedgerHeader();
+    auto lcl = mApp.getLedgerManager().getLastClosedLedgerHeader();
     mLastClosedLedgerHashPair = LedgerNumHashPair(
         lcl.header.ledgerSeq, std::make_optional<Hash>(lcl.hash));
     mCatchupSeq.reset();
@@ -548,7 +548,7 @@ CatchupWork::runCatchupStep()
                 // In this case we should actually have been caught-up during
                 // the replay process and, if judged successful, our LCL should
                 // be the one provided as well.
-                auto& lastClosed =
+                auto lastClosed =
                     mApp.getLedgerManager().getLastClosedLedgerHeader();
                 releaseAssert(mLastApplied.hash == lastClosed.hash);
                 releaseAssert(mLastApplied.header == lastClosed.header);

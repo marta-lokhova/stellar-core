@@ -540,7 +540,7 @@ CatchupSimulation::generateRandomLedger(uint32_t version)
         REQUIRE(txsSucceeded.count() > lastSucceeded + phases[0].size());
     }
 
-    auto const& lclh = lm.getLastClosedLedgerHeader();
+    auto lclh = lm.getLastClosedLedgerHeader();
     mLedgerSeqs.push_back(lclh.header.ledgerSeq);
     mLedgerHashes.push_back(lclh.hash);
     mBucketListHashes.push_back(lclh.header.bucketListHash);

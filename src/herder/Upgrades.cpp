@@ -3,6 +3,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "herder/Upgrades.h"
+#include "bucket/BucketListSnapshot.h"
 #include "bucket/BucketManager.h"
 #include "crypto/Hex.h"
 #include "crypto/SHA.h"
@@ -703,8 +704,8 @@ Upgrades::dropAll(Database& db)
 }
 
 void
-Upgrades::storeUpgradeHistory(Database& db, uint32_t ledgerSeq,
-                              LedgerUpgrade const& upgrade,
+Upgrades::storeUpgradeHistory(Database& db, soci::session& session,
+                              uint32_t ledgerSeq, LedgerUpgrade const& upgrade,
                               LedgerEntryChanges const& changes, int index)
 {
     ZoneScoped;
@@ -717,7 +718,8 @@ Upgrades::storeUpgradeHistory(Database& db, uint32_t ledgerSeq,
     auto prep = db.getPreparedStatement(
         "INSERT INTO upgradehistory "
         "(ledgerseq, upgradeindex,  upgrade,  changes) VALUES "
-        "(:seq,      :upgradeindex, :upgrade, :changes)");
+        "(:seq,      :upgradeindex, :upgrade, :changes)",
+        session);
 
     auto& st = prep.statement();
     st.exchange(soci::use(ledgerSeq));
@@ -737,19 +739,20 @@ Upgrades::storeUpgradeHistory(Database& db, uint32_t ledgerSeq,
 }
 
 void
-Upgrades::deleteOldEntries(Database& db, uint32_t ledgerSeq, uint32_t count)
+Upgrades::deleteOldEntries(soci::session& sess, uint32_t ledgerSeq,
+                           uint32_t count)
 {
     ZoneScoped;
-    DatabaseUtils::deleteOldEntriesHelper(db.getSession(), ledgerSeq, count,
+    DatabaseUtils::deleteOldEntriesHelper(sess, ledgerSeq, count,
                                           "upgradehistory", "ledgerseq");
 }
 
 void
-Upgrades::deleteNewerEntries(Database& db, uint32_t ledgerSeq)
+Upgrades::deleteNewerEntries(soci::session& sess, uint32_t ledgerSeq)
 {
     ZoneScoped;
-    DatabaseUtils::deleteNewerEntriesHelper(db.getSession(), ledgerSeq,
-                                            "upgradehistory", "ledgerseq");
+    DatabaseUtils::deleteNewerEntriesHelper(sess, ledgerSeq, "upgradehistory",
+                                            "ledgerseq");
 }
 
 static void

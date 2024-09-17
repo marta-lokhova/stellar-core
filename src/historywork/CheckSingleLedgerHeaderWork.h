@@ -40,5 +40,7 @@ class CheckSingleLedgerHeaderWork : public Work
     std::shared_ptr<GetAndUnzipRemoteFileWork> mGetLedgerFileWork;
     medida::Meter& mCheckSuccess;
     medida::Meter& mCheckFailed;
+    medida::Meter& mLedgerCheckSuccess;
+    medida::Meter& mLedgerCheckFailed;
 };
 }

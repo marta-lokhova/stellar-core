@@ -30,7 +30,7 @@ LedgerTxnRoot::Impl::loadConfigSetting(LedgerKey const& key) const
     std::string sql = "SELECT ledgerentry "
                       "FROM configsettings "
                       "WHERE configsettingid = :configsettingid";
-    auto prep = mApp.getDatabase().getPreparedStatement(sql);
+    auto prep = mApp.getDatabase().getPreparedStatement(sql, getSession());
     auto& st = prep.statement();
     st.exchange(soci::into(configSettingEntryStr));
     st.exchange(soci::use(configSettingID));
@@ -55,6 +55,7 @@ class bulkLoadConfigSettingsOperation
     : public DatabaseTypeSpecificOperation<std::vector<LedgerEntry>>
 {
     Database& mDb;
+    soci::session& mSession;
     std::vector<int32_t> mConfigSettingIDs;
 
     std::vector<LedgerEntry>
@@ -85,8 +86,9 @@ class bulkLoadConfigSettingsOperation
 
   public:
     bulkLoadConfigSettingsOperation(Database& db,
-                                    UnorderedSet<LedgerKey> const& keys)
-        : mDb(db)
+                                    UnorderedSet<LedgerKey> const& keys,
+                                    soci::session& session)
+        : mDb(db), mSession(session)
     {
         mConfigSettingIDs.reserve(keys.size());
         for (auto const& k : keys)
@@ -104,7 +106,7 @@ class bulkLoadConfigSettingsOperation
                           "FROM configsettings "
                           "WHERE configsettingid IN r";
 
-        auto prep = mDb.getPreparedStatement(sql);
+        auto prep = mDb.getPreparedStatement(sql, mSession);
         auto be = prep.statement().get_backend();
         if (be == nullptr)
         {
@@ -133,7 +135,7 @@ class bulkLoadConfigSettingsOperation
                           "FROM configsettings "
                           "WHERE configsettingid IN (SELECT * from r)";
 
-        auto prep = mDb.getPreparedStatement(sql);
+        auto prep = mDb.getPreparedStatement(sql, mSession);
         auto& st = prep.statement();
         st.exchange(soci::use(strConfigSettingIDs));
         return executeAndFetch(st);
@@ -147,7 +149,8 @@ LedgerTxnRoot::Impl::bulkLoadConfigSettings(
 {
     if (!keys.empty())
     {
-        bulkLoadConfigSettingsOperation op(mApp.getDatabase(), keys);
+        bulkLoadConfigSettingsOperation op(mApp.getDatabase(), keys,
+                                           getSession());
         return populateLoadedEntries(
             keys, mApp.getDatabase().doDatabaseTypeSpecificOperation(op));
     }
@@ -161,6 +164,7 @@ class bulkUpsertConfigSettingsOperation
     : public DatabaseTypeSpecificOperation<void>
 {
     Database& mDb;
+    soci::session& mSession;
     std::vector<int32_t> mConfigSettingIDs;
     std::vector<std::string> mConfigSettingEntries;
     std::vector<int32_t> mLastModifieds;
@@ -179,8 +183,9 @@ class bulkUpsertConfigSettingsOperation
 
   public:
     bulkUpsertConfigSettingsOperation(
-        Database& Db, std::vector<EntryIterator> const& entryIter)
-        : mDb(Db)
+        Database& Db, std::vector<EntryIterator> const& entryIter,
+        soci::session& session)
+        : mDb(Db), mSession(session)
     {
         for (auto const& e : entryIter)
         {
@@ -200,7 +205,7 @@ class bulkUpsertConfigSettingsOperation
                           "ledgerentry = excluded.ledgerentry, "
                           "lastmodified = excluded.lastmodified";
 
-        auto prep = mDb.getPreparedStatement(sql);
+        auto prep = mDb.getPreparedStatement(sql, mSession);
         soci::statement& st = prep.statement();
         st.exchange(soci::use(mConfigSettingIDs));
         st.exchange(soci::use(mConfigSettingEntries));
@@ -245,7 +250,7 @@ class bulkUpsertConfigSettingsOperation
                           "ledgerentry = excluded.ledgerentry, "
                           "lastmodified = excluded.lastmodified";
 
-        auto prep = mDb.getPreparedStatement(sql);
+        auto prep = mDb.getPreparedStatement(sql, mSession);
         soci::statement& st = prep.statement();
         st.exchange(soci::use(strConfigSettingIDs));
         st.exchange(soci::use(strConfigSettingEntries));
@@ -268,7 +273,8 @@ void
 LedgerTxnRoot::Impl::bulkUpsertConfigSettings(
     std::vector<EntryIterator> const& entries)
 {
-    bulkUpsertConfigSettingsOperation op(mApp.getDatabase(), entries);
+    bulkUpsertConfigSettingsOperation op(mApp.getDatabase(), entries,
+                                         getSession());
     mApp.getDatabase().doDatabaseTypeSpecificOperation(op);
 }
 

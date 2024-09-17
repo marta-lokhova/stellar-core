@@ -3,6 +3,9 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "herder/HerderImpl.h"
+#include "bucket/BucketListSnapshot.h"
+#include "bucket/BucketManager.h"
+#include "bucket/BucketSnapshotManager.h"
 #include "crypto/Hex.h"
 #include "crypto/KeyUtils.h"
 #include "crypto/SHA.h"
@@ -14,9 +17,6 @@
 #include "herder/TxSetFrame.h"
 #include "herder/TxSetUtils.h"
 #include "ledger/LedgerManager.h"
-#include "ledger/LedgerTxn.h"
-#include "ledger/LedgerTxnEntry.h"
-#include "ledger/LedgerTxnHeader.h"
 #include "lib/json/json.h"
 #include "main/Application.h"
 #include "main/Config.h"
@@ -360,7 +360,7 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
         writeDebugTxSet(ledgerData);
     }
 
-    mLedgerManager.valueExternalized(ledgerData);
+    mLedgerManager.valueExternalized(ledgerData, isLatestSlot);
 }
 
 void
@@ -521,7 +521,7 @@ HerderImpl::outOfSyncRecovery()
         CLOG_INFO(Herder, "Purging slots older than {}", purgeSlot);
         eraseBelow(purgeSlot);
     }
-    auto const& lcl = mLedgerManager.getLastClosedLedgerHeader().header;
+    auto lcl = mLedgerManager.getLastClosedLedgerHeader().header;
     for (auto const& e : getSCP().getLatestMessagesSend(lcl.ledgerSeq + 1))
     {
         broadcast(e);
@@ -654,7 +654,7 @@ HerderImpl::checkCloseTime(SCPEnvelope const& envelope, bool enforceRecent)
     auto envLedgerIndex = envelope.statement.slotIndex;
     auto& scpD = getHerderSCPDriver();
 
-    auto const& lcl = mLedgerManager.getLastClosedLedgerHeader().header;
+    auto lcl = mLedgerManager.getLastClosedLedgerHeader().header;
     auto lastCloseIndex = lcl.ledgerSeq;
     auto lastCloseTime = lcl.scpValue.closeTime;
 
@@ -921,6 +921,7 @@ HerderImpl::sourceAccountPending(AccountID const& accountID) const
         accPending = accPending ||
                      mSorobanTransactionQueue->sourceAccountPending(accountID);
     }
+    accPending = accPending || mLedgerManager.sourceAccountPending(accountID);
     return accPending;
 }
 
@@ -1136,9 +1137,15 @@ HerderImpl::safelyProcessSCPQueue(bool synchronous)
     }
 }
 
+// TODO: this isn't actually correct; herder tracking should move independently
+// of ledger close (so herder cleanup should be triggered even if the ledger
+// didn't close)
 void
 HerderImpl::lastClosedLedgerIncreased(bool latest)
 {
+    releaseAssert(threadIsMain());
+
+    // First complete all the tasks associated with ledger close
     maybeSetupSorobanQueue(
         mLedgerManager.getLastClosedLedgerHeader().header.ledgerVersion);
 
@@ -1154,6 +1161,9 @@ HerderImpl::lastClosedLedgerIncreased(bool latest)
 
         setupTriggerNextLedger();
     }
+
+    // Ensure potential upgrades are handled in overlay
+    maybeHandleUpgrade();
 }
 
 void
@@ -1163,7 +1173,7 @@ HerderImpl::setupTriggerNextLedger()
     // core emits SCP messages only for slots it can fully validate
     // (any closed ledger is fully validated)
     releaseAssert(isTracking());
-    auto const& lcl = mLedgerManager.getLastClosedLedgerHeader();
+    auto lcl = mLedgerManager.getLastClosedLedgerHeader();
     releaseAssert(trackingConsensusLedgerIndex() == lcl.header.ledgerSeq);
     releaseAssert(mLedgerManager.isSynced());
 
@@ -1350,7 +1360,7 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
 
     // our first choice for this round's set is all the tx we have collected
     // during last few ledger closes
-    auto const& lcl = mLedgerManager.getLastClosedLedgerHeader();
+    auto lcl = mLedgerManager.getLastClosedLedgerHeader();
     TxSetPhaseTransactions txPhases;
     txPhases.emplace_back(mTransactionQueue.getTransactions(lcl.header));
 
@@ -1532,7 +1542,7 @@ HerderImpl::getUpgradesJson()
 void
 HerderImpl::forceSCPStateIntoSyncWithLastClosedLedger()
 {
-    auto const& header = mLedgerManager.getLastClosedLedgerHeader().header;
+    auto header = mLedgerManager.getLastClosedLedgerHeader().header;
     setTrackingSCPState(header.ledgerSeq, header.scpValue,
                         /* isTrackingNetwork */ true);
 }
@@ -1979,6 +1989,7 @@ HerderImpl::persistSCPState(uint64 slot)
                                                    txSetsToPersist);
 }
 
+// TODO: restore SCP doesn;t work correctly, goes to catchup directly
 void
 HerderImpl::restoreSCPState()
 {
@@ -2059,7 +2070,8 @@ HerderImpl::persistUpgrades()
 {
     ZoneScoped;
     auto s = mUpgrades.getParameters().toJson();
-    mApp.getPersistentState().setState(PersistentState::kLedgerUpgrades, s);
+    mApp.getPersistentState().setState(PersistentState::kLedgerUpgrades, s,
+                                       mApp.getDatabase().getMiscSession());
 }
 
 void
@@ -2148,11 +2160,9 @@ HerderImpl::start()
 {
     mMaxTxSize = mApp.getHerder().getMaxClassicTxSize();
     {
-        LedgerTxn ltx(mApp.getLedgerTxnRoot(),
-                      /* shouldUpdateLastModified */ true,
-                      TransactionMode::READ_ONLY_WITHOUT_SQL_TXN);
-
-        uint32_t version = ltx.loadHeader().current().ledgerVersion;
+        uint32_t version = mApp.getLedgerManager()
+                               .getLastClosedLedgerHeader()
+                               .header.ledgerVersion;
         if (protocolVersionStartsFrom(version, SOROBAN_PROTOCOL_VERSION))
         {
             auto const& conf =
@@ -2185,7 +2195,7 @@ HerderImpl::start()
     }
 
     // setup a sufficient state that we can participate in consensus
-    auto const& lcl = mLedgerManager.getLastClosedLedgerHeader();
+    auto lcl = mLedgerManager.getLastClosedLedgerHeader();
 
     if (!mApp.getConfig().FORCE_SCP &&
         lcl.header.ledgerSeq == LedgerManager::GENESIS_LEDGER_SEQ)
@@ -2291,6 +2301,8 @@ HerderImpl::updateTransactionQueue(TxSetXDRFrameConstPtr externalizedTxSet)
 
     auto lhhe = mLedgerManager.getLastClosedLedgerHeader();
 
+    // TODO: this isn't quite right, since we need closed ledger to properly
+    // validate transactions
     auto updateQueue = [&](auto& queue, auto const& applied) {
         queue.removeApplied(applied);
         queue.shift();

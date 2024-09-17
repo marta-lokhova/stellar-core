@@ -561,6 +561,13 @@ closeLedgerOn(Application& app, uint32 ledgerSeq, TimePoint closeTime,
     }
     app.getHerder().externalizeValue(txSet.first, ledgerSeq, closeTime,
                                      emptyUpgradeSteps);
+    while (app.getLedgerManager().getLastClosedLedgerNum() != ledgerSeq)
+    {
+        app.getClock().crank();
+    }
+
+    testutil::crankFor(app.getClock(), 2 * Herder::EXP_LEDGER_TIMESPAN_SECONDS);
+
     REQUIRE(app.getLedgerManager().getLastClosedLedgerNum() == ledgerSeq);
     auto& lm = static_cast<LedgerManagerImpl&>(app.getLedgerManager());
     return lm.mLatestTxResultSet;
@@ -695,11 +702,8 @@ transactionFromOperations(Application& app, SecretKey const& from,
                           SequenceNumber seq, const std::vector<Operation>& ops,
                           uint32_t fee)
 {
-    uint32_t ledgerVersion;
-    {
-        LedgerTxn ltx(app.getLedgerTxnRoot());
-        ledgerVersion = ltx.loadHeader().current().ledgerVersion;
-    }
+    uint32_t ledgerVersion =
+        app.getLedgerManager().getLastClosedLedgerHeader().header.ledgerVersion;
     if (protocolVersionIsBefore(ledgerVersion, ProtocolVersion::V_13))
     {
         return transactionFromOperationsV0(app, from, seq, ops, fee);
@@ -1761,7 +1765,7 @@ executeUpgrades(Application& app, xdr::xvector<UpgradeType, 6> const& upgrades,
     auto& lm = app.getLedgerManager();
     auto currLh = app.getLedgerManager().getLastClosedLedgerHeader().header;
 
-    auto const& lcl = lm.getLastClosedLedgerHeader();
+    auto lcl = lm.getLastClosedLedgerHeader();
     auto txSet = TxSetXDRFrame::makeEmpty(lcl);
     auto lastCloseTime = lcl.header.scpValue.closeTime;
     app.getHerder().externalizeValue(txSet, lcl.header.ledgerSeq + 1,
@@ -1936,7 +1940,7 @@ getBalance(Application& app, AccountID const& accountID, Asset const& asset)
 uint32_t
 getLclProtocolVersion(Application& app)
 {
-    auto const& lcl = app.getLedgerManager().getLastClosedLedgerHeader();
+    auto lcl = app.getLedgerManager().getLastClosedLedgerHeader();
     return lcl.header.ledgerVersion;
 }
 

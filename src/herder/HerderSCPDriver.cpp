@@ -219,7 +219,7 @@ HerderSCPDriver::validateValueHelper(uint64_t slotIndex, StellarValue const& b,
         }
     }
 
-    auto const& lcl = mLedgerManager.getLastClosedLedgerHeader().header;
+    auto lcl = mLedgerManager.getLastClosedLedgerHeader().header;
     // when checking close time, start with what we have locally
     lastCloseTime = lcl.scpValue.closeTime;
 
@@ -359,7 +359,7 @@ HerderSCPDriver::validateValue(uint64_t slotIndex, Value const& value,
         validateValueHelper(slotIndex, b, nomination);
     if (res != SCPDriver::kInvalidValue)
     {
-        auto const& lcl = mLedgerManager.getLastClosedLedgerHeader();
+        auto lcl = mLedgerManager.getLastClosedLedgerHeader();
 
         LedgerUpgradeType lastUpgradeType = LEDGER_UPGRADE_VERSION;
 
@@ -418,7 +418,7 @@ HerderSCPDriver::extractValidValue(uint64_t slotIndex, Value const& value)
     if (validateValueHelper(slotIndex, b, true) ==
         SCPDriver::kFullyValidatedValue)
     {
-        auto const& lcl = mLedgerManager.getLastClosedLedgerHeader();
+        auto lcl = mLedgerManager.getLastClosedLedgerHeader();
 
         // remove the upgrade steps we don't like
         LedgerUpgradeType thisUpgradeType;
@@ -615,7 +615,7 @@ HerderSCPDriver::combineCandidates(uint64_t slotIndex,
 
     std::set<TransactionFramePtr> aggSet;
 
-    auto const& lcl = mLedgerManager.getLastClosedLedgerHeader();
+    auto lcl = mLedgerManager.getLastClosedLedgerHeader();
 
     Hash candidatesHash;
 
@@ -1231,6 +1231,7 @@ bool
 HerderSCPDriver::checkAndCacheTxSetValid(TxSetXDRFrame const& txSet,
                                          uint64_t closeTimeOffset) const
 {
+    // TODO: this cache probably doesn't work now
     auto key = TxSetValidityKey{
         mApp.getLedgerManager().getLastClosedLedgerHeader().hash,
         txSet.getContentsHash(), closeTimeOffset, closeTimeOffset};
@@ -1248,6 +1249,14 @@ HerderSCPDriver::checkAndCacheTxSetValid(TxSetXDRFrame const& txSet,
             mApp.getLedgerManager().getLastClosedLedgerHeader().hash)
         {
             applicableTxSet = txSet.prepareForApply(mApp);
+        }
+        else
+        {
+            CLOG_INFO(
+                Ledger, "Hashes don't match: {} vs {}",
+                hexAbbrev(txSet.previousLedgerHash()),
+                hexAbbrev(
+                    mApp.getLedgerManager().getLastClosedLedgerHeader().hash));
         }
 
         bool res = true;

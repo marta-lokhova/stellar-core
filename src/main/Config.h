@@ -387,6 +387,10 @@ class Config : public std::enable_shared_from_this<Config>
     // Enable parallel processing of overlay operations (experimental)
     bool EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING;
 
+    // Enable ledger close in the background (experimental)
+    bool EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE;
+    std::chrono::milliseconds EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE_DELAY;
+
     // When set to true, BucketListDB indexes are persisted on-disk so that the
     // BucketList does not need to be reindexed on startup. Defaults to true.
     // This should only be set to false for testing purposes

@@ -23,6 +23,7 @@
 #include "util/XDRCereal.h"
 #include "util/XDROperators.h"
 #include "xdrpp/marshal.h"
+#include "xdrpp/printer.h"
 
 #include <Tracy.hpp>
 #include <algorithm>

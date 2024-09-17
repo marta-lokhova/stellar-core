@@ -10,6 +10,7 @@
 #include "medida/meter.h"
 #include "medida/metrics_registry.h"
 #include <shared_mutex>
+#include "xdrpp/printer.h"
 
 namespace stellar
 {
@@ -39,29 +40,29 @@ BucketSnapshotManager::copySearchableBucketListSnapshot() const
         new SearchableBucketListSnapshot(*this));
 }
 
-medida::Timer&
-BucketSnapshotManager::recordBulkLoadMetrics(std::string const& label,
-                                             size_t numEntries) const
-{
-    // For now, only keep metrics for the main thread. We can decide on what
-    // metrics make sense when more background services are added later.
-    releaseAssert(threadIsMain());
+// medida::Timer&
+// BucketSnapshotManager::recordBulkLoadMetrics(std::string const& label,
+//                                              size_t numEntries) const
+// {
+//     // For now, only keep metrics for the main thread. We can decide on what
+//     // metrics make sense when more background services are added later.
+//     // releaseAssert(threadIsMain());
 
-    if (numEntries != 0)
-    {
-        mBulkLoadMeter.Mark(numEntries);
-    }
+//     if (numEntries != 0)
+//     {
+//         mBulkLoadMeter.Mark(numEntries);
+//     }
 
-    auto iter = mBulkTimers.find(label);
-    if (iter == mBulkTimers.end())
-    {
-        auto& metric =
-            mApp.getMetrics().NewTimer({"bucketlistDB", "bulk", label});
-        iter = mBulkTimers.emplace(label, metric).first;
-    }
+//     auto iter = mBulkTimers.find(label);
+//     if (iter == mBulkTimers.end())
+//     {
+//         auto& metric =
+//             mApp.getMetrics().NewTimer({"bucketlistDB", "bulk", label});
+//         iter = mBulkTimers.emplace(label, metric).first;
+//     }
 
-    return iter->second;
-}
+//     return iter->second;
+// }
 
 void
 BucketSnapshotManager::maybeUpdateSnapshot(

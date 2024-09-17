@@ -755,7 +755,7 @@ string
 Simulation::metricsSummary(string domain)
 {
     auto& registry = getNodes().front()->getMetrics();
-    auto const& metrics = registry.GetAllMetrics();
+    auto metrics = registry.GetAllMetrics();
     std::stringstream out;
 
     ConsoleReporterWithSum reporter{registry, out};

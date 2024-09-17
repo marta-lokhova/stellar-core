@@ -19,7 +19,7 @@ TEST_CASE("cannot close ledger with unsupported ledger version", "[ledger]")
     app->start();
 
     auto applyEmptyLedger = [&]() {
-        auto const& lcl = app->getLedgerManager().getLastClosedLedgerHeader();
+        auto lcl = app->getLedgerManager().getLastClosedLedgerHeader();
         auto txSet = TxSetXDRFrame::makeEmpty(lcl);
         StellarValue sv = app->getHerder().makeStellarValue(
             txSet->getContentsHash(), 1, emptyUpgradeSteps,

@@ -58,6 +58,7 @@ StateSnapshot::writeHistoryBlocks() const
         mApp.getDatabase().canUsePool()
             ? std::make_unique<soci::session>(mApp.getDatabase().getPool())
             : nullptr);
+    // TODO: SCP messages need to be grabbed from a different database
     soci::session& sess(snapSess ? *snapSess : mApp.getDatabase().getSession());
     soci::transaction tx(sess);
 

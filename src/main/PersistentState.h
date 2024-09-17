@@ -19,23 +19,28 @@ class PersistentState
 
     enum Entry
     {
-        kLastClosedLedger = 0,
+        // Main database entries
+        kLastClosedLedger,
         kHistoryArchiveState,
-        kLastSCPData,
         kDatabaseSchema,
         kNetworkPassphrase,
-        kLedgerUpgrades,
         kRebuildLedger,
+        kDBBackend,
+        kLastEntryMain, // Marker for the end of main database entries
+
+        // Misc database entries
+        kLastSCPData = kLastEntryMain + 1,
+        kLedgerUpgrades,
         kLastSCPDataXDR,
         kTxSet,
-        kDBBackend,
-        kLastEntry,
+        kLastEntry // Marker for the end of misc database entries
     };
 
     static void dropAll(Database& db);
 
     std::string getState(Entry stateName);
-    void setState(Entry stateName, std::string const& value);
+    void setState(Entry stateName, std::string const& value,
+                  soci::session& session);
 
     // Special methods for SCP state (multiple slots)
     std::vector<std::string> getSCPStateAllSlots();
@@ -55,7 +60,8 @@ class PersistentState
 
   private:
     static std::string kSQLCreateStatement;
-    static std::string mapping[kLastEntry];
+    static std::string mainMapping[kLastEntryMain];
+    static std::string miscMapping[kLastEntry];
 
     Application& mApp;
 
@@ -63,8 +69,14 @@ class PersistentState
     std::string getStoreStateNameForTxSet(Hash const& txSetHash);
 
     void setSCPStateForSlot(uint64 slot, std::string const& value);
-    void updateDb(std::string const& entry, std::string const& value);
+    void updateDb(std::string const& entry, std::string const& value,
+                  soci::session& session);
+
     std::string getFromDb(std::string const& entry);
+    std::string getFromDb(std::string const& entry, soci::session& session);
+
     bool entryExists(std::string const& entry);
+    soci::session& getSessionForEntry(std::string const& entry,
+                                      soci::session& session);
 };
 }

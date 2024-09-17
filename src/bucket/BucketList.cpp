@@ -55,7 +55,7 @@ BucketLevel::getNext()
 void
 BucketLevel::setNext(FutureBucket const& fb)
 {
-    releaseAssert(threadIsMain());
+    // releaseAssert(threadIsMain());
     mNextCurr = fb;
 }
 
@@ -74,7 +74,7 @@ BucketLevel::getSnap() const
 void
 BucketLevel::setCurr(std::shared_ptr<Bucket> b)
 {
-    releaseAssert(threadIsMain());
+    // releaseAssert(threadIsMain());
     mNextCurr.clear();
     mCurr = b;
 }
@@ -509,6 +509,7 @@ BucketList::getSize() const
     return sum;
 }
 
+// TODO: thread-safe BL update?
 void
 BucketList::addBatch(Application& app, uint32_t currLedger,
                      uint32_t currLedgerProtocol,

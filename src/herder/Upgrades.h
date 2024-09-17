@@ -8,8 +8,10 @@
 
 #include "main/Application.h"
 #include "main/Config.h"
+#include "transactions/TransactionFrameBase.h"
 #include "util/Timer.h"
 #include <optional>
+#include <soci.h>
 #include <stdint.h>
 #include <vector>
 
@@ -23,6 +25,7 @@ struct LedgerUpgrade;
 class LedgerSnapshot;
 
 class ConfigUpgradeSetFrame;
+class SearchableBucketListSnapshot;
 using ConfigUpgradeSetFrameConstPtr =
     std::shared_ptr<ConfigUpgradeSetFrame const>;
 
@@ -120,13 +123,14 @@ class Upgrades
 
     static void dropAll(Database& db);
 
-    static void storeUpgradeHistory(Database& db, uint32_t ledgerSeq,
+    static void storeUpgradeHistory(Database& db, soci::session& session,
+                                    uint32_t ledgerSeq,
                                     LedgerUpgrade const& upgrade,
                                     LedgerEntryChanges const& changes,
                                     int index);
-    static void deleteOldEntries(Database& db, uint32_t ledgerSeq,
+    static void deleteOldEntries(soci::session& sess, uint32_t ledgerSeq,
                                  uint32_t count);
-    static void deleteNewerEntries(Database& db, uint32_t ledgerSeq);
+    static void deleteNewerEntries(soci::session& sess, uint32_t ledgerSeq);
 
   private:
     UpgradeParameters mParams;

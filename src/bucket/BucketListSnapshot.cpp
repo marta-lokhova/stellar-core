@@ -17,7 +17,7 @@ BucketListSnapshot::BucketListSnapshot(BucketList const& bl,
                                        LedgerHeader header)
     : mHeader(std::move(header))
 {
-    releaseAssert(threadIsMain());
+    // releaseAssert(threadIsMain());
 
     for (uint32_t i = 0; i < BucketList::kNumLevels; ++i)
     {
@@ -242,9 +242,9 @@ SearchableBucketListSnapshot::loadKeysWithLimits(
 
     if (threadIsMain())
     {
-        auto timer =
-            mSnapshotManager.recordBulkLoadMetrics("prefetch", inKeys.size())
-                .TimeScope();
+        // auto timer =
+        //     mSnapshotManager.recordBulkLoadMetrics("prefetch", inKeys.size())
+        //         .TimeScope();
         return loadKeysInternal(inKeys, *mSnapshot, lkMeter);
     }
     else
@@ -286,10 +286,10 @@ SearchableBucketListSnapshot::loadPoolShareTrustLinesByAccountAndAsset(
 
     loopAllBuckets(trustLineLoop, *mSnapshot);
 
-    auto timer = mSnapshotManager
-                     .recordBulkLoadMetrics("poolshareTrustlines",
-                                            trustlinesToLoad.size())
-                     .TimeScope();
+    // auto timer = mSnapshotManager
+    //                  .recordBulkLoadMetrics("poolshareTrustlines",
+    //                                         trustlinesToLoad.size())
+    //                  .TimeScope();
     return loadKeysInternal(trustlinesToLoad, *mSnapshot, nullptr);
 }
 
@@ -304,8 +304,9 @@ SearchableBucketListSnapshot::loadInflationWinners(size_t maxWinners,
     // This is a legacy query, should only be called by main thread during
     // catchup
     releaseAssert(threadIsMain());
-    auto timer = mSnapshotManager.recordBulkLoadMetrics("inflationWinners", 0)
-                     .TimeScope();
+    // auto timer = mSnapshotManager.recordBulkLoadMetrics("inflationWinners",
+    // 0)
+    //                  .TimeScope();
 
     UnorderedMap<AccountID, int64_t> voteCount;
     UnorderedSet<AccountID> seen;

@@ -1625,8 +1625,7 @@ TEST_CASE("settings upgrade", "[tx][soroban][upgrades]")
         auto ledgerUpgrade = LedgerUpgrade{LEDGER_UPGRADE_CONFIG};
         ledgerUpgrade.newConfig() = key;
 
-        auto const& lcl =
-            test.getApp().getLedgerManager().getLastClosedLedgerHeader();
+        auto lcl = test.getApp().getLedgerManager().getLastClosedLedgerHeader();
         auto txSet = TxSetXDRFrame::makeEmpty(lcl);
         auto lastCloseTime = lcl.header.scpValue.closeTime;
 
@@ -3183,7 +3182,7 @@ TEST_CASE("settings upgrade command line utils", "[tx][soroban][upgrades]")
             auto ledgerUpgrade = LedgerUpgrade{LEDGER_UPGRADE_CONFIG};
             ledgerUpgrade.newConfig() = upgradeSetKey;
 
-            auto const& lcl = lm.getLastClosedLedgerHeader();
+            auto lcl = lm.getLastClosedLedgerHeader();
             auto txSet = TxSetXDRFrame::makeEmpty(lcl);
             auto lastCloseTime = lcl.header.scpValue.closeTime;
 
@@ -3230,7 +3229,7 @@ TEST_CASE("settings upgrade command line utils", "[tx][soroban][upgrades]")
         auto ledgerUpgrade = LedgerUpgrade{LEDGER_UPGRADE_CONFIG};
         ledgerUpgrade.newConfig() = upgradeSetKey2;
 
-        auto const& lcl = lm.getLastClosedLedgerHeader();
+        auto lcl = lm.getLastClosedLedgerHeader();
         auto txSet = TxSetXDRFrame::makeEmpty(lcl);
         auto lastCloseTime = lcl.header.scpValue.closeTime;
 
@@ -3263,7 +3262,7 @@ TEST_CASE("settings upgrade command line utils", "[tx][soroban][upgrades]")
         closeLedger(*app);
     }
 
-    auto const& lcl = lm.getLastClosedLedgerHeader();
+    auto lcl = lm.getLastClosedLedgerHeader();
 
     // The only readWrite key in the invoke op is the one that writes the
     // ConfigUpgradeSet xdr

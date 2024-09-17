@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <soci.h>
 
 /////////////////////////////////////////////////////////////////////////////
 //  Overview
@@ -536,6 +537,8 @@ class AbstractLedgerTxnParent
     // prepares to increase the capacity of pending changes by up to "s" changes
     virtual void prepareNewObjects(size_t s) = 0;
 
+    virtual soci::session& getSession() const = 0;
+
 #ifdef BUILD_TESTS
     virtual void resetForFuzzer() = 0;
 #endif // BUILD_TESTS
@@ -836,6 +839,7 @@ class LedgerTxn : public AbstractLedgerTxn
     uint32_t prefetchSoroban(UnorderedSet<LedgerKey> const& keys,
                              LedgerKeyMeter* lkMeter) override;
     void prepareNewObjects(size_t s) override;
+    soci::session& getSession() const override;
 
     bool hasSponsorshipEntry() const override;
 
@@ -941,5 +945,8 @@ class LedgerTxnRoot : public AbstractLedgerTxnParent
                      OfferDescriptor const* worseThan,
                      std::unordered_set<int64_t>& exclude) override;
 #endif
+    // TODO: quite ugly, but ok for the prototype. Session shouldn't live in
+    // LedgerTxn
+    soci::session& getSession() const override;
 };
 }

@@ -4,8 +4,10 @@
 
 #include "bucket/BucketInputIterator.h"
 #include "bucket/BucketList.h"
+#include "bucket/BucketListSnapshot.h"
 #include "bucket/BucketManager.h"
 #include "bucket/BucketManagerImpl.h"
+#include "bucket/BucketSnapshotManager.h"
 #include "bucket/test/BucketTestUtils.h"
 #include "crypto/Random.h"
 #include "herder/Herder.h"
@@ -580,7 +582,7 @@ TEST_CASE("Ledger Manager applies upgrades properly", "[upgrades]")
     cfg.USE_CONFIG_FOR_GENESIS = false;
     auto app = createTestApplication(clock, cfg);
 
-    auto const& lcl = app->getLedgerManager().getLastClosedLedgerHeader();
+    auto lcl = app->getLedgerManager().getLastClosedLedgerHeader();
 
     REQUIRE(lcl.header.ledgerVersion == LedgerManager::GENESIS_LEDGER_VERSION);
     REQUIRE(lcl.header.baseFee == LedgerManager::GENESIS_LEDGER_BASE_FEE);
@@ -2166,6 +2168,7 @@ TEST_CASE("upgrade to version 12", "[upgrades]")
         }
     }
 }
+
 // There is a subtle inconsistency where for a ledger that upgrades from
 // protocol vN to vN+1 that also changed LedgerCloseMeta version, the ledger
 // header will be protocol vN+1, but the meta emitted for that ledger will be

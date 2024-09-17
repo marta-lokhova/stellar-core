@@ -163,6 +163,9 @@ Config::Config() : NODE_SEED(SecretKey::random())
     CATCHUP_RECENT = 0;
     EXPERIMENTAL_PRECAUTION_DELAY_META = false;
     EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING = false;
+    EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE = true;
+    EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE_DELAY =
+        std::chrono::milliseconds::zero();
     DEPRECATED_SQL_LEDGER_STATE = false;
     BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT = 14; // 2^14 == 16 kb
     BUCKETLIST_DB_INDEX_CUTOFF = 20;             // 20 mb
@@ -180,7 +183,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     //   * (359) / (24*3600) = 6.56 days
     AUTOMATIC_MAINTENANCE_COUNT = 400;
     // automatic self-check happens once every 3 hours
-    AUTOMATIC_SELF_CHECK_PERIOD = std::chrono::seconds{3 * 60 * 60};
+    AUTOMATIC_SELF_CHECK_PERIOD = std::chrono::seconds(0);
     ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING = false;
     ARTIFICIALLY_ACCELERATE_TIME_FOR_TESTING = false;
     ARTIFICIALLY_SET_CLOSE_TIME_FOR_TESTING = 0;
@@ -1683,7 +1686,7 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
         // Validators default to starting the network from local state
         FORCE_SCP = NODE_IS_VALIDATOR;
 
-        // Require either DEPRECATED_SQL_LEDGER_STATE or
+        // Require either : or
         // EXPERIMENTAL_BUCKETLIST_DB to be backwards compatible with horizon
         // and RPC, but do not allow both.
         if (!t->contains("DEPRECATED_SQL_LEDGER_STATE") &&
@@ -1980,6 +1983,10 @@ Config::logBasicInfo()
              "EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING="
              "{}",
              EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING ? "true" : "false");
+    LOG_INFO(DEFAULT_LOG,
+             "EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE="
+             "{}",
+             EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE ? "true" : "false");
 }
 
 void

@@ -32,61 +32,6 @@ createTxSetHistoryTable(Database& db)
 }
 
 void
-storeTransaction(Database& db, uint32_t ledgerSeq,
-                 TransactionFrameBasePtr const& tx, TransactionMeta const& tm,
-                 TransactionResultSet const& resultSet, Config const& cfg)
-{
-    ZoneScoped;
-    std::string txBody =
-        decoder::encode_b64(xdr::xdr_to_opaque(tx->getEnvelope()));
-    std::string txResult =
-        decoder::encode_b64(xdr::xdr_to_opaque(resultSet.results.back()));
-    std::string meta = decoder::encode_b64(xdr::xdr_to_opaque(tm));
-
-    std::string txIDString = binToHex(tx->getContentsHash());
-    uint32_t txIndex = static_cast<uint32_t>(resultSet.results.size());
-
-    std::string sqlStr;
-    if (cfg.isUsingBucketListDB())
-    {
-        sqlStr = "INSERT INTO txhistory "
-                 "( txid, ledgerseq, txindex,  txbody, txresult) VALUES "
-                 "(:id,  :seq,      :txindex, :txb,   :txres)";
-    }
-    else
-    {
-        sqlStr =
-            "INSERT INTO txhistory "
-            "( txid, ledgerseq, txindex,  txbody, txresult, txmeta) VALUES "
-            "(:id,  :seq,      :txindex, :txb,   :txres,   :meta)";
-    }
-
-    auto prep = db.getPreparedStatement(sqlStr);
-    auto& st = prep.statement();
-    st.exchange(soci::use(txIDString));
-    st.exchange(soci::use(ledgerSeq));
-    st.exchange(soci::use(txIndex));
-    st.exchange(soci::use(txBody));
-    st.exchange(soci::use(txResult));
-
-    if (!cfg.isUsingBucketListDB())
-    {
-        st.exchange(soci::use(meta));
-    }
-
-    st.define_and_bind();
-    {
-        auto timer = db.getInsertTimer("txhistory");
-        st.execute(true);
-    }
-
-    if (st.get_affected_rows() != 1)
-    {
-        throw std::runtime_error("Could not update data in SQL");
-    }
-}
-
-void
 dropSupportTransactionFeeHistory(Database& db)
 {
     ZoneScoped;
@@ -103,6 +48,7 @@ dropSupportTxSetHistory(Database& db)
 void
 dropTransactionHistory(Database& db, Config const& cfg)
 {
+    releaseAssert(threadIsMain());
     ZoneScoped;
     db.getSession() << "DROP TABLE IF EXISTS txhistory";
 
@@ -126,19 +72,19 @@ dropTransactionHistory(Database& db, Config const& cfg)
 }
 
 void
-deleteOldTransactionHistoryEntries(Database& db, uint32_t ledgerSeq,
+deleteOldTransactionHistoryEntries(soci::session& sess, uint32_t ledgerSeq,
                                    uint32_t count)
 {
     ZoneScoped;
-    DatabaseUtils::deleteOldEntriesHelper(db.getSession(), ledgerSeq, count,
+    DatabaseUtils::deleteOldEntriesHelper(sess, ledgerSeq, count,
                                           "txhistory", "ledgerseq");
 }
 
 void
-deleteNewerTransactionHistoryEntries(Database& db, uint32_t ledgerSeq)
+deleteNewerTransactionHistoryEntries(soci::session& sess, uint32_t ledgerSeq)
 {
     ZoneScoped;
-    DatabaseUtils::deleteNewerEntriesHelper(db.getSession(), ledgerSeq,
+    DatabaseUtils::deleteNewerEntriesHelper(sess, ledgerSeq,
                                             "txhistory", "ledgerseq");
 }
 

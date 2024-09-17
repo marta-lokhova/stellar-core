@@ -29,6 +29,10 @@ CheckSingleLedgerHeaderWork::CheckSingleLedgerHeaderWork(
           app.getMetrics().NewMeter({"history", "check", "success"}, "event"))
     , mCheckFailed(
           app.getMetrics().NewMeter({"history", "check", "failure"}, "event"))
+    , mLedgerCheckSuccess(app.getMetrics().NewMeter(
+          {"history", "ledger-check", "success"}, "event"))
+    , mLedgerCheckFailed(app.getMetrics().NewMeter(
+          {"history", "ledger-check", "failure"}, "event"))
 {
 }
 
@@ -116,10 +120,7 @@ CheckSingleLedgerHeaderWork::doWork()
                     CLOG_INFO(History,
                               "Local ledger header {} matches archive {}",
                               mExpected.header.ledgerSeq, mArchive->getName());
-                    mApp.getMetrics()
-                        .NewMeter({"history", "ledger-check", "success"},
-                                  "event")
-                        .Mark();
+                    mLedgerCheckSuccess.Mark();
                     return State::WORK_SUCCESS;
                 }
                 else
@@ -132,10 +133,7 @@ CheckSingleLedgerHeaderWork::doWork()
                                xdr::xdr_to_string(mExpected, "Local Header"));
                     CLOG_ERROR(History, "Found: {}",
                                xdr::xdr_to_string(lhhe, "Archive Header"));
-                    mApp.getMetrics()
-                        .NewMeter({"history", "ledger-check", "failure"},
-                                  "event")
-                        .Mark();
+                    mLedgerCheckFailed.Mark();
                     return State::WORK_FAILURE;
                 }
             }

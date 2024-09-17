@@ -40,6 +40,22 @@ class SorobanMetrics;
 class LedgerManager
 {
   public:
+    struct ExternalizeInfo
+    {
+        bool mExternalized;
+        std::optional<bool> mIsLatest;
+    };
+    static ExternalizeInfo
+    makeCatchupInfo()
+    {
+        return ExternalizeInfo{false, std::nullopt};
+    }
+    static ExternalizeInfo
+    makeExternalizeInfo(bool isLatest)
+    {
+        return ExternalizeInfo{true, isLatest};
+    }
+
     static const uint32_t GENESIS_LEDGER_SEQ;
     static const uint32_t GENESIS_LEDGER_VERSION;
     static const uint32_t GENESIS_LEDGER_BASE_FEE;
@@ -90,11 +106,11 @@ class LedgerManager
     // close event. This is the most common cause of LedgerManager advancing
     // from one ledger to the next: the network reached consensus on
     // `ledgerData`.
-    virtual void valueExternalized(LedgerCloseData const& ledgerData) = 0;
+    virtual void valueExternalized(LedgerCloseData const& ledgerData,
+                                   bool isLatestSlot) = 0;
 
     // Return the LCL header and (complete, immutable) hash.
-    virtual LedgerHeaderHistoryEntry const&
-    getLastClosedLedgerHeader() const = 0;
+    virtual LedgerHeaderHistoryEntry getLastClosedLedgerHeader() const = 0;
 
     // return the HAS that corresponds to the last closed ledger as persisted in
     // the database
@@ -102,6 +118,11 @@ class LedgerManager
 
     // Return the sequence number of the LCL.
     virtual uint32_t getLastClosedLedgerNum() const = 0;
+
+    virtual std::unordered_map<AccountID, TransactionFrameBaseConstPtr>
+    getCurrentlyAppliedTxSet() const = 0;
+    virtual void beginApply(LedgerCloseData const&) = 0;
+    virtual bool sourceAccountPending(AccountID const& id) const = 0;
 
     // Return the minimum balance required to establish, in the current ledger,
     // a new ledger entry with `ownerCount` owned objects.  Derived from the
@@ -178,7 +199,15 @@ class LedgerManager
     // changes.  This is normally done automatically as part of
     // `valueExternalized()`; this method is present in the public interface to
     // permit testing.
-    virtual void closeLedger(LedgerCloseData const& ledgerData) = 0;
+    virtual void closeLedger(LedgerCloseData const& ledgerData,
+                             ExternalizeInfo externalize) = 0;
+#ifdef BUILD_TESTS
+    void
+    closeLedger(LedgerCloseData const& ledgerData)
+    {
+        closeLedger(ledgerData, makeCatchupInfo());
+    }
+#endif
 
     // deletes old entries stored in the database
     virtual void deleteOldEntries(Database& db, uint32_t ledgerSeq,

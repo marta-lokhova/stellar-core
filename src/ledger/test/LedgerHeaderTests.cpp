@@ -31,7 +31,7 @@ TEST_CASE("genesisledger", "[ledger]")
     auto app = Application::create<ApplicationImpl>(clock, cfg);
     app->start();
 
-    auto const& lcl = app->getLedgerManager().getLastClosedLedgerHeader();
+    auto lcl = app->getLedgerManager().getLastClosedLedgerHeader();
     auto const& header = lcl.header;
     REQUIRE(header.ledgerVersion == 0);
     REQUIRE(header.previousLedgerHash == Hash{});
@@ -68,7 +68,7 @@ TEST_CASE("ledgerheader", "[ledger]")
         Application::pointer app = Application::create(clock, cfg);
         app->start();
 
-        auto const& lcl = app->getLedgerManager().getLastClosedLedgerHeader();
+        auto lcl = app->getLedgerManager().getLastClosedLedgerHeader();
         auto txSet = TxSetXDRFrame::makeEmpty(lcl);
 
         // close this ledger
@@ -101,7 +101,7 @@ TEST_CASE_VERSIONS("base reserve", "[ledger]")
     VirtualClock clock;
     auto app = createTestApplication(clock, cfg);
 
-    auto const& lcl = app->getLedgerManager().getLastClosedLedgerHeader();
+    auto lcl = app->getLedgerManager().getLastClosedLedgerHeader();
     REQUIRE(lcl.header.baseReserve == 100000000);
     const uint32 n = 20000;
     int64 expectedReserve = 2000200000000ll;

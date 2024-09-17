@@ -90,6 +90,8 @@ class ApplicationImpl : public Application
 
     virtual void postOnOverlayThread(std::function<void()>&& f,
                                      std::string jobName) override;
+    virtual void postOnLedgerCloseThread(std::function<void()>&& f,
+                                         std::string jobName) override;
     virtual void start() override;
     void startServices();
 
@@ -156,6 +158,9 @@ class ApplicationImpl : public Application
     std::unique_ptr<asio::io_context> mOverlayIOContext;
     std::unique_ptr<asio::io_context::work> mOverlayWork;
 
+    std::unique_ptr<asio::io_context> mLedgerCloseIOContext;
+    std::unique_ptr<asio::io_context::work> mLedgeCloseWork;
+
     std::unique_ptr<BucketManager> mBucketManager;
     std::unique_ptr<Database> mDatabase;
     std::unique_ptr<OverlayManager> mOverlayManager;
@@ -200,6 +205,7 @@ class ApplicationImpl : public Application
 
     std::vector<std::thread> mWorkerThreads;
     std::optional<std::thread> mOverlayThread;
+    std::optional<std::thread> mLedgerCloseThread;
 
     // Unlike mWorkerThreads (which are low priority), eviction scans require a
     // medium priority thread. In the future, this may become a more general
@@ -210,7 +216,7 @@ class ApplicationImpl : public Application
     asio::signal_set mStopSignals;
 
     bool mStarted;
-    bool mStopping;
+    std::atomic<bool> mStopping;
 
     VirtualTimer mStoppingTimer;
     VirtualTimer mSelfCheckTimer;

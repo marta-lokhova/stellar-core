@@ -189,6 +189,12 @@ void InMemoryLedgerTxnRoot::prepareNewObjects(size_t)
 {
 }
 
+soci::session&
+InMemoryLedgerTxnRoot::getSession() const
+{
+    throw std::runtime_error("ERROR!!");
+}
+
 #ifdef BUILD_TESTS
 void
 InMemoryLedgerTxnRoot::resetForFuzzer()

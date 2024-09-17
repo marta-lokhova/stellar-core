@@ -103,9 +103,17 @@ CatchupManagerImpl::getCatchupCount()
                : mApp.getConfig().CATCHUP_RECENT;
 }
 
-void
-CatchupManagerImpl::processLedger(LedgerCloseData const& ledgerData)
+bool
+CatchupManagerImpl::processLedger(LedgerCloseData const& ledgerData,
+                                  bool isLatestSlot)
 {
+    if (!mLastApplied)
+    {
+        mLastApplied = mApp.getLedgerManager().getLastClosedLedgerNum();
+    }
+    mLastApplied = std::max(*mLastApplied,
+                            mApp.getLedgerManager().getLastClosedLedgerNum());
+
     ZoneScoped;
     if (catchupWorkIsDone())
     {
@@ -119,7 +127,25 @@ CatchupManagerImpl::processLedger(LedgerCloseData const& ledgerData)
         logAndUpdateCatchupStatus(true);
     }
 
+    // Always skip old ledgers
     uint32_t lastReceivedLedgerSeq = ledgerData.getLedgerSeq();
+    if (lastReceivedLedgerSeq <= *mLastApplied)
+    {
+        // If LCL is already at-or-ahead of the ledger we just received from the
+        // network, we're up to date. Return early, nothing to do.
+        CLOG_INFO(
+            Ledger,
+            "Skipping close ledger: local state is {}, more recent than {}",
+            *mLastApplied, ledgerData.getLedgerSeq());
+        return true;
+    }
+
+    // Always add ledger to apply
+    mSyncingLedgers.emplace(lastReceivedLedgerSeq, ledgerData);
+    CLOG_INFO(Ledger,
+              "Close of ledger {} buffered. mSyncingLedgers has {} ledgers",
+              ledgerData.getLedgerSeq(), mSyncingLedgers.size());
+
     mLargestLedgerSeqHeard =
         std::max(mLargestLedgerSeqHeard, lastReceivedLedgerSeq);
 
@@ -127,18 +153,10 @@ CatchupManagerImpl::processLedger(LedgerCloseData const& ledgerData)
     // 2. CatchupManager received  ledger that was immediately applied by
     // LedgerManager: check if we have any sequential ledgers.
     // If so, attempt to apply mSyncingLedgers and possibly get back in sync
-    if (!mCatchupWork && lastReceivedLedgerSeq ==
-                             mApp.getLedgerManager().getLastClosedLedgerNum())
+    if (!mCatchupWork && lastReceivedLedgerSeq == *mLastApplied + 1)
     {
         tryApplySyncingLedgers();
-        return;
-    }
-    else if (lastReceivedLedgerSeq <=
-             mApp.getLedgerManager().getLastClosedLedgerNum())
-    {
-        // If LCL is already at-or-ahead of the ledger we just received from the
-        // network, we're up to date. Return early, nothing to do.
-        return;
+        return true;
     }
 
     // For the rest of this method: we know LCL has fallen behind the network
@@ -160,17 +178,17 @@ CatchupManagerImpl::processLedger(LedgerCloseData const& ledgerData)
         auto const& config = mCatchupWork->getCatchupConfiguration();
         if (ledgerData.getLedgerSeq() <= config.toLedger())
         {
-            return;
+            return false;
         }
 
-        addAndTrimSyncingLedgers(ledgerData);
+        trimSyncingLedgers();
         logAndUpdateCatchupStatus(true);
-        return;
+        return false;
     }
 
     // Next, we buffer every out of sync ledger to allow us to get back in sync
     // in case the ledgers we're missing are received.
-    addAndTrimSyncingLedgers(ledgerData);
+    trimSyncingLedgers();
 
     // Finally we wait some number of ledgers beyond the smallest buffered
     // checkpoint ledger before we trigger the CatchupWork. This could be any
@@ -233,6 +251,7 @@ CatchupManagerImpl::processLedger(LedgerCloseData const& ledgerData)
         }
     }
     logAndUpdateCatchupStatus(true, message);
+    return false;
 }
 
 void
@@ -241,7 +260,14 @@ CatchupManagerImpl::startCatchup(
     std::set<std::shared_ptr<Bucket>> bucketsToRetain)
 {
     ZoneScoped;
-    auto lastClosedLedger = mApp.getLedgerManager().getLastClosedLedgerNum();
+    if (!mLastApplied)
+    {
+        mLastApplied = mApp.getLedgerManager().getLastClosedLedgerNum();
+    }
+    mLastApplied = std::max(*mLastApplied,
+                            mApp.getLedgerManager().getLastClosedLedgerNum());
+
+    auto lastClosedLedger = *mLastApplied;
     if ((configuration.toLedger() != CatchupConfiguration::CURRENT) &&
         (configuration.toLedger() <= lastClosedLedger))
     {
@@ -329,10 +355,12 @@ CatchupManagerImpl::logAndUpdateCatchupStatus(bool contiguous)
 std::optional<LedgerCloseData>
 CatchupManagerImpl::maybeGetNextBufferedLedgerToApply()
 {
+    releaseAssert(threadIsMain());
+    mLastApplied = std::max(*mLastApplied,
+                            mApp.getLedgerManager().getLastClosedLedgerNum());
     trimSyncingLedgers();
     if (!mSyncingLedgers.empty() &&
-        mSyncingLedgers.begin()->first ==
-            mApp.getLedgerManager().getLastClosedLedgerNum() + 1)
+        mSyncingLedgers.begin()->first == *mLastApplied + 1)
     {
         return std::make_optional<LedgerCloseData>(
             mSyncingLedgers.begin()->second);
@@ -370,17 +398,6 @@ CatchupManagerImpl::syncMetrics()
 }
 
 void
-CatchupManagerImpl::addAndTrimSyncingLedgers(LedgerCloseData const& ledgerData)
-{
-    mSyncingLedgers.emplace(ledgerData.getLedgerSeq(), ledgerData);
-    trimSyncingLedgers();
-
-    CLOG_INFO(Ledger,
-              "Close of ledger {} buffered. mSyncingLedgers has {} ledgers",
-              ledgerData.getLedgerSeq(), mSyncingLedgers.size());
-}
-
-void
 CatchupManagerImpl::startOnlineCatchup()
 {
     releaseAssert(mSyncingLedgers.size() > 1);
@@ -408,7 +425,7 @@ CatchupManagerImpl::trimSyncingLedgers()
         // This erases [begin, it).
         mSyncingLedgers.erase(mSyncingLedgers.begin(), it);
     };
-    removeLedgersLessThan(mApp.getLedgerManager().getLastClosedLedgerNum() + 1);
+    removeLedgersLessThan(*mLastApplied + 1);
     auto& hm = mApp.getHistoryManager();
     if (!mSyncingLedgers.empty())
     {
@@ -439,8 +456,7 @@ void
 CatchupManagerImpl::tryApplySyncingLedgers()
 {
     ZoneScoped;
-    auto const& ledgerHeader =
-        mApp.getLedgerManager().getLastClosedLedgerHeader();
+    uint32_t nextToClose = *mLastApplied + 1;
 
     // We can apply multiple ledgers here, which might be slow. This is a rare
     // occurrence so we should be fine.
@@ -450,16 +466,34 @@ CatchupManagerImpl::tryApplySyncingLedgers()
         auto const& lcd = it->second;
 
         // we still have a missing ledger
-        if (ledgerHeader.header.ledgerSeq + 1 != lcd.getLedgerSeq())
+        if (nextToClose != lcd.getLedgerSeq())
         {
             break;
         }
 
-        mApp.getLedgerManager().closeLedger(lcd);
-        CLOG_INFO(History, "Closed buffered ledger: {}",
-                  LedgerManager::ledgerAbbrev(ledgerHeader));
+        mApp.getLedgerManager().beginApply(lcd);
+        if (mApp.getConfig().EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE)
+        {
+            mApp.postOnLedgerCloseThread(
+                [&app = mApp, lcd]() {
+                    if (app.isStopping())
+                    {
+                        return;
+                    }
+                    app.getLedgerManager().closeLedger(
+                        lcd, LedgerManager::makeExternalizeInfo(true));
+                },
+                "closeLedger::background");
+        }
+        else
+        {
+            mApp.getLedgerManager().closeLedger(
+                lcd, LedgerManager::makeExternalizeInfo(true));
+        }
+        mLastApplied = lcd.getLedgerSeq();
 
         ++it;
+        ++nextToClose;
     }
 
     mSyncingLedgers.erase(mSyncingLedgers.cbegin(), it);

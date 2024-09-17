@@ -455,8 +455,7 @@ TEST_CASE("Flooding", "[flood][overlay][acceptance]")
             qset.validators.emplace_back(sources[i]);
 
             Hash qSetHash = sha256(xdr::xdr_to_opaque(qset));
-            auto const& lcl =
-                inApp->getLedgerManager().getLastClosedLedgerHeader();
+            auto lcl = inApp->getLedgerManager().getLastClosedLedgerHeader();
             // build an SCP message for the next ledger
             auto ct = std::max<uint64>(
                 lcl.header.scpValue.closeTime + 1,
@@ -486,8 +485,7 @@ TEST_CASE("Flooding", "[flood][overlay][acceptance]")
         auto ackedSCP = [&](std::shared_ptr<Application> app) {
             // checks if an app received and processed all SCP messages
             size_t okCount = 0;
-            auto const& lcl =
-                app->getLedgerManager().getLastClosedLedgerHeader();
+            auto lcl = app->getLedgerManager().getLastClosedLedgerHeader();
 
             HerderImpl& herder = *static_cast<HerderImpl*>(&app->getHerder());
             herder.getSCP().processCurrentState(

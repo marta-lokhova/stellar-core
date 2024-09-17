@@ -83,7 +83,7 @@ class BucketSnapshotManager : NonMovableOrCopyable
     // All metric recording functions must only be called by the main thread
     void startPointLoadTimer() const;
     void endPointLoadTimer(LedgerEntryType t, bool bloomMiss) const;
-    medida::Timer& recordBulkLoadMetrics(std::string const& label,
-                                         size_t numEntries) const;
+    // medida::Timer& recordBulkLoadMetrics(std::string const& label,
+    //                                      size_t numEntries) const;
 };
 }

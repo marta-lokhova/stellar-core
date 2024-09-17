@@ -285,7 +285,7 @@ class SimulationHelper
         return std::make_pair(selectedLedger, selectedHash);
     }
 
-    LedgerHeaderHistoryEntry const&
+    LedgerHeaderHistoryEntry
     getMainNodeLCL()
     {
         return mSimulation->getNode(mMainNodeID)
@@ -293,7 +293,7 @@ class SimulationHelper
             .getLastClosedLedgerHeader();
     }
 
-    LedgerHeaderHistoryEntry const&
+    LedgerHeaderHistoryEntry
     getTestNodeLCL()
     {
         return mSimulation->getNode(mTestNodeID)

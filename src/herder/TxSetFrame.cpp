@@ -365,7 +365,7 @@ makeTxSetFromTransactions(TxSetPhaseTransactions const& txPhases,
 #endif
     }
 
-    auto const& lclHeader = app.getLedgerManager().getLastClosedLedgerHeader();
+    auto lclHeader = app.getLedgerManager().getLastClosedLedgerHeader();
     // Preliminary applicable frame - we don't know the contents hash yet, but
     // we also don't return this.
     std::unique_ptr<ApplicableTxSetFrame> preliminaryApplicableTxSet(
@@ -874,7 +874,7 @@ ApplicableTxSetFrame::checkValid(Application& app,
                                  uint64_t upperBoundCloseTimeOffset) const
 {
     ZoneScoped;
-    auto& lcl = app.getLedgerManager().getLastClosedLedgerHeader();
+    auto lcl = app.getLedgerManager().getLastClosedLedgerHeader();
 
     // Start by checking previousLedgerHash
     if (lcl.hash != mPreviousLedgerHash)
@@ -1387,7 +1387,7 @@ ApplicableTxSetFrame::applySurgePricing(Application& app)
     ZoneScoped;
     releaseAssert(mTxPhases.size() <=
                   static_cast<int>(TxSetPhase::PHASE_COUNT));
-    auto const& lclHeader =
+    auto const lclHeader =
         app.getLedgerManager().getLastClosedLedgerHeader().header;
     for (int i = 0; i < mTxPhases.size(); i++)
     {

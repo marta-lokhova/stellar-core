@@ -1284,6 +1284,13 @@ TransactionQueue::getQueueSizeOps() const
 std::optional<int64_t>
 TransactionQueue::getInQueueSeqNum(AccountID const& account) const
 {
+    auto accMap = mApp.getLedgerManager().getCurrentlyAppliedTxSet();
+    auto it = accMap.find(account);
+    if (it != accMap.end())
+    {
+        return it->second->getSeqNum();
+    }
+
     auto stateIter = mAccountStates.find(account);
     if (stateIter == mAccountStates.end())
     {

@@ -53,7 +53,8 @@ LedgerTxnRoot::Impl::loadTrustLine(LedgerKey const& key) const
     auto prep = mApp.getDatabase().getPreparedStatement(
         "SELECT ledgerentry "
         " FROM trustlines "
-        "WHERE accountid= :id AND asset= :asset");
+        "WHERE accountid= :id AND asset= :asset",
+        getSession());
     auto& st = prep.statement();
     st.exchange(soci::into(trustLineEntryStr));
     st.exchange(soci::use(accountIDStr));

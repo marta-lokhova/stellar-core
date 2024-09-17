@@ -101,6 +101,13 @@ ApplicationImpl::ApplicationImpl(VirtualClock& clock, Config const& cfg)
     , mOverlayWork(mOverlayIOContext ? std::make_unique<asio::io_context::work>(
                                            *mOverlayIOContext)
                                      : nullptr)
+    , mLedgerCloseIOContext(mConfig.EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE
+                                ? std::make_unique<asio::io_context>(1)
+                                : nullptr)
+    , mLedgeCloseWork(
+          mLedgerCloseIOContext
+              ? std::make_unique<asio::io_context::work>(*mLedgerCloseIOContext)
+              : nullptr)
     , mWorkerThreads()
     , mEvictionThread()
     , mStopSignals(clock.getIOContext(), SIGINT)
@@ -184,6 +191,14 @@ ApplicationImpl::ApplicationImpl(VirtualClock& clock, Config const& cfg)
     {
         // Keep priority unchanged as overlay processes time-sensitive tasks
         mOverlayThread = std::thread{[this]() { mOverlayIOContext->run(); }};
+    }
+
+    if (mConfig.EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE)
+    {
+        // Keep priority unchanged as ledger close processes time-sensitive
+        // tasks
+        mLedgerCloseThread =
+            std::thread{[this]() { mLedgerCloseIOContext->run(); }};
     }
 }
 
@@ -505,7 +520,7 @@ ApplicationImpl::getJsonInfo(bool verbose)
     info["protocol_version"] = getConfig().LEDGER_PROTOCOL_VERSION;
     info["state"] = getStateHuman();
     info["startedOn"] = VirtualClock::systemPointToISOString(mStartedOn);
-    auto const& lcl = lm.getLastClosedLedgerHeader();
+    auto lcl = lm.getLastClosedLedgerHeader();
     info["ledger"]["num"] = (int)lcl.header.ledgerSeq;
     info["ledger"]["hash"] = binToHex(lcl.hash);
     info["ledger"]["closeTime"] = (Json::UInt64)lcl.header.scpValue.closeTime;
@@ -788,7 +803,8 @@ ApplicationImpl::validateAndLogConfig()
         if (mConfig.isUsingBucketListDB())
         {
             mPersistentState->setState(PersistentState::kDBBackend,
-                                       BucketIndex::DB_BACKEND_STATE);
+                                       BucketIndex::DB_BACKEND_STATE,
+                                       getDatabase().getSession());
             auto pageSizeExp = mConfig.BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT;
             if (pageSizeExp != 0)
             {
@@ -1026,6 +1042,11 @@ ApplicationImpl::joinAllThreads()
         mOverlayWork.reset();
     }
 
+    if (mLedgeCloseWork)
+    {
+        mLedgeCloseWork.reset();
+    }
+
     LOG_INFO(DEFAULT_LOG, "Joining {} worker threads", mWorkerThreads.size());
     for (auto& w : mWorkerThreads)
     {
@@ -1047,6 +1068,12 @@ ApplicationImpl::joinAllThreads()
     {
         LOG_INFO(DEFAULT_LOG, "Joining the overlay thread");
         mOverlayThread->join();
+    }
+
+    if (mLedgerCloseThread)
+    {
+        LOG_INFO(DEFAULT_LOG, "Joining the ledger close thread");
+        mLedgerCloseThread->join();
     }
 
     LOG_INFO(DEFAULT_LOG, "Joined all {} threads", (mWorkerThreads.size() + 1));
@@ -1394,7 +1421,7 @@ void
 ApplicationImpl::clearMetrics(std::string const& domain)
 {
     MetricResetter resetter;
-    auto const& metrics = mMetrics->GetAllMetrics();
+    auto metrics = mMetrics->GetAllMetrics();
     for (auto const& kv : metrics)
     {
         if (domain.empty() || kv.first.domain() == domain)
@@ -1590,6 +1617,18 @@ ApplicationImpl::postOnOverlayThread(std::function<void()>&& f,
 }
 
 void
+ApplicationImpl::postOnLedgerCloseThread(std::function<void()>&& f,
+                                         std::string jobName)
+{
+    LogSlowExecution isSlow{std::move(jobName), LogSlowExecution::Mode::MANUAL,
+                            "executed after"};
+    asio::post(*mLedgerCloseIOContext, [this, f = std::move(f), isSlow]() {
+        // mPostOnLedgerCloseThreadDelay.Update(isSlow.checkElapsedTime());
+        f();
+    });
+}
+
+void
 ApplicationImpl::enableInvariantsFromConfig()
 {
     for (auto name : mConfig.INVARIANT_CHECKS)
@@ -1631,7 +1670,7 @@ ApplicationImpl::createDatabase()
 AbstractLedgerTxnParent&
 ApplicationImpl::getLedgerTxnRoot()
 {
-    releaseAssert(threadIsMain());
+    // releaseAssert(threadIsMain());
     return mConfig.MODE_USES_IN_MEMORY_LEDGER ? *mNeverCommittingLedgerTxn
                                               : *mLedgerTxnRoot;
 }

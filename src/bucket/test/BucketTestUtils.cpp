@@ -19,7 +19,7 @@ namespace BucketTestUtils
 uint32_t
 getAppLedgerVersion(Application& app)
 {
-    auto const& lcl = app.getLedgerManager().getLastClosedLedgerHeader();
+    auto lcl = app.getLedgerManager().getLastClosedLedgerHeader();
     return lcl.header.ledgerVersion;
 }
 

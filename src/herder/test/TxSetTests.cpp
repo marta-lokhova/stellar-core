@@ -612,8 +612,7 @@ TEST_CASE("generalized tx set XDR conversion", "[txset]")
     }
     SECTION("built from transactions")
     {
-        auto const& lclHeader =
-            app->getLedgerManager().getLastClosedLedgerHeader();
+        auto lclHeader = app->getLedgerManager().getLastClosedLedgerHeader();
         std::vector<TransactionFrameBasePtr> txs =
             createTxs(5, lclHeader.header.baseFee, /* isSoroban */ false);
         std::vector<TransactionFrameBasePtr> sorobanTxs =

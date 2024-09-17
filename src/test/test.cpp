@@ -338,6 +338,9 @@ getTestConfig(int instanceNumber, Config::TestDbMode mode)
         // Disable RPC endpoint in tests
         thisConfig.HTTP_QUERY_PORT = 0;
         thisConfig.QUERY_SNAPSHOT_LEDGERS = 0;
+        // Tests default to using SQL for ledger state
+        thisConfig.DEPRECATED_SQL_LEDGER_STATE = false;
+        thisConfig.EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE = true;
 
 #ifdef BEST_OFFER_DEBUGGING
         thisConfig.BEST_OFFER_DEBUGGING_ENABLED = true;
@@ -568,9 +571,9 @@ for_versions(std::vector<uint32> const& versions, Application& app,
         versions.end())
     {
         {
-            LedgerTxn ltx(app.getLedgerTxnRoot());
-            REQUIRE(ltx.loadHeader().current().ledgerVersion ==
-                    gTestingVersion);
+            REQUIRE(app.getLedgerManager()
+                        .getLastClosedLedgerHeader()
+                        .header.ledgerVersion == gTestingVersion);
         }
         f();
     }
