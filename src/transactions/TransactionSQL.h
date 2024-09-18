@@ -14,18 +14,15 @@ namespace stellar
 class Application;
 class XDROutputFileStream;
 
-void storeTransaction(Database& db, uint32_t ledgerSeq,
-                      TransactionFrameBasePtr const& tx,
-                      TransactionMeta const& tm,
-                      TransactionResultSet const& resultSet, Config const& cfg);
 void createTxSetHistoryTable(Database& db);
 void dropSupportTransactionFeeHistory(Database& db);
 void dropSupportTxSetHistory(Database& db);
 
 void dropTransactionHistory(Database& db, Config const& cfg);
 
-void deleteOldTransactionHistoryEntries(Database& db, uint32_t ledgerSeq,
+void deleteOldTransactionHistoryEntries(soci::session& sess, uint32_t ledgerSeq,
                                         uint32_t count);
 
-void deleteNewerTransactionHistoryEntries(Database& db, uint32_t ledgerSeq);
+void deleteNewerTransactionHistoryEntries(soci::session& sess,
+                                          uint32_t ledgerSeq);
 }

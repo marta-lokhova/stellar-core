@@ -43,7 +43,8 @@ LedgerTxnRoot::Impl::loadAccount(LedgerKey const& key) const
         "inflationdest, homedomain, thresholds, "
         "flags, lastmodified, "
         "signers, extension, "
-        "ledgerext FROM accounts WHERE accountid=:v1");
+        "ledgerext FROM accounts WHERE accountid=:v1",
+        getSession());
     auto& st = prep.statement();
     st.exchange(soci::into(account.balance));
     st.exchange(soci::into(account.seqNum));
@@ -109,7 +110,8 @@ LedgerTxnRoot::Impl::loadInflationWinners(size_t maxWinners,
         "SELECT sum(balance) AS votes, inflationdest"
         " FROM accounts WHERE inflationdest IS NOT NULL"
         " AND balance >= 1000000000 GROUP BY inflationdest"
-        " ORDER BY votes DESC, inflationdest DESC LIMIT :lim");
+        " ORDER BY votes DESC, inflationdest DESC LIMIT :lim",
+        getSession());
     auto& st = prep.statement();
     st.exchange(soci::into(w.votes));
     st.exchange(soci::into(inflationDest));
@@ -134,6 +136,7 @@ LedgerTxnRoot::Impl::loadInflationWinners(size_t maxWinners,
 class BulkUpsertAccountsOperation : public DatabaseTypeSpecificOperation<void>
 {
     Database& mDB;
+    soci::session& mSession;
     std::vector<std::string> mAccountIDs;
     std::vector<int64_t> mBalances;
     std::vector<int64_t> mSeqNums;
@@ -152,8 +155,9 @@ class BulkUpsertAccountsOperation : public DatabaseTypeSpecificOperation<void>
 
   public:
     BulkUpsertAccountsOperation(Database& DB,
-                                std::vector<EntryIterator> const& entries)
-        : mDB(DB)
+                                std::vector<EntryIterator> const& entries,
+                                soci::session& session)
+        : mDB(DB), mSession(session)
     {
         mAccountIDs.reserve(entries.size());
         mBalances.reserve(entries.size());
@@ -251,7 +255,7 @@ class BulkUpsertAccountsOperation : public DatabaseTypeSpecificOperation<void>
             "lastmodified = excluded.lastmodified, "
             "extension = excluded.extension, "
             "ledgerext = excluded.ledgerext";
-        auto prep = mDB.getPreparedStatement(sql);
+        auto prep = mDB.getPreparedStatement(sql, mSession);
         soci::statement& st = prep.statement();
         st.exchange(soci::use(mAccountIDs));
         st.exchange(soci::use(mBalances));
@@ -338,7 +342,7 @@ class BulkUpsertAccountsOperation : public DatabaseTypeSpecificOperation<void>
                           "lastmodified = excluded.lastmodified, "
                           "extension = excluded.extension, "
                           "ledgerext = excluded.ledgerext";
-        auto prep = mDB.getPreparedStatement(sql);
+        auto prep = mDB.getPreparedStatement(sql, mSession);
         soci::statement& st = prep.statement();
         st.exchange(soci::use(strAccountIDs));
         st.exchange(soci::use(strBalances));
@@ -445,7 +449,7 @@ LedgerTxnRoot::Impl::bulkUpsertAccounts(
 {
     ZoneScoped;
     ZoneValue(static_cast<int64_t>(entries.size()));
-    BulkUpsertAccountsOperation op(mApp.getDatabase(), entries);
+    BulkUpsertAccountsOperation op(mApp.getDatabase(), entries, getSession());
     mApp.getDatabase().doDatabaseTypeSpecificOperation(op);
 }
 

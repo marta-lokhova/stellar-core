@@ -22,7 +22,7 @@ LedgerTxnRoot::Impl::loadClaimableBalance(LedgerKey const& key) const
     std::string sql = "SELECT ledgerentry "
                       "FROM claimablebalance "
                       "WHERE balanceid= :balanceid";
-    auto prep = mApp.getDatabase().getPreparedStatement(sql);
+    auto prep = mApp.getDatabase().getPreparedStatement(sql, getSession());
     auto& st = prep.statement();
     st.exchange(soci::into(claimableBalanceEntryStr));
     st.exchange(soci::use(balanceID));
@@ -44,6 +44,7 @@ class BulkLoadClaimableBalanceOperation
 {
     Database& mDb;
     std::vector<std::string> mBalanceIDs;
+    soci::session& mSession;
 
     std::vector<LedgerEntry>
     executeAndFetch(soci::statement& st)
@@ -74,8 +75,9 @@ class BulkLoadClaimableBalanceOperation
 
   public:
     BulkLoadClaimableBalanceOperation(Database& db,
-                                      UnorderedSet<LedgerKey> const& keys)
-        : mDb(db)
+                                      UnorderedSet<LedgerKey> const& keys,
+                                      soci::session& session)
+        : mDb(db), mSession(session)
     {
         mBalanceIDs.reserve(keys.size());
         for (auto const& k : keys)
@@ -101,7 +103,7 @@ class BulkLoadClaimableBalanceOperation
                           "FROM claimablebalance "
                           "WHERE balanceid IN r";
 
-        auto prep = mDb.getPreparedStatement(sql);
+        auto prep = mDb.getPreparedStatement(sql, mSession);
         auto be = prep.statement().get_backend();
         if (be == nullptr)
         {
@@ -129,7 +131,7 @@ class BulkLoadClaimableBalanceOperation
                           "FROM claimablebalance "
                           "WHERE balanceid IN (SELECT * from r)";
 
-        auto prep = mDb.getPreparedStatement(sql);
+        auto prep = mDb.getPreparedStatement(sql, mSession);
         auto& st = prep.statement();
         st.exchange(soci::use(strBalanceIDs));
         return executeAndFetch(st);
@@ -143,7 +145,8 @@ LedgerTxnRoot::Impl::bulkLoadClaimableBalance(
 {
     if (!keys.empty())
     {
-        BulkLoadClaimableBalanceOperation op(mApp.getDatabase(), keys);
+        BulkLoadClaimableBalanceOperation op(mApp.getDatabase(), keys,
+                                             getSession());
         return populateLoadedEntries(
             keys, mApp.getDatabase().doDatabaseTypeSpecificOperation(op));
     }
@@ -159,12 +162,13 @@ class BulkDeleteClaimableBalanceOperation
     Database& mDb;
     LedgerTxnConsistency mCons;
     std::vector<std::string> mBalanceIDs;
+    soci::session& mSession;
 
   public:
     BulkDeleteClaimableBalanceOperation(
         Database& db, LedgerTxnConsistency cons,
-        std::vector<EntryIterator> const& entries)
-        : mDb(db), mCons(cons)
+        std::vector<EntryIterator> const& entries, soci::session& session)
+        : mDb(db), mCons(cons), mSession(session)
     {
         mBalanceIDs.reserve(entries.size());
         for (auto const& e : entries)
@@ -180,7 +184,7 @@ class BulkDeleteClaimableBalanceOperation
     doSociGenericOperation()
     {
         std::string sql = "DELETE FROM claimablebalance WHERE balanceid = :id";
-        auto prep = mDb.getPreparedStatement(sql);
+        auto prep = mDb.getPreparedStatement(sql, mSession);
         auto& st = prep.statement();
         st.exchange(soci::use(mBalanceIDs));
         st.define_and_bind();
@@ -212,7 +216,7 @@ class BulkDeleteClaimableBalanceOperation
                           "DELETE FROM claimablebalance "
                           "WHERE balanceid IN (SELECT * FROM r)";
 
-        auto prep = mDb.getPreparedStatement(sql);
+        auto prep = mDb.getPreparedStatement(sql, mSession);
         auto& st = prep.statement();
         st.exchange(soci::use(strBalanceIDs));
         st.define_and_bind();
@@ -233,7 +237,8 @@ void
 LedgerTxnRoot::Impl::bulkDeleteClaimableBalance(
     std::vector<EntryIterator> const& entries, LedgerTxnConsistency cons)
 {
-    BulkDeleteClaimableBalanceOperation op(mApp.getDatabase(), cons, entries);
+    BulkDeleteClaimableBalanceOperation op(mApp.getDatabase(), cons, entries,
+                                           getSession());
     mApp.getDatabase().doDatabaseTypeSpecificOperation(op);
 }
 

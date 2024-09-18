@@ -40,7 +40,7 @@ LedgerTxnRoot::Impl::loadData(LedgerKey const& key) const
                       "ledgerext "
                       "FROM accountdata "
                       "WHERE accountid= :id AND dataname= :dataname";
-    auto prep = mApp.getDatabase().getPreparedStatement(sql);
+    auto prep = mApp.getDatabase().getPreparedStatement(sql, getSession());
     auto& st = prep.statement();
     st.exchange(soci::into(dataValue, dataValueIndicator));
     st.exchange(soci::into(le.lastModifiedLedgerSeq));
@@ -74,6 +74,7 @@ LedgerTxnRoot::Impl::loadData(LedgerKey const& key) const
 class BulkUpsertDataOperation : public DatabaseTypeSpecificOperation<void>
 {
     Database& mDB;
+    soci::session& mSession;
     std::vector<std::string> mAccountIDs;
     std::vector<std::string> mDataNames;
     std::vector<std::string> mDataValues;
@@ -99,8 +100,9 @@ class BulkUpsertDataOperation : public DatabaseTypeSpecificOperation<void>
 
   public:
     BulkUpsertDataOperation(Database& DB,
-                            std::vector<LedgerEntry> const& entries)
-        : mDB(DB)
+                            std::vector<LedgerEntry> const& entries,
+                            soci::session& session)
+        : mDB(DB), mSession(session)
     {
         for (auto const& e : entries)
         {
@@ -109,8 +111,9 @@ class BulkUpsertDataOperation : public DatabaseTypeSpecificOperation<void>
     }
 
     BulkUpsertDataOperation(Database& DB,
-                            std::vector<EntryIterator> const& entryIter)
-        : mDB(DB)
+                            std::vector<EntryIterator> const& entryIter,
+                            soci::session& session)
+        : mDB(DB), mSession(session)
     {
         for (auto const& e : entryIter)
         {
@@ -135,7 +138,7 @@ class BulkUpsertDataOperation : public DatabaseTypeSpecificOperation<void>
             "lastmodified = excluded.lastmodified, "
             "extension = excluded.extension, "
             "ledgerext = excluded.ledgerext";
-        auto prep = mDB.getPreparedStatement(sql);
+        auto prep = mDB.getPreparedStatement(sql, mSession);
         soci::statement& st = prep.statement();
         st.exchange(soci::use(mAccountIDs));
         st.exchange(soci::use(mDataNames));
@@ -191,7 +194,7 @@ class BulkUpsertDataOperation : public DatabaseTypeSpecificOperation<void>
             "lastmodified = excluded.lastmodified, "
             "extension = excluded.extension, "
             "ledgerext = excluded.ledgerext";
-        auto prep = mDB.getPreparedStatement(sql);
+        auto prep = mDB.getPreparedStatement(sql, mSession);
         soci::statement& st = prep.statement();
         st.exchange(soci::use(strAccountIDs));
         st.exchange(soci::use(strDataNames));
@@ -215,14 +218,16 @@ class BulkUpsertDataOperation : public DatabaseTypeSpecificOperation<void>
 class BulkDeleteDataOperation : public DatabaseTypeSpecificOperation<void>
 {
     Database& mDB;
+    soci::session& mSession;
     LedgerTxnConsistency mCons;
     std::vector<std::string> mAccountIDs;
     std::vector<std::string> mDataNames;
 
   public:
     BulkDeleteDataOperation(Database& DB, LedgerTxnConsistency cons,
-                            std::vector<EntryIterator> const& entries)
-        : mDB(DB), mCons(cons)
+                            std::vector<EntryIterator> const& entries,
+                            soci::session& session)
+        : mDB(DB), mCons(cons), mSession(session)
     {
         for (auto const& e : entries)
         {
@@ -241,7 +246,7 @@ class BulkDeleteDataOperation : public DatabaseTypeSpecificOperation<void>
     {
         std::string sql = "DELETE FROM accountdata WHERE accountid = :id AND "
                           " dataname = :v1 ";
-        auto prep = mDB.getPreparedStatement(sql);
+        auto prep = mDB.getPreparedStatement(sql, mSession);
         soci::statement& st = prep.statement();
         st.exchange(soci::use(mAccountIDs));
         st.exchange(soci::use(mDataNames));
@@ -279,7 +284,7 @@ class BulkDeleteDataOperation : public DatabaseTypeSpecificOperation<void>
             " ) "
             "DELETE FROM accountdata WHERE (accountid, dataname) IN "
             "(SELECT * FROM r)";
-        auto prep = mDB.getPreparedStatement(sql);
+        auto prep = mDB.getPreparedStatement(sql, mSession);
         soci::statement& st = prep.statement();
         st.exchange(soci::use(strAccountIDs));
         st.exchange(soci::use(strDataNames));
@@ -303,7 +308,7 @@ LedgerTxnRoot::Impl::bulkUpsertAccountData(
 {
     ZoneScoped;
     ZoneValue(static_cast<int64_t>(entries.size()));
-    BulkUpsertDataOperation op(mApp.getDatabase(), entries);
+    BulkUpsertDataOperation op(mApp.getDatabase(), entries, getSession());
     mApp.getDatabase().doDatabaseTypeSpecificOperation(op);
 }
 
@@ -313,7 +318,7 @@ LedgerTxnRoot::Impl::bulkDeleteAccountData(
 {
     ZoneScoped;
     ZoneValue(static_cast<int64_t>(entries.size()));
-    BulkDeleteDataOperation op(mApp.getDatabase(), cons, entries);
+    BulkDeleteDataOperation op(mApp.getDatabase(), cons, entries, getSession());
     mApp.getDatabase().doDatabaseTypeSpecificOperation(op);
 }
 
@@ -324,30 +329,28 @@ LedgerTxnRoot::Impl::dropData(bool rebuild)
     mEntryCache.clear();
     mBestOffers.clear();
 
-    mApp.getDatabase().getSession() << "DROP TABLE IF EXISTS accountdata;";
+    getSession() << "DROP TABLE IF EXISTS accountdata;";
 
     if (rebuild)
     {
         std::string coll = mApp.getDatabase().getSimpleCollationClause();
-        mApp.getDatabase().getSession()
-            << "CREATE TABLE accountdata"
-            << "("
-            << "accountid    VARCHAR(56) " << coll << " NOT NULL,"
-            << "dataname     VARCHAR(88) " << coll << " NOT NULL,"
-            << "datavalue    VARCHAR(112) NOT NULL,"
-               "lastmodified INT          NOT NULL,"
-               "extension    TEXT,"
-               "ledgerext    TEXT         NOT NULL,"
-               "PRIMARY KEY  (accountid, dataname)"
-               ");";
+        getSession() << "CREATE TABLE accountdata"
+                     << "("
+                     << "accountid    VARCHAR(56) " << coll << " NOT NULL,"
+                     << "dataname     VARCHAR(88) " << coll << " NOT NULL,"
+                     << "datavalue    VARCHAR(112) NOT NULL,"
+                        "lastmodified INT          NOT NULL,"
+                        "extension    TEXT,"
+                        "ledgerext    TEXT         NOT NULL,"
+                        "PRIMARY KEY  (accountid, dataname)"
+                        ");";
         if (!mApp.getDatabase().isSqlite())
         {
-            mApp.getDatabase().getSession()
-                << "ALTER TABLE accountdata "
-                << "ALTER COLUMN accountid "
-                << "TYPE VARCHAR(56) COLLATE \"C\", "
-                << "ALTER COLUMN dataname "
-                << "TYPE VARCHAR(88) COLLATE \"C\"";
+            getSession() << "ALTER TABLE accountdata "
+                         << "ALTER COLUMN accountid "
+                         << "TYPE VARCHAR(56) COLLATE \"C\", "
+                         << "ALTER COLUMN dataname "
+                         << "TYPE VARCHAR(88) COLLATE \"C\"";
         }
     }
 }
@@ -356,6 +359,7 @@ class BulkLoadDataOperation
     : public DatabaseTypeSpecificOperation<std::vector<LedgerEntry>>
 {
     Database& mDb;
+    soci::session& mSession;
     std::vector<std::string> mAccountIDs;
     std::vector<std::string> mDataNames;
 
@@ -404,8 +408,9 @@ class BulkLoadDataOperation
     }
 
   public:
-    BulkLoadDataOperation(Database& db, UnorderedSet<LedgerKey> const& keys)
-        : mDb(db)
+    BulkLoadDataOperation(Database& db, UnorderedSet<LedgerKey> const& keys,
+                          soci::session& session)
+        : mDb(db), mSession(session)
     {
         mAccountIDs.reserve(keys.size());
         mDataNames.reserve(keys.size());
@@ -444,7 +449,7 @@ class BulkLoadDataOperation
                           "ledgerext "
                           "FROM accountdata WHERE (accountid, dataname) IN r";
 
-        auto prep = mDb.getPreparedStatement(sql);
+        auto prep = mDb.getPreparedStatement(sql, mSession);
         auto be = prep.statement().get_backend();
         if (be == nullptr)
         {
@@ -479,7 +484,7 @@ class BulkLoadDataOperation
             "ledgerext "
             "FROM accountdata WHERE (accountid, dataname) IN (SELECT * FROM r)";
 
-        auto prep = mDb.getPreparedStatement(sql);
+        auto prep = mDb.getPreparedStatement(sql, mSession);
         auto& st = prep.statement();
         st.exchange(soci::use(strAccountIDs));
         st.exchange(soci::use(strDataNames));
@@ -495,7 +500,7 @@ LedgerTxnRoot::Impl::bulkLoadData(UnorderedSet<LedgerKey> const& keys) const
     ZoneValue(static_cast<int64_t>(keys.size()));
     if (!keys.empty())
     {
-        BulkLoadDataOperation op(mApp.getDatabase(), keys);
+        BulkLoadDataOperation op(mApp.getDatabase(), keys, getSession());
         return populateLoadedEntries(
             keys, mApp.getDatabase().doDatabaseTypeSpecificOperation(op));
     }
