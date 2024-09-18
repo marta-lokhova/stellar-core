@@ -16,12 +16,21 @@
 
 namespace stellar
 {
-static std::thread::id mainThread = std::this_thread::get_id();
 
 bool
 threadIsMain()
 {
     return mainThread == std::this_thread::get_id();
+}
+
+bool threadIsOverlay()
+{
+    return overlayThread == std::this_thread::get_id();
+}
+
+bool threadIsLedgerClose()
+{
+    return ledgerCloseThread == std::this_thread::get_id();
 }
 
 void

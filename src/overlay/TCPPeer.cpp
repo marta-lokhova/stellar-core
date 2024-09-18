@@ -77,7 +77,7 @@ TCPPeer::initiate(Application& app, PeerBareAddress const& address)
                 return;
             }
 
-            releaseAssert(!threadIsMain() || !result->useBackgroundThread());
+            releaseAssert(threadIsOverlay() || !result->useBackgroundThread());
 
             // We might have been dropped while waiting to connect; in this
             // case, do not execute handler and just exit
@@ -225,7 +225,7 @@ TCPPeer::~TCPPeer()
 void
 TCPPeer::sendMessage(xdr::msg_ptr&& xdrBytes)
 {
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
 
     TimestampedMessage msg;
     msg.mEnqueuedTime = mAppConnector.now();
@@ -242,7 +242,7 @@ TCPPeer::sendMessage(xdr::msg_ptr&& xdrBytes)
 void
 TCPPeer::shutdown()
 {
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
 
     // Gracefully shut down connection: this pushes a FIN packet into
     // TCP which, if we wanted to be really polite about, we would wait
@@ -293,7 +293,7 @@ void
 TCPPeer::messageSender()
 {
     ZoneScoped;
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
 
     // if nothing to do, mark progress and return.
     if (mThreadVars.getWriteQueue().empty())
@@ -341,7 +341,7 @@ TCPPeer::messageSender()
         *(mSocket.get()), mThreadVars.getWriteBuffers(),
         [self, expected_length](asio::error_code const& ec,
                                 std::size_t length) {
-            releaseAssert(!threadIsMain() || !self->useBackgroundThread());
+            releaseAssert(threadIsOverlay() || !self->useBackgroundThread());
             if (expected_length != length)
             {
                 self->drop("error during async_write",
@@ -400,7 +400,7 @@ TCPPeer::writeHandler(asio::error_code const& error,
                       size_t messages_transferred)
 {
     ZoneScoped;
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
     RECURSIVE_LOCK_GUARD(mStateMutex, guard);
 
     mLastWrite = mAppConnector.now();
@@ -430,7 +430,7 @@ TCPPeer::writeHandler(asio::error_code const& error,
 void
 TCPPeer::noteErrorReadHeader(size_t nbytes, asio::error_code const& ec)
 {
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
     receivedBytes(nbytes, false);
     mOverlayMetrics.mErrorRead.Mark();
     std::string msg("error reading message header: ");
@@ -441,7 +441,7 @@ TCPPeer::noteErrorReadHeader(size_t nbytes, asio::error_code const& ec)
 void
 TCPPeer::noteShortReadHeader(size_t nbytes)
 {
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
     receivedBytes(nbytes, false);
     mOverlayMetrics.mErrorRead.Mark();
     drop("short read of message header",
@@ -451,14 +451,14 @@ TCPPeer::noteShortReadHeader(size_t nbytes)
 void
 TCPPeer::noteFullyReadHeader()
 {
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
     receivedBytes(HDRSZ, false);
 }
 
 void
 TCPPeer::noteErrorReadBody(size_t nbytes, asio::error_code const& ec)
 {
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
 
     receivedBytes(nbytes, false);
     mOverlayMetrics.mErrorRead.Mark();
@@ -470,7 +470,7 @@ TCPPeer::noteErrorReadBody(size_t nbytes, asio::error_code const& ec)
 void
 TCPPeer::noteShortReadBody(size_t nbytes)
 {
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
 
     receivedBytes(nbytes, false);
     mOverlayMetrics.mErrorRead.Mark();
@@ -480,7 +480,7 @@ TCPPeer::noteShortReadBody(size_t nbytes)
 void
 TCPPeer::noteFullyReadBody(size_t nbytes)
 {
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
 
     receivedBytes(nbytes, true);
 }
@@ -526,7 +526,7 @@ void
 TCPPeer::startRead()
 {
     ZoneScoped;
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
     releaseAssert(canRead());
     RECURSIVE_LOCK_GUARD(mStateMutex, guard);
     if (shouldAbort(guard))
@@ -684,7 +684,7 @@ void
 TCPPeer::readHeaderHandler(asio::error_code const& error,
                            std::size_t bytes_transferred)
 {
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
 
     if (error)
     {
@@ -717,7 +717,7 @@ TCPPeer::readBodyHandler(asio::error_code const& error,
                          std::size_t bytes_transferred,
                          std::size_t expected_length)
 {
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
 
     if (error)
     {
@@ -753,7 +753,7 @@ bool
 TCPPeer::recvMessage()
 {
     ZoneScoped;
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
     releaseAssert(canRead());
     std::string errorMsg;
     bool valid = false;
@@ -788,7 +788,7 @@ TCPPeer::recvMessage()
             // will stop once the main thread officially drops this peer.
             self->sendErrorAndDrop(ERR_DATA, errorMsg);
         };
-        if (!threadIsMain())
+        if (threadIsOverlay())
         {
             mAppConnector.postOnMainThread(drop, "TCPPeer::recvMessage drop");
         }

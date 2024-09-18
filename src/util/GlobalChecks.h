@@ -9,7 +9,15 @@
 
 namespace stellar
 {
+
+// App starts with all threads being main thread
+static std::thread::id mainThread = std::this_thread::get_id();
+static std::thread::id overlayThread = std::this_thread::get_id();
+static std::thread::id ledgerCloseThread = std::this_thread::get_id();
+
 bool threadIsMain();
+bool threadIsOverlay();
+bool threadIsLedgerClose();
 
 void dbgAbort();
 

@@ -870,7 +870,7 @@ bool
 Peer::recvAuthenticatedMessage(AuthenticatedMessage&& msg)
 {
     ZoneScoped;
-    releaseAssert(!threadIsMain() || !useBackgroundThread());
+    releaseAssert(threadIsOverlay() || !useBackgroundThread());
     RECURSIVE_LOCK_GUARD(mStateMutex, guard);
 
     if (shouldAbort(guard))
@@ -883,7 +883,7 @@ Peer::recvAuthenticatedMessage(AuthenticatedMessage&& msg)
     {
         if (!mHmac.checkAuthenticatedMessage(msg, errorMsg))
         {
-            if (!threadIsMain())
+            if (threadIsOverlay())
             {
                 mAppConnector.postOnMainThread(
                     [self = shared_from_this(), errorMsg]() {

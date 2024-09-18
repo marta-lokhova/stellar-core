@@ -45,37 +45,37 @@ class TCPPeer : public Peer
         std::deque<TimestampedMessage>&
         getWriteQueue()
         {
-            releaseAssert(!threadIsMain() || !mUseBackgroundThread);
+            releaseAssert(threadIsOverlay() || !mUseBackgroundThread);
             return mWriteQueue;
         }
         std::vector<asio::const_buffer>&
         getWriteBuffers()
         {
-            releaseAssert(!threadIsMain() || !mUseBackgroundThread);
+            releaseAssert(threadIsOverlay() || !mUseBackgroundThread);
             return mWriteBuffers;
         }
         std::vector<uint8_t>&
         getIncomingHeader()
         {
-            releaseAssert(!threadIsMain() || !mUseBackgroundThread);
+            releaseAssert(threadIsOverlay() || !mUseBackgroundThread);
             return mIncomingHeader;
         }
         std::vector<uint8_t>&
         getIncomingBody()
         {
-            releaseAssert(!threadIsMain() || !mUseBackgroundThread);
+            releaseAssert(threadIsOverlay() || !mUseBackgroundThread);
             return mIncomingBody;
         }
         bool
         isWriting() const
         {
-            releaseAssert(!threadIsMain() || !mUseBackgroundThread);
+            releaseAssert(threadIsOverlay() || !mUseBackgroundThread);
             return mWriting;
         }
         void
         setWriting(bool value)
         {
-            releaseAssert(!threadIsMain() || !mUseBackgroundThread);
+            releaseAssert(threadIsOverlay() || !mUseBackgroundThread);
             mWriting = value;
         }
     };
