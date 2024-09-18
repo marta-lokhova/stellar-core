@@ -326,7 +326,7 @@ TransactionQueue::canAdd(
             {
                 auto txResult = tx->createSuccessResult();
                 if (!tx->checkSorobanResourceAndSetError(
-                        mApp,
+                        mApp.getAppConnector(),
                         mApp.getLedgerManager()
                             .getLastClosedLedgerHeader()
                             .header.ledgerVersion,
@@ -403,8 +403,9 @@ TransactionQueue::canAdd(
             mApp.getLedgerManager().getLastClosedLedgerNum() + 1;
     }
 
-    auto txResult = tx->checkValid(
-        mApp, ls, 0, 0, getUpperBoundCloseTimeOffset(mApp, closeTime));
+    auto txResult =
+        tx->checkValid(mApp.getAppConnector(), ls, 0, 0,
+                       getUpperBoundCloseTimeOffset(mApp, closeTime));
     if (!txResult->isSuccess())
     {
         return AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR,

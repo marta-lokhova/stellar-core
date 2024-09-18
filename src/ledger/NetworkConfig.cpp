@@ -933,7 +933,7 @@ SorobanNetworkConfig::loadFromLedger(AbstractLedgerTxn& ltxRoot,
 {
     ZoneScoped;
 
-    LedgerTxn ltx(ltxRoot, false, TransactionMode::READ_ONLY_WITHOUT_SQL_TXN);
+    LedgerTxn ltx(ltxRoot);
     loadMaxContractSize(ltx);
     loadMaxContractDataKeySize(ltx);
     loadMaxContractDataEntrySize(ltx);
