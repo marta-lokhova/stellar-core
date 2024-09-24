@@ -681,7 +681,9 @@ LedgerManagerImpl::valueExternalized(LedgerCloseData const& ledgerData,
     auto& cm = mApp.getCatchupManager();
     // if catchup work is running, we don't want ledger manager to close
     // this ledger and potentially cause issues.
-    if (cm.isCatchupInitialized() && !cm.catchupWorkIsDone())
+    // TODO: this is wrong, won't buffer ledgers during bucket apply
+    if (getLastClosedLedgerNum() + 1 == ledgerData.getLedgerSeq() &&
+        cm.isCatchupInitialized() && !cm.catchupWorkIsDone())
     {
         CLOG_INFO(Ledger,
                   "Can't close ledger: {}  in LM because catchup is running",
@@ -994,8 +996,8 @@ LedgerManagerImpl::closeLegderAtomic(
             // storeTransaction and storeTransactionFee.
             if (mApp.getConfig().MODE_STORES_HISTORY_MISC)
             {
-                Upgrades::storeUpgradeHistory(getDatabase(), root.getSession(), ledgerSeq,
-                                              lupgrade, changes,
+                Upgrades::storeUpgradeHistory(getDatabase(), root.getSession(),
+                                              ledgerSeq, lupgrade, changes,
                                               static_cast<int>(i + 1));
             }
             ltxUpgrade.commit();

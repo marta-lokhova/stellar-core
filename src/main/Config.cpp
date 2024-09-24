@@ -1124,6 +1124,11 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                  [&]() {
                      EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE = readBool(item);
                  }},
+                {"EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE_DELAY",
+                 [&]() {
+                     EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE_DELAY =
+                         std::chrono::milliseconds(readInt<size_t>(item));
+                 }},
                 {"BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT",
                  [&]() {
                      BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT =

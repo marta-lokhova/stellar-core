@@ -23,7 +23,8 @@ threadIsMain()
     return mainThread == std::this_thread::get_id();
 }
 
-bool threadIsOverlay()
+bool
+threadIsOverlay()
 {
     return overlayThread == std::this_thread::get_id();
 }
