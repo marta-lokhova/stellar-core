@@ -9,6 +9,7 @@
 
 #include "medida/meter.h"
 #include "medida/metrics_registry.h"
+#include "xdrpp/printer.h"
 #include <shared_mutex>
 
 namespace stellar
@@ -111,7 +112,6 @@ BucketSnapshotManager::updateCurrentSnapshot(
     std::unique_ptr<BucketListSnapshot const>&& newSnapshot)
 {
     releaseAssert(newSnapshot);
-    releaseAssert(threadIsMain());
 
     // Updating the BucketSnapshotManager canonical snapshot, must lock
     // exclusively for write access.

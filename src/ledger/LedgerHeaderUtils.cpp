@@ -42,7 +42,8 @@ isValid(LedgerHeader const& lh)
 }
 
 void
-storeInDatabase(Database& db, LedgerHeader const& header)
+storeInDatabase(Database& db, LedgerHeader const& header,
+                soci::session& session)
 {
     ZoneScoped;
     if (!isValid(header))
@@ -63,7 +64,8 @@ storeInDatabase(Database& db, LedgerHeader const& header)
         "INSERT INTO ledgerheaders "
         "(ledgerhash, prevhash, bucketlisthash, ledgerseq, closetime, data) "
         "VALUES "
-        "(:h,        :ph,      :blh,            :seq,     :ct,       :data)");
+        "(:h,        :ph,      :blh,            :seq,     :ct,       :data)",
+        session);
     auto& st = prep.statement();
     st.exchange(soci::use(hash));
     st.exchange(soci::use(prevHash));
@@ -168,19 +170,19 @@ loadBySequence(Database& db, soci::session& sess, uint32_t seq)
 }
 
 void
-deleteOldEntries(Database& db, uint32_t ledgerSeq, uint32_t count)
+deleteOldEntries(soci::session& sess, uint32_t ledgerSeq, uint32_t count)
 {
     ZoneScoped;
-    DatabaseUtils::deleteOldEntriesHelper(db.getSession(), ledgerSeq, count,
+    DatabaseUtils::deleteOldEntriesHelper(sess, ledgerSeq, count,
                                           "ledgerheaders", "ledgerseq");
 }
 
 void
-deleteNewerEntries(Database& db, uint32_t ledgerSeq)
+deleteNewerEntries(soci::session& sess, uint32_t ledgerSeq)
 {
     ZoneScoped;
-    DatabaseUtils::deleteNewerEntriesHelper(db.getSession(), ledgerSeq,
-                                            "ledgerheaders", "ledgerseq");
+    DatabaseUtils::deleteNewerEntriesHelper(sess, ledgerSeq, "ledgerheaders",
+                                            "ledgerseq");
 }
 
 size_t

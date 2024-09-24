@@ -1445,7 +1445,7 @@ TransactionFrame::checkValidWithOptionallyChargedFee(
     {
         sorobanResourceFee = computePreApplySorobanResourceFee(
             ls.getLedgerHeader().current().ledgerVersion,
-            app.getLedgerManager().getSorobanNetworkConfig(), app.getConfig());
+            app.getSorobanNetworkConfig(), app.getConfig());
     }
     bool res = commonValid(app, signatureChecker, ls, current, false, chargeFee,
                            lowerBoundCloseTimeOffset, upperBoundCloseTimeOffset,
@@ -1504,9 +1504,8 @@ TransactionFrame::checkSorobanResourceAndSetError(
     AppConnector& app, uint32_t ledgerVersion,
     MutableTxResultPtr txResult) const
 {
-    auto const& sorobanConfig =
-        app.getLedgerManager().getSorobanNetworkConfig();
-    if (!validateSorobanResources(sorobanConfig, app.getConfig(), ledgerVersion,
+    if (!validateSorobanResources(app.getSorobanNetworkConfig(),
+                                  app.getConfig(), ledgerVersion,
                                   *txResult->getSorobanData()))
     {
         txResult->setInnermostResultCode(txSOROBAN_INVALID);
@@ -1694,8 +1693,7 @@ TransactionFrame::applyOperations(SignatureChecker& signatureChecker,
                 // If transaction fails, we don't charge for any
                 // refundable resources.
                 auto preApplyFee = computePreApplySorobanResourceFee(
-                    ledgerVersion,
-                    app.getLedgerManager().getSorobanNetworkConfig(),
+                    ledgerVersion, app.getSorobanNetworkConfig(),
                     app.getConfig());
 
                 txResult.getSorobanData()->setSorobanFeeRefund(
@@ -1797,8 +1795,7 @@ TransactionFrame::apply(AppConnector& app, AbstractLedgerTxn& ltx,
             isSoroban())
         {
             sorobanResourceFee = computePreApplySorobanResourceFee(
-                ledgerVersion, app.getLedgerManager().getSorobanNetworkConfig(),
-                app.getConfig());
+                ledgerVersion, app.getSorobanNetworkConfig(), app.getConfig());
 
             auto& sorobanData = *txResult->getSorobanData();
             sorobanData.setSorobanConsumedNonRefundableFee(

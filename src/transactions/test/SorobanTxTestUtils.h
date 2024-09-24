@@ -293,7 +293,7 @@ class SorobanTest
 
     TestAccount& getRoot();
     TestAccount& getDummyAccount();
-    SorobanNetworkConfig const& getNetworkCfg();
+    SorobanNetworkConfig getNetworkCfg();
     uint32_t getLCLSeq() const;
     uint32_t getLedgerVersion() const;
 

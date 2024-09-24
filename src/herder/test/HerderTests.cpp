@@ -1916,7 +1916,7 @@ testSCPDriver(uint32 protocolVersion, uint32_t maxTxSetSize, size_t expectedOps)
 
     Application::pointer app = createTestApplication(clock, cfg);
 
-    auto const& lcl = app->getLedgerManager().getLastClosedLedgerHeader();
+    auto lcl = app->getLedgerManager().getLastClosedLedgerHeader();
 
     auto root = TestAccount::createRoot(*app);
     std::vector<TestAccount> accounts;
@@ -3137,10 +3137,10 @@ TEST_CASE("soroban txs each parameter surge priced", "[soroban][herder]")
             bool hadSorobanSurgePricing = false;
             simulation->crankUntil(
                 [&]() {
-                    auto& lclHeader = nodes[0]
-                                          ->getLedgerManager()
-                                          .getLastClosedLedgerHeader()
-                                          .header;
+                    auto lclHeader = nodes[0]
+                                         ->getLedgerManager()
+                                         .getLastClosedLedgerHeader()
+                                         .header;
                     auto txSet = nodes[0]->getHerder().getTxSet(
                         lclHeader.scpValue.txSetHash);
                     GeneralizedTransactionSet xdrTxSet;
@@ -3313,10 +3313,10 @@ TEST_CASE("accept soroban txs after network upgrade", "[soroban][herder]")
                 .getLastClosedLedgerHeader()
                 .header.ledgerVersion ==
             static_cast<uint32_t>(SOROBAN_PROTOCOL_VERSION));
-    for (auto node : nodes)
-    {
-        overrideSorobanNetworkConfigForTest(*node);
-    }
+    // for (auto node : nodes)
+    // {
+    //     overrideSorobanNetworkConfigForTest(*node);
+    // }
     // Now generate Soroban txs
     auto sorobanConfig =
         GeneratedLoadConfig::txLoad(LoadGenMode::SOROBAN_UPLOAD, 50,
@@ -3350,18 +3350,39 @@ TEST_CASE("accept soroban txs after network upgrade", "[soroban][herder]")
     REQUIRE(totalSoroban > 0);
 }
 
-TEST_CASE("overlay parallel processing")
+TEST_CASE("overlay parallelization")
 {
     auto networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
+    std::shared_ptr<Simulation> simulation;
 
-    // Set threshold to 1 so all have to vote
-    auto simulation =
-        Topologies::core(4, 1, Simulation::OVER_TCP, networkID, [](int i) {
-            auto cfg = getTestConfig(i);
-            cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 100;
-            cfg.EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING = true;
-            return cfg;
-        });
+    SECTION("background traffic processing")
+    {
+        // Set threshold to 1 so all have to vote
+        simulation =
+            Topologies::core(4, 1, Simulation::OVER_TCP, networkID, [](int i) {
+                auto cfg = getTestConfig(i);
+                cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 100;
+                cfg.EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING = true;
+                return cfg;
+            });
+    }
+    SECTION("background ledger close")
+    {
+        // Set threshold to 1 so all have to vote
+        simulation =
+            Topologies::core(4, 1, Simulation::OVER_TCP, networkID, [](int i) {
+                auto cfg =
+                    getTestConfig(i, Config::TESTDB_BUCKET_DB_PERSISTENT);
+                cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 100;
+                cfg.EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE = true;
+                cfg.METADATA_DEBUG_LEDGERS = 0;
+                cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 100;
+                cfg.EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE_DELAY =
+                    std::chrono::seconds(1);
+                return cfg;
+            });
+    }
+
     simulation->startAllNodes();
     auto nodes = simulation->getNodes();
     uint32_t desiredTxRate = 1;
@@ -3687,6 +3708,7 @@ herderExternalizesValuesWithProtocol(uint32_t version)
         Simulation::OVER_LOOPBACK, networkID, [version](int i) {
             auto cfg = getTestConfig(i, Config::TESTDB_ON_DISK_SQLITE);
             cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION = version;
+            cfg.DEPRECATED_SQL_LEDGER_STATE = false;
             return cfg;
         });
 
@@ -4335,7 +4357,7 @@ TEST_CASE("In quorum filtering", "[quorum][herder][acceptance]")
             auto c = sim->getNode(k);
             HerderImpl& herder = *static_cast<HerderImpl*>(&c->getHerder());
 
-            auto const& lcl = c->getLedgerManager().getLastClosedLedgerHeader();
+            auto lcl = c->getLedgerManager().getLastClosedLedgerHeader();
             herder.getSCP().processCurrentState(lcl.header.ledgerSeq, proc,
                                                 true);
         }
@@ -4399,7 +4421,7 @@ static void
 externalize(SecretKey const& sk, LedgerManager& lm, HerderImpl& herder,
             std::vector<TransactionFrameBasePtr> const& txs, Application& app)
 {
-    auto const& lcl = lm.getLastClosedLedgerHeader();
+    auto lcl = lm.getLastClosedLedgerHeader();
     auto ledgerSeq = lcl.header.ledgerSeq + 1;
 
     auto classicTxs = txs;

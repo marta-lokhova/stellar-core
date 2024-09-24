@@ -49,7 +49,7 @@ bool
 FlowControl::hasOutboundCapacity(StellarMessage const& msg,
                                  std::lock_guard<std::mutex>& lockGuard) const
 {
-    releaseAssert(threadIsOverlay() || !mUseBackgroundThread);
+    releaseAssert(!threadIsMain() || !mUseBackgroundThread);
     return mFlowControlCapacity.hasOutboundCapacity(msg) &&
            mFlowControlBytesCapacity.hasOutboundCapacity(msg);
 }
@@ -103,7 +103,7 @@ std::vector<FlowControl::QueuedOutboundMessage>
 FlowControl::getNextBatchToSend()
 {
     ZoneScoped;
-    releaseAssert(threadIsOverlay() || !mUseBackgroundThread);
+    releaseAssert(!threadIsMain() || !mUseBackgroundThread);
 
     std::lock_guard<std::mutex> guard(mFlowControlMutex);
     std::vector<QueuedOutboundMessage> batchToSend;
@@ -229,7 +229,7 @@ bool
 FlowControl::beginMessageProcessing(StellarMessage const& msg)
 {
     ZoneScoped;
-    releaseAssert(threadIsOverlay() || !mUseBackgroundThread);
+    releaseAssert(!threadIsMain() || !mUseBackgroundThread);
     std::lock_guard<std::mutex> guard(mFlowControlMutex);
 
     return mFlowControlCapacity.lockLocalCapacity(msg) &&

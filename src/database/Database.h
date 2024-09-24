@@ -89,12 +89,12 @@ class Database : NonMovableOrCopyable
     Application& mApp;
     medida::Meter& mQueryMeter;
     soci::session mSession;
+    soci::session mMiscSession;
+
     std::unique_ptr<soci::connection_pool> mPool;
 
     std::map<std::string, std::shared_ptr<soci::statement>> mStatements;
     medida::Counter& mStatementsSize;
-
-    std::set<std::string> mEntityTypes;
 
     static bool gDriversRegistered;
     static void registerDrivers();
@@ -120,6 +120,8 @@ class Database : NonMovableOrCopyable
     // is created if necessary before borrowing, and reset (unbound from data)
     // when the statement context is destroyed.
     StatementContext getPreparedStatement(std::string const& query);
+    StatementContext getPreparedStatement(std::string const& query,
+                                          soci::session& session);
 
     // Purge all cached prepared statements, closing their handles with the
     // database.
@@ -151,7 +153,15 @@ class Database : NonMovableOrCopyable
 
     // Call `op` back with the specific database backend subtype in use.
     template <typename T>
-    T doDatabaseTypeSpecificOperation(DatabaseTypeSpecificOperation<T>& op);
+    T doDatabaseTypeSpecificOperation(DatabaseTypeSpecificOperation<T>& op,
+                                      soci::session& session);
+
+    template <typename T>
+    T
+    doDatabaseTypeSpecificOperation(DatabaseTypeSpecificOperation<T>& op)
+    {
+        return doDatabaseTypeSpecificOperation(op, mSession);
+    }
 
     // Return true if a connection pool is available for worker threads
     // to read from the database through, otherwise false.
@@ -177,6 +187,7 @@ class Database : NonMovableOrCopyable
 
     // Access the underlying SOCI session object
     soci::session& getSession();
+    soci::session& getMiscSession();
 
     // Access the optional SOCI connection pool available for worker
     // threads. Throws an error if !canUsePool().
@@ -208,9 +219,10 @@ doDatabaseTypeSpecificOperation(soci::session& session,
 
 template <typename T>
 T
-Database::doDatabaseTypeSpecificOperation(DatabaseTypeSpecificOperation<T>& op)
+Database::doDatabaseTypeSpecificOperation(DatabaseTypeSpecificOperation<T>& op,
+                                          soci::session& session)
 {
-    return stellar::doDatabaseTypeSpecificOperation(mSession, op);
+    return stellar::doDatabaseTypeSpecificOperation(session, op);
 }
 
 // Select a set of records using a client-defined query string, then map

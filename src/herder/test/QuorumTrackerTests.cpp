@@ -108,7 +108,7 @@ testQuorumTracker()
         recvEnvelope(envelope, slotID, k, qSet, pp);
     };
     auto makeValue = [&](int i) {
-        auto const& lcl = app->getLedgerManager().getLastClosedLedgerHeader();
+        auto lcl = app->getLedgerManager().getLastClosedLedgerHeader();
         auto txSet = TxSetXDRFrame::makeEmpty(lcl);
         StellarValue sv = herder->makeStellarValue(
             txSet->getContentsHash(), lcl.header.scpValue.closeTime + i,

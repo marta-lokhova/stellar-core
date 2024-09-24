@@ -687,6 +687,7 @@ std::set<Hash>
 BucketManagerImpl::getBucketListReferencedBuckets() const
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
     std::set<Hash> referenced;
     if (!mApp.getConfig().MODE_ENABLES_BUCKETLIST)
     {
@@ -1027,7 +1028,7 @@ BucketManagerImpl::resolveBackgroundEvictionScan(
     LedgerKeySet const& modifiedKeys)
 {
     ZoneScoped;
-    releaseAssert(threadIsMain());
+    // releaseAssert(threadIsMain());
     releaseAssert(mEvictionStatistics);
 
     if (!mEvictionFuture.valid())

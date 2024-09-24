@@ -397,9 +397,11 @@ class BucketListDepth
     friend class testutil::BucketListDepthModifier;
 };
 
+// TODO: thread-safety
 class BucketList
 {
     std::vector<BucketLevel> mLevels;
+    // mutable std::mutex mBucketListMutex;
 
   public:
     // Number of bucket levels in the bucketlist. Every bucketlist in the system

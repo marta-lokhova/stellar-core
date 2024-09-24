@@ -1,6 +1,7 @@
 #include "main/AppConnector.h"
 #include "herder/Herder.h"
 #include "invariant/InvariantManager.h"
+#include "ledger/LedgerCloseMetaFrame.h"
 #include "ledger/LedgerManager.h"
 #include "ledger/LedgerTxn.h"
 #include "main/Application.h"
@@ -45,24 +46,21 @@ AppConnector::getBanManager()
     return mApp.getBanManager();
 }
 
-SorobanNetworkConfig const&
+SorobanNetworkConfig
 AppConnector::getSorobanNetworkConfig() const
 {
-    releaseAssert(threadIsMain());
     return mApp.getLedgerManager().getSorobanNetworkConfig();
 }
 
 medida::MetricsRegistry&
 AppConnector::getMetrics() const
 {
-    releaseAssert(threadIsMain());
     return mApp.getMetrics();
 }
 
 SorobanMetrics&
 AppConnector::getSorobanMetrics() const
 {
-    releaseAssert(threadIsMain());
     return mApp.getLedgerManager().getSorobanMetrics();
 }
 
@@ -71,7 +69,8 @@ AppConnector::checkOnOperationApply(Operation const& operation,
                                     OperationResult const& opres,
                                     LedgerTxnDelta const& ltxDelta)
 {
-    releaseAssert(threadIsMain());
+    // releaseAssert(!threadIsMain() ||
+    //               !mConfig.EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE);
     mApp.getInvariantManager().checkOnOperationApply(operation, opres,
                                                      ltxDelta);
 }
@@ -79,7 +78,6 @@ AppConnector::checkOnOperationApply(Operation const& operation,
 Hash const&
 AppConnector::getNetworkID() const
 {
-    releaseAssert(threadIsMain());
     return mApp.getNetworkID();
 }
 
@@ -127,6 +125,13 @@ AppConnector::getOverlayMetrics()
 {
     // OverlayMetrics class is thread-safe
     return mApp.getOverlayManager().getOverlayMetrics();
+}
+
+LedgerHeaderHistoryEntry
+AppConnector::getLastClosedLedgerHeader() const
+{
+    // getLastClosedLedgerHeader is thread-safe
+    return mApp.getLedgerManager().getLastClosedLedgerHeader();
 }
 
 }

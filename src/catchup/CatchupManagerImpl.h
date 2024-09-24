@@ -43,8 +43,8 @@ class CatchupManagerImpl : public CatchupManager
     // maintain the invariants above.
     std::map<uint32_t, LedgerCloseData> mSyncingLedgers;
     medida::Counter& mSyncingLedgersSize;
+    std::optional<uint32_t> mLastApplied;
 
-    void addAndTrimSyncingLedgers(LedgerCloseData const& ledgerData);
     void startOnlineCatchup();
     void trimSyncingLedgers();
     void tryApplySyncingLedgers();
@@ -61,7 +61,8 @@ class CatchupManagerImpl : public CatchupManager
     CatchupManagerImpl(Application& app);
     ~CatchupManagerImpl() override;
 
-    void processLedger(LedgerCloseData const& ledgerData) override;
+    bool processLedger(LedgerCloseData const& ledgerData,
+                       bool isLatestSlot) override;
     void
     startCatchup(CatchupConfiguration configuration,
                  std::shared_ptr<HistoryArchive> archive,

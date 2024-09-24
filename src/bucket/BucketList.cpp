@@ -55,7 +55,6 @@ BucketLevel::getNext()
 void
 BucketLevel::setNext(FutureBucket const& fb)
 {
-    releaseAssert(threadIsMain());
     mNextCurr = fb;
 }
 
@@ -74,7 +73,6 @@ BucketLevel::getSnap() const
 void
 BucketLevel::setCurr(std::shared_ptr<Bucket> b)
 {
-    releaseAssert(threadIsMain());
     mNextCurr.clear();
     mCurr = b;
 }
@@ -509,6 +507,7 @@ BucketList::getSize() const
     return sum;
 }
 
+// TODO: thread-safe BL update?
 void
 BucketList::addBatch(Application& app, uint32_t currLedger,
                      uint32_t currLedgerProtocol,
@@ -792,6 +791,8 @@ BucketList::restartMerges(Application& app, uint32_t maxProtocolVersion,
                           uint32_t ledger)
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
+
     for (uint32_t i = 0; i < static_cast<uint32>(mLevels.size()); i++)
     {
         auto& level = mLevels[i];

@@ -308,7 +308,8 @@ getTestConfig(int instanceNumber, Config::TestDbMode mode)
             mode == Config::TESTDB_BUCKET_DB_PERSISTENT)
         {
             thisConfig.DEPRECATED_SQL_LEDGER_STATE = false;
-            thisConfig.BACKGROUND_EVICTION_SCAN = true;
+            thisConfig.BACKGROUND_EVICTION_SCAN = false;
+            thisConfig.EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE = true;
         }
         else
         {
@@ -568,9 +569,9 @@ for_versions(std::vector<uint32> const& versions, Application& app,
         versions.end())
     {
         {
-            LedgerTxn ltx(app.getLedgerTxnRoot());
-            REQUIRE(ltx.loadHeader().current().ledgerVersion ==
-                    gTestingVersion);
+            REQUIRE(app.getLedgerManager()
+                        .getLastClosedLedgerHeader()
+                        .header.ledgerVersion == gTestingVersion);
         }
         f();
     }

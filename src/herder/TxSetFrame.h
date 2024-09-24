@@ -145,7 +145,7 @@ class TxSetXDRFrame : public NonMovableOrCopyable
     // This may *only* be called when LCL hash matches the `previousLedgerHash`
     // of this `TxSetFrame` - tx sets with a wrong ledger hash shouldn't even
     // be attempted to be interpreted.
-    ApplicableTxSetFrameConstPtr prepareForApply(Application& app) const;
+    ApplicableTxSetFrameConstPtr prepareForApply(AppConnector& app) const;
 
     bool isGeneralizedTxSet() const;
 
@@ -291,11 +291,11 @@ class ApplicableTxSetFrame
                               bool enforceTxsApplyOrder);
 #endif
 
-    ApplicableTxSetFrame(Application& app,
+    ApplicableTxSetFrame(AppConnector& app,
                          LedgerHeaderHistoryEntry const& lclHeader,
                          TxSetPhaseTransactions const& txs,
                          std::optional<Hash> contentsHash);
-    ApplicableTxSetFrame(Application& app, bool isGeneralized,
+    ApplicableTxSetFrame(AppConnector& app, bool isGeneralized,
                          Hash const& previousLedgerHash,
                          TxSetPhaseTransactions const& txs,
                          std::optional<Hash> contentsHash);

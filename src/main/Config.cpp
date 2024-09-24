@@ -163,11 +163,14 @@ Config::Config() : NODE_SEED(SecretKey::random())
     CATCHUP_RECENT = 0;
     EXPERIMENTAL_PRECAUTION_DELAY_META = false;
     EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING = false;
+    EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE = true;
+    EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE_DELAY =
+        std::chrono::milliseconds::zero();
     DEPRECATED_SQL_LEDGER_STATE = false;
     BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT = 14; // 2^14 == 16 kb
     BUCKETLIST_DB_INDEX_CUTOFF = 20;             // 20 mb
     BUCKETLIST_DB_PERSIST_INDEX = true;
-    BACKGROUND_EVICTION_SCAN = true;
+    BACKGROUND_EVICTION_SCAN = false;
     PUBLISH_TO_ARCHIVE_DELAY = std::chrono::seconds{0};
     // automatic maintenance settings:
     // short and prime with 1 hour which will cause automatic maintenance to
@@ -180,7 +183,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     //   * (359) / (24*3600) = 6.56 days
     AUTOMATIC_MAINTENANCE_COUNT = 400;
     // automatic self-check happens once every 3 hours
-    AUTOMATIC_SELF_CHECK_PERIOD = std::chrono::seconds{3 * 60 * 60};
+    AUTOMATIC_SELF_CHECK_PERIOD = std::chrono::seconds(0);
     ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING = false;
     ARTIFICIALLY_ACCELERATE_TIME_FOR_TESTING = false;
     ARTIFICIALLY_SET_CLOSE_TIME_FOR_TESTING = 0;
@@ -1117,6 +1120,10 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                                   "deprecated, "
                                   "use BUCKETLIST_DB_PERSIST_INDEX instead.");
                  }},
+                {"EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE",
+                 [&]() {
+                     EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE = readBool(item);
+                 }},
                 {"BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT",
                  [&]() {
                      BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT =
@@ -1750,6 +1757,16 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
             BACKGROUND_EVICTION_SCAN = false;
         }
 
+        if (!isUsingBucketListDB() &&
+            t->contains("EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE") &&
+            DATABASE.value != "sqlite3://:memory:")
+        {
+            CLOG_WARNING(Bucket,
+                         "EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE default to "
+                         "false, because node is not using BucketListDB");
+            EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE = false;
+        }
+
         // process elements that potentially depend on others
         if (t->contains("VALIDATORS"))
         {
@@ -1980,6 +1997,10 @@ Config::logBasicInfo()
              "EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING="
              "{}",
              EXPERIMENTAL_BACKGROUND_OVERLAY_PROCESSING ? "true" : "false");
+    LOG_INFO(DEFAULT_LOG,
+             "EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE="
+             "{}",
+             EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE ? "true" : "false");
 }
 
 void

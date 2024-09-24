@@ -86,6 +86,7 @@ class InMemoryLedgerTxnRoot : public AbstractLedgerTxnParent
                              LedgerKeyMeter* lkMeter) override;
 
     void prepareNewObjects(size_t s) override;
+    soci::session& getSession() const override;
 
 #ifdef BUILD_TESTS
     void resetForFuzzer() override;

@@ -309,51 +309,51 @@ tracyEnabled(std::lock_guard<std::mutex> const& _guard)
 #endif
 
 #ifndef ASAN_ENABLED
-void*
-operator new(std::size_t count)
-{
-    auto ptr = malloc(count);
-    std::lock_guard<std::mutex> guard(TRACY_MUTEX);
-    if (tracyEnabled(guard))
-    {
-        TracyAlloc(ptr, count);
-    }
-    return ptr;
-}
+// void*
+// operator new(std::size_t count)
+// {
+//     auto ptr = malloc(count);
+//     std::lock_guard<std::mutex> guard(TRACY_MUTEX);
+//     if (tracyEnabled(guard))
+//     {
+//         TracyAlloc(ptr, count);
+//     }
+//     return ptr;
+// }
 
-void
-operator delete(void* ptr) noexcept
-{
-    std::lock_guard<std::mutex> guard(TRACY_MUTEX);
-    if (tracyEnabled(guard))
-    {
-        TracyFree(ptr);
-    }
-    free(ptr);
-}
+// void
+// operator delete(void* ptr) noexcept
+// {
+//     std::lock_guard<std::mutex> guard(TRACY_MUTEX);
+//     if (tracyEnabled(guard))
+//     {
+//         TracyFree(ptr);
+//     }
+//     free(ptr);
+// }
 
-void*
-operator new[](std::size_t count)
-{
-    auto ptr = malloc(count);
-    std::lock_guard<std::mutex> guard(TRACY_MUTEX);
-    if (tracyEnabled(guard))
-    {
-        TracyAlloc(ptr, count);
-    }
-    return ptr;
-}
+// void*
+// operator new[](std::size_t count)
+// {
+//     auto ptr = malloc(count);
+//     std::lock_guard<std::mutex> guard(TRACY_MUTEX);
+//     if (tracyEnabled(guard))
+//     {
+//         TracyAlloc(ptr, count);
+//     }
+//     return ptr;
+// }
 
-void
-operator delete[](void* ptr) noexcept
-{
-    std::lock_guard<std::mutex> guard(TRACY_MUTEX);
-    if (tracyEnabled(guard))
-    {
-        TracyFree(ptr);
-    }
-    free(ptr);
-}
+// void
+// operator delete[](void* ptr) noexcept
+// {
+//     std::lock_guard<std::mutex> guard(TRACY_MUTEX);
+//     if (tracyEnabled(guard))
+//     {
+//         TracyFree(ptr);
+//     }
+//     free(ptr);
+// }
 #endif // ASAN_ENABLED
 #endif // USE_TRACY
 

@@ -94,10 +94,6 @@ LoadGenerator::LoadGenerator(Application& app)
     , mLastSecond(0)
     , mApp(app)
     , mTotalSubmitted(0)
-    , mApplySorobanSuccess(
-          mApp.getMetrics().NewCounter({"ledger", "apply-soroban", "success"}))
-    , mApplySorobanFailure(
-          mApp.getMetrics().NewCounter({"ledger", "apply-soroban", "failure"}))
     , mStepTimer(mApp.getMetrics().NewTimer({"loadgen", "step", "submit"}))
     , mStepMeter(
           mApp.getMetrics().NewMeter({"loadgen", "step", "count"}, "step"))
@@ -110,6 +106,10 @@ LoadGenerator::LoadGenerator(Application& app)
           mApp.getMetrics().NewMeter({"loadgen", "run", "complete"}, "run"))
     , mLoadgenFail(
           mApp.getMetrics().NewMeter({"loadgen", "run", "failed"}, "run"))
+    , mApplySorobanSuccess(
+          mApp.getMetrics().NewCounter({"loadgen", "apply", "success"}))
+    , mApplySorobanFailure(
+          mApp.getMetrics().NewCounter({"loadgen", "apply", "failure"}))
 {
 }
 

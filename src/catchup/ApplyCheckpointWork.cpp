@@ -17,6 +17,7 @@
 #include "util/FileSystemException.h"
 #include "util/GlobalChecks.h"
 #include "util/XDRCereal.h"
+#include "xdrpp/printer.h"
 #include <Tracy.hpp>
 #include <fmt/format.h>
 #include <optional>
@@ -154,7 +155,7 @@ ApplyCheckpointWork::getNextLedgerCloseData()
 
     auto& lm = mApp.getLedgerManager();
 
-    auto const& lclHeader = lm.getLastClosedLedgerHeader();
+    auto lclHeader = lm.getLastClosedLedgerHeader();
 
     // If we are >1 before LCL, skip
     if (header.ledgerSeq + 1 < lclHeader.header.ledgerSeq)

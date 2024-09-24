@@ -76,16 +76,16 @@ deleteOldTransactionHistoryEntries(soci::session& sess, uint32_t ledgerSeq,
                                    uint32_t count)
 {
     ZoneScoped;
-    DatabaseUtils::deleteOldEntriesHelper(sess, ledgerSeq, count,
-                                          "txhistory", "ledgerseq");
+    DatabaseUtils::deleteOldEntriesHelper(sess, ledgerSeq, count, "txhistory",
+                                          "ledgerseq");
 }
 
 void
 deleteNewerTransactionHistoryEntries(soci::session& sess, uint32_t ledgerSeq)
 {
     ZoneScoped;
-    DatabaseUtils::deleteNewerEntriesHelper(sess, ledgerSeq,
-                                            "txhistory", "ledgerseq");
+    DatabaseUtils::deleteNewerEntriesHelper(sess, ledgerSeq, "txhistory",
+                                            "ledgerseq");
 }
 
 }

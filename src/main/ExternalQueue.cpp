@@ -6,6 +6,7 @@
 
 #include "Application.h"
 #include "database/Database.h"
+#include "herder/HerderPersistence.h"
 #include "ledger/LedgerManager.h"
 #include "util/GlobalChecks.h"
 #include "util/Logging.h"
@@ -31,9 +32,9 @@ ExternalQueue::ExternalQueue(Application& app) : mApp(app)
 void
 ExternalQueue::dropAll(Database& db)
 {
-    db.getSession() << "DROP TABLE IF EXISTS pubsub;";
+    db.getMiscSession() << "DROP TABLE IF EXISTS pubsub;";
 
-    soci::statement st = db.getSession().prepare << kSQLCreateStatement;
+    soci::statement st = db.getMiscSession().prepare << kSQLCreateStatement;
     st.execute(true);
 }
 
@@ -74,7 +75,8 @@ ExternalQueue::setCursorForResource(std::string const& resid, uint32 cursor)
     {
         ZoneNamedN(insertPubsubZone, "insert pubsub", true);
         auto prep = mApp.getDatabase().getPreparedStatement(
-            "INSERT INTO pubsub (resid, lastread) VALUES (:n, :v);");
+            "INSERT INTO pubsub (resid, lastread) VALUES (:n, :v);",
+            mApp.getDatabase().getMiscSession());
         auto& st = prep.statement();
         st.exchange(soci::use(resid));
         st.exchange(soci::use(cursor));
@@ -88,7 +90,8 @@ ExternalQueue::setCursorForResource(std::string const& resid, uint32 cursor)
     else
     {
         auto prep = mApp.getDatabase().getPreparedStatement(
-            "UPDATE pubsub SET lastread = :v WHERE resid = :n;");
+            "UPDATE pubsub SET lastread = :v WHERE resid = :n;",
+            mApp.getDatabase().getMiscSession());
 
         auto& st = prep.statement();
         st.exchange(soci::use(cursor));
@@ -114,7 +117,8 @@ ExternalQueue::getCursorForResource(std::string const& resid,
 
         auto& db = mApp.getDatabase();
         auto prep =
-            db.getPreparedStatement("SELECT resid, lastread FROM pubsub;");
+            db.getPreparedStatement("SELECT resid, lastread FROM pubsub;",
+                                    mApp.getDatabase().getMiscSession());
         auto& st = prep.statement();
         st.exchange(soci::into(n));
         st.exchange(soci::into(v));
@@ -151,7 +155,8 @@ ExternalQueue::deleteCursor(std::string const& resid)
     {
         ZoneNamedN(deletePubsubZone, "delete pubsub", true);
         auto prep = mApp.getDatabase().getPreparedStatement(
-            "DELETE FROM pubsub WHERE resid = :n;");
+            "DELETE FROM pubsub WHERE resid = :n;",
+            mApp.getDatabase().getMiscSession());
         auto& st = prep.statement();
         st.exchange(soci::use(resid));
         st.define_and_bind();
@@ -167,7 +172,7 @@ ExternalQueue::deleteOldEntries(uint32 count)
     int m;
     soci::indicator minIndicator;
     soci::statement st =
-        (db.getSession().prepare << "SELECT MIN(lastread) FROM pubsub",
+        (db.getMiscSession().prepare << "SELECT MIN(lastread) FROM pubsub",
          soci::into(m, minIndicator));
     {
         ZoneNamedN(selectPubsubZone, "select pubsub", true);
@@ -204,7 +209,20 @@ ExternalQueue::deleteOldEntries(uint32 count)
               "Trimming history <= ledger {} (rmin={}, qmin={}, lmin={})", cmin,
               rmin, qmin, lmin);
 
-    mApp.getLedgerManager().deleteOldEntries(mApp.getDatabase(), cmin, count);
+    HerderPersistence::deleteOldEntries(mApp.getDatabase(), cmin, count);
+
+    // TODO: fix, doesn't work when ledgerClose is on main
+    if (!mApp.getLedgerManager().isSynced())
+    {
+        return;
+    }
+    mApp.postOnLedgerCloseThread(
+        [&app = mApp, cmin, count] {
+            app.getDatabase().clearPreparedStatementCache();
+            app.getLedgerManager().deleteOldEntries(app.getDatabase(), cmin,
+                                                    count);
+        },
+        "maintenance");
 }
 
 void
@@ -224,8 +242,9 @@ ExternalQueue::getCursor(std::string const& resid)
     std::string res;
 
     auto& db = mApp.getDatabase();
-    auto prep = db.getPreparedStatement(
-        "SELECT lastread FROM pubsub WHERE resid = :n;");
+    auto prep =
+        db.getPreparedStatement("SELECT lastread FROM pubsub WHERE resid = :n;",
+                                mApp.getDatabase().getMiscSession());
     auto& st = prep.statement();
     st.exchange(soci::into(res));
     st.exchange(soci::use(resid));

@@ -181,6 +181,8 @@ uint32_t
 HistoryManagerImpl::getMaxLedgerQueuedToPublish()
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
+
     uint32_t seq;
     soci::indicator maxIndicator;
     auto prep = mApp.getDatabase().getPreparedStatement(
@@ -199,6 +201,7 @@ HistoryManagerImpl::getMaxLedgerQueuedToPublish()
 bool
 HistoryManagerImpl::maybeQueueHistoryCheckpoint()
 {
+    releaseAssert(threadIsMain());
     uint32_t lcl = mApp.getLedgerManager().getLastClosedLedgerNum();
     if (!publishCheckpointOnLedgerClose(lcl))
     {
@@ -220,6 +223,8 @@ void
 HistoryManagerImpl::queueCurrentHistory()
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
+
     auto ledger = mApp.getLedgerManager().getLastClosedLedgerNum();
 
     BucketList bl;
@@ -261,6 +266,8 @@ void
 HistoryManagerImpl::takeSnapshotAndPublish(HistoryArchiveState const& has)
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
+
     if (mPublishWork)
     {
         return;
@@ -313,6 +320,8 @@ HistoryManagerImpl::takeSnapshotAndPublish(HistoryArchiveState const& has)
 size_t
 HistoryManagerImpl::publishQueuedHistory()
 {
+    releaseAssert(threadIsMain());
+
     if (mApp.isStopping())
     {
         return 0;
@@ -351,6 +360,8 @@ HistoryManagerImpl::publishQueuedHistory()
 void
 HistoryManagerImpl::maybeCheckpointComplete()
 {
+    // releaseAssert(threadIsLedgerClose() ||
+    // !mApp.getConfig().EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE);
     uint32_t lcl = mApp.getLedgerManager().getLastClosedLedgerNum();
     if (!publishCheckpointOnLedgerClose(lcl) ||
         !mApp.getHistoryArchiveManager().publishEnabled())
@@ -366,6 +377,8 @@ std::vector<HistoryArchiveState>
 HistoryManagerImpl::getPublishQueueStates()
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
+
     std::vector<HistoryArchiveState> states;
 
     std::string state;
@@ -388,6 +401,8 @@ PublishQueueBuckets::BucketCount
 HistoryManagerImpl::loadBucketsReferencedByPublishQueue()
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
+
     auto states = getPublishQueueStates();
     PublishQueueBuckets::BucketCount result{};
     for (auto const& s : states)
@@ -405,6 +420,8 @@ std::vector<std::string>
 HistoryManagerImpl::getBucketsReferencedByPublishQueue()
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
+
     if (!mPublishQueueBucketsFilled)
     {
         mPublishQueueBuckets.setBuckets(loadBucketsReferencedByPublishQueue());
@@ -424,6 +441,8 @@ std::vector<std::string>
 HistoryManagerImpl::getMissingBucketsReferencedByPublishQueue()
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
+
     auto states = getPublishQueueStates();
     std::set<std::string> buckets;
     for (auto const& s : states)
@@ -437,6 +456,8 @@ HistoryManagerImpl::getMissingBucketsReferencedByPublishQueue()
 void
 HistoryManagerImpl::deletePublishedFiles(uint32_t ledgerSeq, Config const& cfg)
 {
+    releaseAssert(threadIsMain());
+
     releaseAssert(isLastLedgerInCheckpoint(ledgerSeq));
     FileTransferInfo res(FileType::HISTORY_FILE_TYPE_RESULTS, ledgerSeq,
                          mApp.getConfig());
@@ -460,6 +481,8 @@ HistoryManagerImpl::historyPublished(
     bool success)
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
+
     if (success)
     {
         auto iter = mEnqueueTimes.find(ledgerSeq);
@@ -502,6 +525,8 @@ HistoryManagerImpl::appendTransactionSet(uint32_t ledgerSeq,
                                          TxSetXDRFrameConstPtr const& txSet,
                                          TransactionResultSet const& resultSet)
 {
+    // releaseAssert(threadIsLedgerClose() ||
+    // !mApp.getConfig().EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE);
     if (mApp.getHistoryArchiveManager().publishEnabled())
     {
         releaseAssert(mCheckpoint);
@@ -512,6 +537,8 @@ HistoryManagerImpl::appendTransactionSet(uint32_t ledgerSeq,
 void
 HistoryManagerImpl::appendLedgerHeader(LedgerHeader const& header)
 {
+    // releaseAssert(threadIsLedgerClose() ||
+    // !mApp.getConfig().EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE);
     if (mApp.getHistoryArchiveManager().publishEnabled())
     {
         releaseAssert(mCheckpoint);

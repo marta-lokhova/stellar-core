@@ -110,7 +110,9 @@ std::string
 PersistentState::getState(PersistentState::Entry entry)
 {
     ZoneScoped;
-    return getFromDb(getStoreStateName(entry));
+    return getFromDb(getStoreStateName(entry),
+                     getSessionForEntry(getStoreStateName(entry),
+                                        mApp.getDatabase().getSession()));
 }
 
 void
@@ -129,7 +131,8 @@ PersistentState::getSCPStateAllSlots()
     std::vector<std::string> states;
     for (uint32 i = 0; i <= mApp.getConfig().MAX_SLOTS_TO_REMEMBER; i++)
     {
-        auto val = getFromDb(getStoreStateName(kLastSCPDataXDR, i));
+        auto val = getFromDb(getStoreStateName(kLastSCPDataXDR, i),
+                             mApp.getDatabase().getMiscSession());
         if (!val.empty())
         {
             states.push_back(val);
@@ -169,7 +172,10 @@ bool
 PersistentState::shouldRebuildForType(LedgerEntryType let)
 {
     ZoneScoped;
-    return !getFromDb(getStoreStateName(kRebuildLedger, let)).empty();
+    return !getFromDb(getStoreStateName(kRebuildLedger, let),
+                      getSessionForEntry(getStoreStateName(kRebuildLedger, let),
+                                         mApp.getDatabase().getSession()))
+                .empty();
 }
 
 void
@@ -214,7 +220,7 @@ PersistentState::updateDb(std::string const& entry, std::string const& value,
         st.execute(true);
     }
 
-    if (st.get_affected_rows() != 1 && getFromDb(entry).empty())
+    if (st.get_affected_rows() != 1 && getFromDb(entry, session).empty())
     {
         ZoneNamedN(insertStoreStateZone, "insert storestate", true);
         auto prep2 = mApp.getDatabase().getPreparedStatement(
@@ -294,13 +300,6 @@ PersistentState::getTxSetHashesForAllSlots()
     }
 
     return result;
-}
-
-std::string
-PersistentState::getFromDb(std::string const& entry)
-{
-    ZoneScoped;
-    return getFromDb(entry, mApp.getDatabase().getSession());
 }
 
 std::string

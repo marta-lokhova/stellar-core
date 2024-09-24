@@ -28,7 +28,8 @@ bool threadIsOverlay()
     return overlayThread == std::this_thread::get_id();
 }
 
-bool threadIsLedgerClose()
+bool
+threadIsLedgerClose()
 {
     return ledgerCloseThread == std::this_thread::get_id();
 }

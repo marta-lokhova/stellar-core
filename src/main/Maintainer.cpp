@@ -73,6 +73,9 @@ Maintainer::performMaintenance(uint32_t count)
         "maintenance followed by database maintenance. Maintenance took",
         std::chrono::seconds{2});
     ExternalQueue ps{mApp};
+
+    // TODO: soci doesn't support concurrent writer txs, so just move
+    // maintenance to the background as well
     ps.deleteOldEntries(count);
 }
 }

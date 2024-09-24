@@ -13,12 +13,13 @@
 namespace stellar
 {
 
+// Invariants: main thread, cannot be applying at the same time,
+// Background thread, in this case cannot be applying because ledger close
+// thread is shared
 BucketListSnapshot::BucketListSnapshot(BucketList const& bl,
                                        LedgerHeader header)
     : mHeader(std::move(header))
 {
-    releaseAssert(threadIsMain());
-
     for (uint32_t i = 0; i < BucketList::kNumLevels; ++i)
     {
         auto const& level = bl.getLevel(i);
@@ -286,11 +287,18 @@ SearchableBucketListSnapshot::loadPoolShareTrustLinesByAccountAndAsset(
 
     loopAllBuckets(trustLineLoop, *mSnapshot);
 
-    auto timer = mSnapshotManager
-                     .recordBulkLoadMetrics("poolshareTrustlines",
-                                            trustlinesToLoad.size())
-                     .TimeScope();
-    return loadKeysInternal(trustlinesToLoad, *mSnapshot, nullptr);
+    if (threadIsMain())
+    {
+        auto timer = mSnapshotManager
+                         .recordBulkLoadMetrics("poolshareTrustlines",
+                                                trustlinesToLoad.size())
+                         .TimeScope();
+        return loadKeysInternal(trustlinesToLoad, *mSnapshot, nullptr);
+    }
+    else
+    {
+        return loadKeysInternal(trustlinesToLoad, *mSnapshot, nullptr);
+    }
 }
 
 std::vector<InflationWinner>
@@ -304,9 +312,6 @@ SearchableBucketListSnapshot::loadInflationWinners(size_t maxWinners,
     // This is a legacy query, should only be called by main thread during
     // catchup
     releaseAssert(threadIsMain());
-    auto timer = mSnapshotManager.recordBulkLoadMetrics("inflationWinners", 0)
-                     .TimeScope();
-
     UnorderedMap<AccountID, int64_t> voteCount;
     UnorderedSet<AccountID> seen;
 

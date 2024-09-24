@@ -1052,7 +1052,7 @@ SorobanTest::getDummyAccount()
     return mDummyAccount;
 }
 
-SorobanNetworkConfig const&
+SorobanNetworkConfig
 SorobanTest::getNetworkCfg()
 {
     return getApp().getLedgerManager().getSorobanNetworkConfig();

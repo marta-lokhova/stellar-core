@@ -262,12 +262,9 @@ OperationFrame::checkValid(AppConnector& app,
             isSoroban())
         {
             releaseAssertOrThrow(sorobanData);
-            auto const& sorobanConfig =
-                app.getLedgerManager().getSorobanNetworkConfig();
-
-            validationResult =
-                doCheckValidForSoroban(sorobanConfig, app.getConfig(),
-                                       ledgerVersion, res, *sorobanData);
+            validationResult = doCheckValidForSoroban(
+                app.getSorobanNetworkConfig(), app.getConfig(), ledgerVersion,
+                res, *sorobanData);
         }
         else
         {

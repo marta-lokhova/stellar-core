@@ -72,7 +72,6 @@ class PersistentState
     void updateDb(std::string const& entry, std::string const& value,
                   soci::session& session);
 
-    std::string getFromDb(std::string const& entry);
     std::string getFromDb(std::string const& entry, soci::session& session);
 
     bool entryExists(std::string const& entry);

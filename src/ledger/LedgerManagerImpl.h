@@ -41,6 +41,10 @@ class BasicWork;
 
 class LedgerManagerImpl : public LedgerManager
 {
+    class BackgroundApplicator
+    {
+    };
+
   protected:
     Application& mApp;
     std::unique_ptr<XDROutputFileStream> mMetaStream;
@@ -49,6 +53,7 @@ class LedgerManagerImpl : public LedgerManager
     std::filesystem::path mMetaDebugPath;
 
   private:
+    mutable std::recursive_mutex mLockLCL;
     LedgerHeaderHistoryEntry mLastClosedLedger;
     std::optional<SorobanNetworkConfig> mSorobanNetworkConfig;
 
@@ -66,7 +71,7 @@ class LedgerManagerImpl : public LedgerManager
     medida::Counter& mSorobanTransactionApplyFailed;
     medida::Meter& mMetaStreamBytes;
     medida::Timer& mMetaStreamWriteTime;
-    VirtualClock::time_point mLastClose;
+    std::atomic<VirtualClock::time_point> mLastClose;
     bool mRebuildInMemoryState{false};
 
     std::unique_ptr<VirtualClock::time_point> mStartCatchup;
@@ -74,10 +79,17 @@ class LedgerManagerImpl : public LedgerManager
 
     std::unique_ptr<LedgerCloseMetaFrame> mNextMetaToEmit;
 
-    std::vector<MutableTxResultPtr> processFeesSeqNums(
+    static std::vector<MutableTxResultPtr> processFeesSeqNums(
         std::vector<TransactionFrameBasePtr> const& txs,
         AbstractLedgerTxn& ltxOuter, ApplicableTxSetFrame const& txSet,
         std::unique_ptr<LedgerCloseMetaFrame> const& ledgerCloseMeta);
+
+    void closeLegderAtomic(AppConnector& app, LedgerCloseData const& ledgerData,
+                           AbstractLedgerTxnParent& root,
+                           LedgerHeaderHistoryEntry const& lastClosedLedger,
+                           std::atomic<VirtualClock::time_point>& lastClose,
+                           medida::Counter& ledgerAge,
+                           medida::Buckets& ledgerAgeClosed);
 
     void applyTransactions(
         ApplicableTxSetFrame const& txSet,
@@ -95,10 +107,14 @@ class LedgerManagerImpl : public LedgerManager
                  uint32_t initialLedgerVers);
 
     void storeCurrentLedger(LedgerHeader const& header, bool storeHeader);
-    void
-    prefetchTransactionData(std::vector<TransactionFrameBasePtr> const& txs);
-    void prefetchTxSourceIds(std::vector<TransactionFrameBasePtr> const& txs);
-    void closeLedgerIf(LedgerCloseData const& ledgerData);
+    static void
+    prefetchTransactionData(AbstractLedgerTxnParent& rootLtx,
+                            std::vector<TransactionFrameBasePtr> const& txs,
+                            Config const& config);
+    static void
+    prefetchTxSourceIds(AbstractLedgerTxnParent& rootLtx,
+                        std::vector<TransactionFrameBasePtr> const& txs,
+                        Config const& config);
 
     State mState;
 
@@ -109,8 +125,6 @@ class LedgerManagerImpl : public LedgerManager
     void setState(State s);
 
     void emitNextMeta();
-
-    SorobanNetworkConfig& getSorobanNetworkConfigInternal();
 
     // Publishes soroban metrics, including select network config limits as well
     // as the actual ledger usage.
@@ -134,6 +148,8 @@ class LedgerManagerImpl : public LedgerManager
                                bool debugLog = true);
     void logTxApplyMetrics(AbstractLedgerTxn& ltx, size_t numTxs,
                            size_t numOps);
+    std::unordered_map<AccountID, TransactionFrameBaseConstPtr>
+        mSourceAccountsApplied;
 
   public:
     LedgerManagerImpl(Application& app);
@@ -146,7 +162,8 @@ class LedgerManagerImpl : public LedgerManager
     State getState() const override;
     std::string getStateHuman() const override;
 
-    void valueExternalized(LedgerCloseData const& ledgerData) override;
+    void valueExternalized(LedgerCloseData const& ledgerData,
+                           bool isLatestSlot) override;
 
     uint32_t getLastMaxTxSetSize() const override;
     uint32_t getLastMaxTxSetSizeOps() const override;
@@ -156,7 +173,8 @@ class LedgerManagerImpl : public LedgerManager
     uint32_t getLastReserve() const override;
     uint32_t getLastTxFee() const override;
     uint32_t getLastClosedLedgerNum() const override;
-    SorobanNetworkConfig const& getSorobanNetworkConfig() override;
+    // Return a thread-safe copy
+    SorobanNetworkConfig getSorobanNetworkConfig() override;
     bool hasSorobanNetworkConfig() const override;
 
 #ifdef BUILD_TESTS
@@ -176,7 +194,7 @@ class LedgerManagerImpl : public LedgerManager
     virtual bool rebuildingInMemoryState() override;
     virtual void setupInMemoryStateRebuild() override;
 
-    LedgerHeaderHistoryEntry const& getLastClosedLedgerHeader() const override;
+    LedgerHeaderHistoryEntry getLastClosedLedgerHeader() const override;
 
     HistoryArchiveState getLastClosedLedgerHAS() override;
 
@@ -187,7 +205,8 @@ class LedgerManagerImpl : public LedgerManager
                  std::shared_ptr<HistoryArchive> archive,
                  std::set<std::shared_ptr<Bucket>> bucketsToRetain) override;
 
-    void closeLedger(LedgerCloseData const& ledgerData) override;
+    void closeLedger(LedgerCloseData const& ledgerData,
+                     ExternalizeInfo externalize) override;
     void deleteOldEntries(Database& db, uint32_t ledgerSeq,
                           uint32_t count) override;
 

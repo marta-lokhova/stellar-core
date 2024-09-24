@@ -219,7 +219,7 @@ HerderSCPDriver::validateValueHelper(uint64_t slotIndex, StellarValue const& b,
         }
     }
 
-    auto const& lcl = mLedgerManager.getLastClosedLedgerHeader().header;
+    auto lcl = mLedgerManager.getLastClosedLedgerHeader().header;
     // when checking close time, start with what we have locally
     lastCloseTime = lcl.scpValue.closeTime;
 
@@ -611,7 +611,7 @@ HerderSCPDriver::combineCandidates(uint64_t slotIndex,
 
     std::set<TransactionFramePtr> aggSet;
 
-    auto const& lcl = mLedgerManager.getLastClosedLedgerHeader();
+    auto lcl = mLedgerManager.getLastClosedLedgerHeader();
 
     Hash candidatesHash;
 
@@ -705,7 +705,8 @@ HerderSCPDriver::combineCandidates(uint64_t slotIndex,
             auto cTxSet = mPendingEnvelopes.getTxSet(sv.txSetHash);
             releaseAssert(cTxSet);
             // Only valid applicable tx sets should be combined.
-            auto cApplicableTxSet = cTxSet->prepareForApply(mApp);
+            auto cApplicableTxSet =
+                cTxSet->prepareForApply(mApp.getAppConnector());
             releaseAssert(cApplicableTxSet);
             if (cTxSet->previousLedgerHash() == lcl.hash)
             {
@@ -1227,6 +1228,7 @@ bool
 HerderSCPDriver::checkAndCacheTxSetValid(TxSetXDRFrame const& txSet,
                                          uint64_t closeTimeOffset) const
 {
+    // TODO: this cache probably doesn't work now
     auto key = TxSetValidityKey{
         mApp.getLedgerManager().getLastClosedLedgerHeader().hash,
         txSet.getContentsHash(), closeTimeOffset, closeTimeOffset};
@@ -1243,7 +1245,15 @@ HerderSCPDriver::checkAndCacheTxSetValid(TxSetXDRFrame const& txSet,
         if (txSet.previousLedgerHash() ==
             mApp.getLedgerManager().getLastClosedLedgerHeader().hash)
         {
-            applicableTxSet = txSet.prepareForApply(mApp);
+            applicableTxSet = txSet.prepareForApply(mApp.getAppConnector());
+        }
+        else
+        {
+            CLOG_INFO(
+                Ledger, "Hashes don't match: {} vs {}",
+                hexAbbrev(txSet.previousLedgerHash()),
+                hexAbbrev(
+                    mApp.getLedgerManager().getLastClosedLedgerHeader().hash));
         }
 
         bool res = true;

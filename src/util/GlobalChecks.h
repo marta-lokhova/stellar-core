@@ -6,6 +6,7 @@
 
 #include <Tracy.hpp>
 #include <mutex>
+#include <thread>
 
 namespace stellar
 {

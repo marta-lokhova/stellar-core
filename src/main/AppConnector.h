@@ -14,6 +14,7 @@ struct OverlayMetrics;
 class SorobanNetworkConfig;
 class SorobanMetrics;
 struct LedgerTxnDelta;
+class LedgerCloseMetaFrame;
 
 // Helper class to isolate access to Application; all function helpers must
 // either be called from main or be thread-sade
@@ -33,7 +34,7 @@ class AppConnector
     OverlayManager& getOverlayManager();
     BanManager& getBanManager();
     bool shouldYield() const;
-    SorobanNetworkConfig const& getSorobanNetworkConfig() const;
+    SorobanNetworkConfig getSorobanNetworkConfig() const;
     medida::MetricsRegistry& getMetrics() const;
     SorobanMetrics& getSorobanMetrics() const;
     void checkOnOperationApply(Operation const& operation,
@@ -51,5 +52,6 @@ class AppConnector
     Config const& getConfig() const;
     bool overlayShuttingDown() const;
     OverlayMetrics& getOverlayMetrics();
+    LedgerHeaderHistoryEntry getLastClosedLedgerHeader() const;
 };
 }

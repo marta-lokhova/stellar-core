@@ -366,12 +366,12 @@ makeTxSetFromTransactions(TxSetPhaseTransactions const& txPhases,
 #endif
     }
 
-    auto const& lclHeader = app.getLedgerManager().getLastClosedLedgerHeader();
+    auto lclHeader = app.getLedgerManager().getLastClosedLedgerHeader();
     // Preliminary applicable frame - we don't know the contents hash yet, but
     // we also don't return this.
     std::unique_ptr<ApplicableTxSetFrame> preliminaryApplicableTxSet(
-        new ApplicableTxSetFrame(app, lclHeader, validatedPhases,
-                                 std::nullopt));
+        new ApplicableTxSetFrame(app.getAppConnector(), lclHeader,
+                                 validatedPhases, std::nullopt));
     preliminaryApplicableTxSet->applySurgePricing(app);
     // Do the roundtrip through XDR to ensure we never build an incorrect tx set
     // for nomination.
@@ -389,7 +389,7 @@ makeTxSetFromTransactions(TxSetPhaseTransactions const& txPhases,
 #endif
 
     ApplicableTxSetFrameConstPtr outputApplicableTxSet =
-        outputTxSet->prepareForApply(app);
+        outputTxSet->prepareForApply(app.getAppConnector());
 
     if (!outputApplicableTxSet)
     {
@@ -524,7 +524,7 @@ TxSetXDRFrame::toStellarMessage() const
 #endif
 
 ApplicableTxSetFrameConstPtr
-TxSetXDRFrame::prepareForApply(Application& app) const
+TxSetXDRFrame::prepareForApply(AppConnector& app) const
 {
 #ifdef BUILD_TESTS
     if (mApplicableTxSetOverride)
@@ -597,7 +597,7 @@ TxSetXDRFrame::prepareForApply(Application& app) const
             return nullptr;
         }
         txSet->computeTxFeesForNonGeneralizedSet(
-            app.getLedgerManager().getLastClosedLedgerHeader().header);
+            app.getLastClosedLedgerHeader().header);
     }
     return txSet;
 }
@@ -765,7 +765,8 @@ TxSetXDRFrame::storeXDR(StoredTransactionSet& txSet) const
     }
 }
 
-ApplicableTxSetFrame::ApplicableTxSetFrame(Application& app, bool isGeneralized,
+ApplicableTxSetFrame::ApplicableTxSetFrame(AppConnector& app,
+                                           bool isGeneralized,
                                            Hash const& previousLedgerHash,
                                            TxSetPhaseTransactions const& txs,
                                            std::optional<Hash> contentsHash)
@@ -775,12 +776,11 @@ ApplicableTxSetFrame::ApplicableTxSetFrame(Application& app, bool isGeneralized,
     , mPhaseInclusionFeeMap(mTxPhases.size())
     , mContentsHash(contentsHash)
 {
-    releaseAssert(previousLedgerHash ==
-                  app.getLedgerManager().getLastClosedLedgerHeader().hash);
+    releaseAssert(previousLedgerHash == app.getLastClosedLedgerHeader().hash);
 }
 
 ApplicableTxSetFrame::ApplicableTxSetFrame(
-    Application& app, LedgerHeaderHistoryEntry const& lclHeader,
+    AppConnector& app, LedgerHeaderHistoryEntry const& lclHeader,
     TxSetPhaseTransactions const& txs, std::optional<Hash> contentsHash)
     : ApplicableTxSetFrame(
           app,
@@ -875,7 +875,7 @@ ApplicableTxSetFrame::checkValid(Application& app,
                                  uint64_t upperBoundCloseTimeOffset) const
 {
     ZoneScoped;
-    auto& lcl = app.getLedgerManager().getLastClosedLedgerHeader();
+    auto lcl = app.getLedgerManager().getLastClosedLedgerHeader();
 
     // Start by checking previousLedgerHash
     if (lcl.hash != mPreviousLedgerHash)
@@ -1388,7 +1388,7 @@ ApplicableTxSetFrame::applySurgePricing(Application& app)
     ZoneScoped;
     releaseAssert(mTxPhases.size() <=
                   static_cast<int>(TxSetPhase::PHASE_COUNT));
-    auto const& lclHeader =
+    auto const lclHeader =
         app.getLedgerManager().getLastClosedLedgerHeader().header;
     for (int i = 0; i < mTxPhases.size(); i++)
     {

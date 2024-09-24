@@ -6,7 +6,7 @@
 	url = https://github.com/xdrpp/xdrpp.git
 [submodule "lib/libmedida"]
 	path = lib/libmedida
-	url = https://github.com/stellar/medida.git
+	url = https://github.com/marta-lokhova/medida.git
 [submodule "lib/cereal"]
 	path = lib/cereal
 	url = https://github.com/USCiLab/cereal
