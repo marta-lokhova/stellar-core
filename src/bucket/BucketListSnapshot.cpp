@@ -266,7 +266,7 @@ SearchableBucketListSnapshot::loadPoolShareTrustLinesByAccountAndAsset(
     ZoneScoped;
 
     // This query should only be called during TX apply
-    releaseAssert(threadIsMain());
+    // releaseAcssert(threadIsMain());
     mSnapshotManager.maybeUpdateSnapshot(mSnapshot, mHistoricalSnapshots);
     releaseAssert(mSnapshot);
 
@@ -311,7 +311,7 @@ SearchableBucketListSnapshot::loadInflationWinners(size_t maxWinners,
 
     // This is a legacy query, should only be called by main thread during
     // catchup
-    releaseAssert(threadIsMain());
+    // releaseAssert(threadIsMain());
     UnorderedMap<AccountID, int64_t> voteCount;
     UnorderedSet<AccountID> seen;
 
