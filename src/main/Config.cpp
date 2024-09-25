@@ -182,6 +182,8 @@ Config::Config() : NODE_SEED(SecretKey::random())
     // (30*24*3600/5) / (400 - 359/5 ) // number of periods needed to catchup
     //   * (359) / (24*3600) = 6.56 days
     AUTOMATIC_MAINTENANCE_COUNT = 400;
+    TRANSACTION_QUEUE_SIZE_MULTIPLIER = 2;
+    SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER = 2;
     // automatic self-check happens once every 3 hours
     AUTOMATIC_SELF_CHECK_PERIOD = std::chrono::seconds(0);
     ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING = false;
@@ -1123,6 +1125,16 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                 {"EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE",
                  [&]() {
                      EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE = readBool(item);
+                 }},
+                {"TRANSACTION_QUEUE_SIZE_MULTIPLIER",
+                 [&]() {
+                     TRANSACTION_QUEUE_SIZE_MULTIPLIER =
+                         readInt<uint32_t>(item);
+                 }},
+                {"SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER",
+                 [&]() {
+                     SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER =
+                         readInt<uint32_t>(item);
                  }},
                 {"EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE_DELAY",
                  [&]() {

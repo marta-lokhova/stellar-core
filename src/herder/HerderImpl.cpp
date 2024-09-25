@@ -60,8 +60,6 @@ constexpr uint32 const CLOSE_TIME_DRIFT_SECONDS_THRESHOLD = 10;
 
 constexpr uint32 const TRANSACTION_QUEUE_TIMEOUT_LEDGERS = 4;
 constexpr uint32 const TRANSACTION_QUEUE_BAN_LEDGERS = 10;
-constexpr uint32 const TRANSACTION_QUEUE_SIZE_MULTIPLIER = 2;
-constexpr uint32 const SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER = 2;
 
 std::unique_ptr<Herder>
 Herder::create(Application& app)
@@ -87,7 +85,7 @@ HerderImpl::SCPMetrics::SCPMetrics(Application& app)
 HerderImpl::HerderImpl(Application& app)
     : mTransactionQueue(app, TRANSACTION_QUEUE_TIMEOUT_LEDGERS,
                         TRANSACTION_QUEUE_BAN_LEDGERS,
-                        TRANSACTION_QUEUE_SIZE_MULTIPLIER)
+                        app.getConfig().TRANSACTION_QUEUE_SIZE_MULTIPLIER)
     , mPendingEnvelopes(app, *this)
     , mHerderSCPDriver(app, *this, mUpgrades, mPendingEnvelopes)
     , mLastSlotSaved(0)
@@ -2135,7 +2133,7 @@ HerderImpl::maybeSetupSorobanQueue(uint32_t protocolVersion)
                 std::make_unique<SorobanTransactionQueue>(
                     mApp, TRANSACTION_QUEUE_TIMEOUT_LEDGERS,
                     TRANSACTION_QUEUE_BAN_LEDGERS,
-                    SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER);
+                    mApp.getConfig().SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER);
         }
     }
     else if (mSorobanTransactionQueue)

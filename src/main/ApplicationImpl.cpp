@@ -122,6 +122,8 @@ ApplicationImpl::ApplicationImpl(VirtualClock& clock, Config const& cfg)
           mMetrics->NewTimer({"app", "post-on-main-thread", "delay"}))
     , mPostOnBackgroundThreadDelay(
           mMetrics->NewTimer({"app", "post-on-background-thread", "delay"}))
+    , mPostOnLedgerCloseThreadDelay(
+          mMetrics->NewTimer({"app", "post-on-ledger-close-thread", "delay"}))
     , mPostOnOverlayThreadDelay(
           mMetrics->NewTimer({"app", "post-on-overlay-thread", "delay"}))
     , mStartedOn(clock.system_now())
@@ -1637,7 +1639,7 @@ ApplicationImpl::postOnLedgerCloseThread(std::function<void()>&& f,
     LogSlowExecution isSlow{std::move(jobName), LogSlowExecution::Mode::MANUAL,
                             "executed after"};
     asio::post(*mLedgerCloseIOContext, [this, f = std::move(f), isSlow]() {
-        // mPostOnLedgerCloseThreadDelay.Update(isSlow.checkElapsedTime());
+        mPostOnLedgerCloseThreadDelay.Update(isSlow.checkElapsedTime());
         f();
     });
 }

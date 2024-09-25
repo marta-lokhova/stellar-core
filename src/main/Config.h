@@ -190,6 +190,9 @@ class Config : public std::enable_shared_from_this<Config>
     // maintenance run
     uint32_t AUTOMATIC_MAINTENANCE_COUNT;
 
+    uint32 TRANSACTION_QUEUE_SIZE_MULTIPLIER;
+    uint32 SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER;
+
     // Interval between automatic invocations of self-check.
     std::chrono::seconds AUTOMATIC_SELF_CHECK_PERIOD;
 

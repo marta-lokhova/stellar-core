@@ -229,6 +229,7 @@ class ApplicationImpl : public Application
     medida::Timer& mPostOnMainThreadDelay;
     medida::Timer& mPostOnBackgroundThreadDelay;
     medida::Timer& mPostOnOverlayThreadDelay;
+    medida::Timer& mPostOnLedgerCloseThreadDelay;
 
     VirtualClock::system_time_point mStartedOn;
 
