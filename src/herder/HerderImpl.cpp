@@ -248,10 +248,6 @@ HerderImpl::newSlotExternalized(bool synchronous, StellarValue const& value)
     // start timing next externalize from this point
     mLastExternalize = mApp.getClock().now();
 
-    // In order to update the transaction queue we need to get the
-    // applied transactions.
-    updateTransactionQueue(mPendingEnvelopes.getTxSet(value.txSetHash));
-
     // perform cleanups
     // Evict slots that are outside of our ledger validity bracket
     auto minSlotToRemember = getMinLedgerSeqToRemember();
@@ -1135,7 +1131,7 @@ HerderImpl::safelyProcessSCPQueue(bool synchronous)
 }
 
 void
-HerderImpl::lastClosedLedgerIncreased(bool latest)
+HerderImpl::lastClosedLedgerIncreased(bool latest, TxSetXDRFrameConstPtr txSet)
 {
     releaseAssert(threadIsMain());
     maybeSetupSorobanQueue(
@@ -1143,6 +1139,10 @@ HerderImpl::lastClosedLedgerIncreased(bool latest)
 
     // Ensure potential upgrades are handled in overlay
     maybeHandleUpgrade();
+
+    // In order to update the transaction queue we need to get the
+    // applied transactions.
+    updateTransactionQueue(txSet);
 
     if (latest)
     {

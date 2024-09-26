@@ -3378,7 +3378,7 @@ TEST_CASE("overlay parallelization")
                 cfg.METADATA_DEBUG_LEDGERS = 0;
                 cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 100;
                 cfg.EXPERIMENTAL_BACKGROUND_LEDGER_CLOSE_DELAY =
-                    std::chrono::seconds(1);
+                    std::chrono::seconds(3);
                 return cfg;
             });
     }
@@ -3418,11 +3418,11 @@ TEST_CASE("overlay parallelization")
     // Generate Soroban txs from one node
     loadGen.generateLoad(GeneratedLoadConfig::txLoad(
         LoadGenMode::SOROBAN_UPLOAD, 50,
-        /* nTxs */ 500, desiredTxRate, /* offset */ 0));
+        /* nTxs */ 500, desiredTxRate * 2, /* offset */ 0));
     // Generate classic txs from another node (with offset to prevent
     // overlapping accounts)
     secondLoadGen.generateLoad(GeneratedLoadConfig::txLoad(
-        LoadGenMode::PAY, 50, classicTxCount, desiredTxRate,
+        LoadGenMode::PAY, 50, classicTxCount, desiredTxRate * 2,
         /* offset */ 50));
 
     simulation->crankUntil(

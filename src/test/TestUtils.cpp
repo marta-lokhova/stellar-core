@@ -213,8 +213,8 @@ upgradeSorobanNetworkConfig(std::function<void(SorobanNetworkConfig&)> modifyFn,
             .count() == 0)
     {
         auto createAccountsLoadConfig =
-            GeneratedLoadConfig::createAccountsLoad(1, 1);
-        offset = std::numeric_limits<uint32_t>::max() - 1;
+            GeneratedLoadConfig::createAccountsLoad(100, 1);
+        offset = std::numeric_limits<uint32_t>::max() - 100;
         createAccountsLoadConfig.offset = offset;
 
         lg.generateLoad(createAccountsLoadConfig);
@@ -234,7 +234,7 @@ upgradeSorobanNetworkConfig(std::function<void(SorobanNetworkConfig&)> modifyFn,
 
     // Create upgrade transaction.
     auto createUpgradeLoadGenConfig = GeneratedLoadConfig::txLoad(
-        LoadGenMode::SOROBAN_CREATE_UPGRADE, 1, 1, 1);
+        LoadGenMode::SOROBAN_CREATE_UPGRADE, 100, 1, 1);
     createUpgradeLoadGenConfig.offset = offset;
     // Get current network config.
     auto cfg = nodes[0]->getLedgerManager().getSorobanNetworkConfig();

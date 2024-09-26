@@ -1012,7 +1012,6 @@ LedgerManagerImpl::closeLegderAtomic(
         }
     }
     auto maybeNewVersion = ltx.loadHeader().current().ledgerVersion;
-    auto ledgerSeq = ltx.loadHeader().current().ledgerSeq;
     if (protocolVersionStartsFrom(maybeNewVersion, SOROBAN_PROTOCOL_VERSION))
     {
         updateNetworkConfig(ltx);
@@ -1084,7 +1083,7 @@ LedgerManagerImpl::closeLedger(LedgerCloseData const& ledgerData,
     CLOG_DEBUG(Perf, "Applied ledger in {} seconds", ledgerTimeSeconds.count());
 
     mApp.postOnMainThread(
-        [&app = mApp, externalize, initialLedgerVers]() {
+        [&app = mApp, externalize, initialLedgerVers, ledgerData]() {
             releaseAssert(threadIsMain());
             auto ledgerSeq = app.getLedgerManager().getLastClosedLedgerNum();
             // step 5
@@ -1124,7 +1123,8 @@ LedgerManagerImpl::closeLedger(LedgerCloseData const& ledgerData,
                 }
 
                 // New ledger(s) got closed, notify Herder
-                app.getHerder().lastClosedLedgerIncreased(appliedLatest);
+                app.getHerder().lastClosedLedgerIncreased(
+                    appliedLatest, ledgerData.getTxSet());
             }
         },
         "LedgerManagerImpl::ledgerClosed");
@@ -1660,11 +1660,11 @@ LedgerManagerImpl::applyTransactions(
         ++index;
     }
 
-    // mTransactionApplySucceeded.inc(txSucceeded);
-    // mTransactionApplyFailed.inc(txFailed);
-    // mSorobanTransactionApplySucceeded.inc(sorobanTxSucceeded);
-    // mSorobanTransactionApplyFailed.inc(sorobanTxFailed);
-    // logTxApplyMetrics(ltx, numTxs, numOps);
+    mTransactionApplySucceeded.inc(txSucceeded);
+    mTransactionApplyFailed.inc(txFailed);
+    mSorobanTransactionApplySucceeded.inc(sorobanTxSucceeded);
+    mSorobanTransactionApplyFailed.inc(sorobanTxFailed);
+    logTxApplyMetrics(ltx, numTxs, numOps);
 }
 
 void

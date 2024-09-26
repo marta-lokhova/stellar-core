@@ -183,7 +183,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     //   * (359) / (24*3600) = 6.56 days
     AUTOMATIC_MAINTENANCE_COUNT = 400;
     TRANSACTION_QUEUE_SIZE_MULTIPLIER = 2;
-    SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER = 2;
+    SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER = 4;
     // automatic self-check happens once every 3 hours
     AUTOMATIC_SELF_CHECK_PERIOD = std::chrono::seconds(0);
     ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING = false;

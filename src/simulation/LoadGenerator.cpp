@@ -2220,12 +2220,13 @@ LoadGenerator::execute(TransactionFrameBasePtr txf, LoadGenMode mode,
                 ? xdrToCerealString(addResult.txResult->getResult(),
                                     "TransactionResult")
                 : "";
-        CLOG_INFO(LoadGen, "tx rejected '{}': ===> {}, {}",
-                  TX_STATUS_STRING[static_cast<int>(addResult.code)],
-                  txf->isSoroban() ? "soroban"
-                                   : xdrToCerealString(txf->getEnvelope(),
-                                                       "TransactionEnvelope"),
-                  resultStr);
+        CLOG_INFO(
+            LoadGen, "tx rejected '{}': ===> {}, {}",
+            TX_STATUS_STRING[static_cast<int>(addResult.code)],
+            (txf->isSoroban() && mode == LoadGenMode::SOROBAN_UPLOAD)
+                ? "soroban"
+                : xdrToCerealString(txf->getEnvelope(), "TransactionEnvelope"),
+            resultStr);
         if (addResult.code == TransactionQueue::AddResultCode::ADD_STATUS_ERROR)
         {
             releaseAssert(addResult.txResult);
@@ -2320,7 +2321,7 @@ GeneratedLoadConfig::createSorobanUpgradeSetupLoad()
 {
     GeneratedLoadConfig cfg;
     cfg.mode = LoadGenMode::SOROBAN_UPGRADE_SETUP;
-    cfg.nAccounts = 1;
+    cfg.nAccounts = 100;
     cfg.getMutSorobanConfig().nInstances = 1;
     cfg.txRate = 1;
     return cfg;
