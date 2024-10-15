@@ -265,6 +265,13 @@ class Config : public std::enable_shared_from_this<Config>
     // Timeout before publishing externalized values to archive
     std::chrono::seconds PUBLISH_TO_ARCHIVE_DELAY;
 
+    // Classic transaction queue multiplier to determine maximum size of the
+    // queue based on the current ledger limit
+    uint32_t TRANSACTION_QUEUE_SIZE_MULTIPLIER;
+    // Soroban transaction queue multiplier to determine maximum size of the
+    // queue based on the current ledger limit
+    uint32_t SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER;
+
     // Config parameters that force transaction application during ledger
     // close to sleep for a certain amount of time.
     // The probability that it sleeps for

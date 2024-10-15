@@ -29,7 +29,9 @@ ApplyLoad::ApplyLoad(Application& app, uint64_t ledgerMaxInstructions,
     : mTxGenerator(app)
     , mApp(app)
     , mNumAccounts(
-          ledgerMaxTxCount * SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER + 1)
+          ledgerMaxTxCount *
+              app.getConfig().SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER +
+          1)
     , mTxCountUtilization(
           mApp.getMetrics().NewHistogram({"soroban", "benchmark", "tx-count"}))
     , mInstructionUtilization(
@@ -228,7 +230,8 @@ ApplyLoad::benchmark()
     std::vector<TransactionFrameBasePtr> txs;
 
     auto resources = multiplyByDouble(
-        lm.maxLedgerResources(true), SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER);
+        lm.maxLedgerResources(true),
+        mApp.getConfig().SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER);
 
     // Save a snapshot so we can calculate what % we used up.
     auto const resourcesSnapshot = resources;

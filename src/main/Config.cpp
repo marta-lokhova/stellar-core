@@ -169,6 +169,8 @@ Config::Config() : NODE_SEED(SecretKey::random())
     BUCKETLIST_DB_PERSIST_INDEX = true;
     BACKGROUND_EVICTION_SCAN = true;
     PUBLISH_TO_ARCHIVE_DELAY = std::chrono::seconds{0};
+    TRANSACTION_QUEUE_SIZE_MULTIPLIER = 2;
+    SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER = 2;
     // automatic maintenance settings:
     // short and prime with 1 hour which will cause automatic maintenance to
     // rarely conflict with any other scheduled tasks on a machine (that tend to
@@ -1181,6 +1183,16 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                  [&]() {
                      PUBLISH_TO_ARCHIVE_DELAY =
                          std::chrono::seconds(readInt<uint32_t>(item));
+                 }},
+                {"TRANSACTION_QUEUE_SIZE_MULTIPLIER",
+                 [&]() {
+                     TRANSACTION_QUEUE_SIZE_MULTIPLIER =
+                         readInt<uint32_t>(item);
+                 }},
+                {"SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER",
+                 [&]() {
+                     SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER =
+                         readInt<uint32_t>(item);
                  }},
                 {"AUTOMATIC_MAINTENANCE_PERIOD",
                  [&]() {
