@@ -21,7 +21,6 @@ namespace stellar
 // FLOOD_DEMAND_BACKOFF_DELAY_MS it doesn't make much sense to wait much
 // longer than 2 seconds between re-issuing demands.
 constexpr std::chrono::seconds MAX_DELAY_DEMAND{2};
-constexpr size_t TX_BATCH_MAX_SIZE{100};
 
 TxDemandsManager::TxDemandsManager(Application& app)
     : mApp(app), mDemandTimer(app)
@@ -304,7 +303,8 @@ TxDemandsManager::recvTxDemand(FloodDemand const& dmd, Peer::pointer peer)
             om.mMessagesFulfilledMeter.Mark();
             batchSize++;
 
-            if (msg->txBatch().transactions.size() == TX_BATCH_MAX_SIZE)
+            if (msg->txBatch().transactions.size() ==
+                mApp.getConfig().TX_BATCH_MAX_SIZE)
             {
                 // Record the batch size before sending
                 om.mTxBatchSizeHistogram.Update(batchSize);
@@ -337,7 +337,11 @@ TxDemandsManager::recvTxDemand(FloodDemand const& dmd, Peer::pointer peer)
     // Send any remaining transactions in the batch and record the size
     if (!msg->txBatch().transactions.empty())
     {
-        om.mTxBatchSizeHistogram.Update(batchSize);
+        // Only update metrics if we actually have transactions to send
+        if (batchSize > 0)
+        {
+            om.mTxBatchSizeHistogram.Update(batchSize);
+        }
 
         // Claude code fixed a bug where I forgot to send the last batch
         peer->sendMessage(std::move(msg));

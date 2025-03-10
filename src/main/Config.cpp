@@ -249,6 +249,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     FLOOD_DEMAND_PERIOD_MS = std::chrono::milliseconds(200);
     FLOOD_ADVERT_PERIOD_MS = std::chrono::milliseconds(100);
     FLOOD_DEMAND_BACKOFF_DELAY_MS = std::chrono::milliseconds(500);
+    TX_BATCH_MAX_SIZE = 100;
 
     MAX_BATCH_WRITE_COUNT = 1024;
     MAX_BATCH_WRITE_BYTES = 1 * 1024 * 1024;
@@ -1315,6 +1316,8 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                      FLOOD_DEMAND_BACKOFF_DELAY_MS =
                          std::chrono::milliseconds(readInt<int>(item, 1));
                  }},
+                {"TX_BATCH_MAX_SIZE",
+                 [&]() { TX_BATCH_MAX_SIZE = readInt<size_t>(item, 1); }},
                 {"FLOOD_ARB_TX_BASE_ALLOWANCE",
                  [&]() {
                      FLOOD_ARB_TX_BASE_ALLOWANCE = readInt<int32_t>(item, -1);

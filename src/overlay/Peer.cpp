@@ -1196,7 +1196,7 @@ Peer::recvRawMessage(std::shared_ptr<CapacityTrackedMessage> msgTracker)
 
     case TX_BATCH:
     {
-        // auto t = mOverlayMetrics.mRecvTxBatchTimer.TimeScope();
+        auto t = mOverlayMetrics.mRecvTxBatchTimer.TimeScope();
         recvTxBatch(stellarMsg);
     }
     break;
@@ -1291,15 +1291,20 @@ Peer::recvTxBatch(StellarMessage const& msg)
     ZoneScoped;
     releaseAssert(threadIsMain());
     releaseAssert(msg.type() == TX_BATCH);
+
+    // Pre-create single StellarMessage instance to reuse
+    StellarMessage txMsg;
+    txMsg.type(TRANSACTION);
+
     for (auto const& tx : msg.txBatch().transactions)
     {
         auto t = mOverlayMetrics.mRecvTransactionTimer.TimeScope();
 
-        StellarMessage txMsg;
-        txMsg.type(TRANSACTION);
+        // Reuse the message object instead of creating a new one each time
         txMsg.transaction() = tx;
+        auto hash = xdrBlake2(txMsg);
         mAppConnector.getOverlayManager().recvTransaction(
-            txMsg, shared_from_this(), xdrBlake2(txMsg));
+            txMsg, shared_from_this(), hash);
     }
 }
 

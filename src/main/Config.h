@@ -446,7 +446,7 @@ class Config : public std::enable_shared_from_this<Config>
 
     // Byte limit for outbound transaction queue.
     uint32_t OUTBOUND_TX_QUEUE_BYTE_LIMIT;
-    
+
     // Maximum number of messages (tx, advert, demand) allowed in outbound queue
     uint32_t MAX_OUTBOUND_QUEUE_SIZE;
 
@@ -645,6 +645,7 @@ class Config : public std::enable_shared_from_this<Config>
     std::chrono::milliseconds FLOOD_DEMAND_PERIOD_MS;
     std::chrono::milliseconds FLOOD_ADVERT_PERIOD_MS;
     std::chrono::milliseconds FLOOD_DEMAND_BACKOFF_DELAY_MS;
+    size_t TX_BATCH_MAX_SIZE;
     static constexpr size_t const POSSIBLY_PREFERRED_EXTRA = 2;
     static constexpr size_t const REALLY_DEAD_NUM_FAILURES_CUTOFF = 120;
 
