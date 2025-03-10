@@ -446,6 +446,9 @@ class Config : public std::enable_shared_from_this<Config>
 
     // Byte limit for outbound transaction queue.
     uint32_t OUTBOUND_TX_QUEUE_BYTE_LIMIT;
+    
+    // Maximum number of messages (tx, advert, demand) allowed in outbound queue
+    uint32_t MAX_OUTBOUND_QUEUE_SIZE;
 
     // A config parameter that allows a node to generate buckets. This should
     // be set to `false` only for testing purposes.

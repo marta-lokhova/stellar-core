@@ -1097,8 +1097,10 @@ bool
 OverlayManager::isFloodMessage(StellarMessage const& msg)
 {
     return msg.type() == SCP_MESSAGE || msg.type() == TRANSACTION ||
-           msg.type() == FLOOD_DEMAND || msg.type() == FLOOD_ADVERT;
+           msg.type() == FLOOD_DEMAND || msg.type() == FLOOD_ADVERT ||
+           msg.type() == TX_BATCH;
 }
+
 std::vector<Peer::pointer>
 OverlayManagerImpl::getRandomAuthenticatedPeers()
 {

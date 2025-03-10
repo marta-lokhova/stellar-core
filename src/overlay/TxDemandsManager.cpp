@@ -21,6 +21,7 @@ namespace stellar
 // FLOOD_DEMAND_BACKOFF_DELAY_MS it doesn't make much sense to wait much
 // longer than 2 seconds between re-issuing demands.
 constexpr std::chrono::seconds MAX_DELAY_DEMAND{2};
+constexpr size_t TX_BATCH_MAX_SIZE{100};
 
 TxDemandsManager::TxDemandsManager(Application& app)
     : mApp(app), mDemandTimer(app)
@@ -132,24 +133,28 @@ TxDemandsManager::demand()
 
     // We determine that demands are obsolete after maxRetention.
     auto maxRetention = MAX_DELAY_DEMAND * MAX_RETRY_COUNT * 2;
-    while (!mPendingDemands.empty())
     {
-        auto const& it = mDemandHistoryMap.find(mPendingDemands.front());
-        if ((now - it->second.firstDemanded) >= maxRetention)
+        ZoneNamedN(pendingDem, "cleanupPendingDemands", true);
+
+        while (!mPendingDemands.empty())
         {
-            if (!it->second.latencyRecorded)
+            auto const& it = mDemandHistoryMap.find(mPendingDemands.front());
+            if ((now - it->second.firstDemanded) >= maxRetention)
             {
-                // We never received the txn.
-                om.mAbandonedDemandMeter.Mark();
+                if (!it->second.latencyRecorded)
+                {
+                    // We never received the txn.
+                    om.mAbandonedDemandMeter.Mark();
+                }
+                mPendingDemands.pop();
+                mDemandHistoryMap.erase(it);
             }
-            mPendingDemands.pop();
-            mDemandHistoryMap.erase(it);
-        }
-        else
-        {
-            // The oldest demand in mPendingDemands isn't old enough
-            // to be deleted from our record.
-            break;
+            else
+            {
+                // The oldest demand in mPendingDemands isn't old enough
+                // to be deleted from our record.
+                break;
+            }
         }
     }
 
@@ -160,9 +165,13 @@ TxDemandsManager::demand()
     bool anyNewDemand = false;
     do
     {
+        ZoneNamedN(first, "populateDemIteration", true);
+
         anyNewDemand = false;
         for (auto const& peer : peers)
         {
+            ZoneNamedN(second, "forPeerIteration", true);
+
             auto& demPair = demandMap[peer];
             auto& demand = demPair.first;
             auto& retry = demPair.second;
@@ -171,6 +180,7 @@ TxDemandsManager::demand()
             while (demand.size() < getMaxDemandSize() && peer->hasAdvert() &&
                    !addedNewDemand)
             {
+                ZoneNamedN(third, "onePeerPopulate", true);
                 auto hashPair = peer->popAdvert();
                 auto txHash = hashPair.first;
                 if (hashPair.second)
@@ -276,6 +286,9 @@ TxDemandsManager::recvTxDemand(FloodDemand const& dmd, Peer::pointer peer)
     ZoneScoped;
     auto& herder = mApp.getHerder();
     auto& om = mApp.getOverlayManager().getOverlayMetrics();
+    auto msg = std::make_shared<StellarMessage>();
+    msg->type(TX_BATCH);
+    size_t batchSize = 0;
 
     for (auto const& h : dmd.txHashes)
     {
@@ -286,9 +299,20 @@ TxDemandsManager::recvTxDemand(FloodDemand const& dmd, Peer::pointer peer)
             CLOG_TRACE(Overlay, "fulfilled demand for {} demanded by {}",
                        hexAbbrev(h),
                        KeyUtils::toShortString(peer->getPeerID()));
-            peer->getPeerMetrics().mMessagesFulfilled++;
+            msg->txBatch().transactions.emplace_back(
+                tx->toStellarMessage()->transaction());
             om.mMessagesFulfilledMeter.Mark();
-            peer->sendMessage(tx->toStellarMessage());
+            batchSize++;
+
+            if (msg->txBatch().transactions.size() == TX_BATCH_MAX_SIZE)
+            {
+                // Record the batch size before sending
+                om.mTxBatchSizeHistogram.Update(batchSize);
+                peer->sendMessage(std::move(msg));
+                msg = std::make_shared<StellarMessage>();
+                msg->type(TX_BATCH);
+                batchSize = 0;
+            }
         }
         else
         {
@@ -308,6 +332,15 @@ TxDemandsManager::recvTxDemand(FloodDemand const& dmd, Peer::pointer peer)
                 peer->getPeerMetrics().mUnknownMessageUnfulfilled++;
             }
         }
+    }
+
+    // Send any remaining transactions in the batch and record the size
+    if (!msg->txBatch().transactions.empty())
+    {
+        om.mTxBatchSizeHistogram.Update(batchSize);
+
+        // Claude code fixed a bug where I forgot to send the last batch
+        peer->sendMessage(std::move(msg));
     }
 }
 }

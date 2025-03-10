@@ -29,7 +29,7 @@
 	branch = next
 [submodule "src/protocol-curr/xdr"]
 	path = src/protocol-curr/xdr
-	url = https://github.com/stellar/stellar-xdr
+	url = https://github.com/marta-lokhova/stellar-xdr-next
 	branch = curr
 [submodule "src/rust/soroban/p21"]
 	path = src/rust/soroban/p21

@@ -178,6 +178,8 @@ OverlayMetrics::OverlayMetrics(Application& app)
           {"overlay", "fetch", "unique-recv"}, "byte"))
     , mDuplicateFetchBytesRecv(app.getMetrics().NewMeter(
           {"overlay", "fetch", "duplicate-recv"}, "byte"))
+    , mTxBatchSizeHistogram(app.getMetrics().NewHistogram(
+          {"overlay", "flood", "tx-batch-size"}))
 {
 }
 }

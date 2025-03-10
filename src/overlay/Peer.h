@@ -288,6 +288,7 @@ class Peer : public std::enable_shared_from_this<Peer>,
     void recvTxSet(StellarMessage const& msg);
     void recvGeneralizedTxSet(StellarMessage const& msg);
     void recvTransaction(CapacityTrackedMessage const& msgTracker);
+    void recvTxBatch(StellarMessage const& msg);
     void recvGetSCPQuorumSet(StellarMessage const& msg);
     void recvSCPQuorumSet(StellarMessage const& msg);
     void recvSCPMessage(CapacityTrackedMessage const& msgTracker);

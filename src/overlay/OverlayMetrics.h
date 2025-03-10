@@ -12,6 +12,7 @@ namespace medida
 class Timer;
 class Meter;
 class Counter;
+class Histogram;
 }
 
 namespace stellar
@@ -122,5 +123,7 @@ struct OverlayMetrics
     medida::Meter& mDuplicateFloodBytesRecv;
     medida::Meter& mUniqueFetchBytesRecv;
     medida::Meter& mDuplicateFetchBytesRecv;
+    
+    medida::Histogram& mTxBatchSizeHistogram;
 };
 }

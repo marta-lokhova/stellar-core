@@ -21,6 +21,7 @@ TxAdverts::TxAdverts(Application& app)
 void
 TxAdverts::flushAdvert()
 {
+    ZoneScoped;
     if (mOutgoingTxHashes.size() > 0)
     {
         auto msg = std::make_shared<StellarMessage>();

@@ -263,6 +263,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     PEER_FLOOD_READING_CAPACITY_BYTES = 0;
     FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES = 0;
     OUTBOUND_TX_QUEUE_BYTE_LIMIT = 1024 * 1024 * 3;
+    MAX_OUTBOUND_QUEUE_SIZE = 500; // Default to 500 messages
 
     // WORKER_THREADS: setting this too low risks a form of priority inversion
     // where a long-running background task occupies all worker threads and
@@ -1040,6 +1041,10 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                 {"OUTBOUND_TX_QUEUE_BYTE_LIMIT",
                  [&]() {
                      OUTBOUND_TX_QUEUE_BYTE_LIMIT = readInt<uint32_t>(item, 1);
+                 }},
+                {"MAX_OUTBOUND_QUEUE_SIZE",
+                 [&]() {
+                     MAX_OUTBOUND_QUEUE_SIZE = readInt<uint32_t>(item, 1);
                  }},
                 {"PEER_PORT",
                  [&]() { PEER_PORT = readInt<unsigned short>(item, 1); }},

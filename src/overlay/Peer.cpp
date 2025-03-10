@@ -1194,6 +1194,13 @@ Peer::recvRawMessage(std::shared_ptr<CapacityTrackedMessage> msgTracker)
     }
     break;
 
+    case TX_BATCH:
+    {
+        // auto t = mOverlayMetrics.mRecvTxBatchTimer.TimeScope();
+        recvTxBatch(stellarMsg);
+    }
+    break;
+
     case GET_SCP_QUORUMSET:
     {
         auto t = mOverlayMetrics.mRecvGetSCPQuorumSetTimer.TimeScope();
@@ -1276,6 +1283,24 @@ Peer::process(QueryInfo& queryInfo)
         queryInfo.mNumQueries = 0;
     }
     return queryInfo.mNumQueries < QUERIES_PER_WINDOW;
+}
+
+void
+Peer::recvTxBatch(StellarMessage const& msg)
+{
+    ZoneScoped;
+    releaseAssert(threadIsMain());
+    releaseAssert(msg.type() == TX_BATCH);
+    for (auto const& tx : msg.txBatch().transactions)
+    {
+        auto t = mOverlayMetrics.mRecvTransactionTimer.TimeScope();
+
+        StellarMessage txMsg;
+        txMsg.type(TRANSACTION);
+        txMsg.transaction() = tx;
+        mAppConnector.getOverlayManager().recvTransaction(
+            txMsg, shared_from_this(), xdrBlake2(txMsg));
+    }
 }
 
 void
@@ -1984,6 +2009,7 @@ Peer::handleMaxTxSizeIncrease(uint32_t increase)
 bool
 Peer::sendAdvert(Hash const& hash)
 {
+    ZoneScoped;
     releaseAssert(threadIsMain());
     if (!mTxAdverts)
     {
