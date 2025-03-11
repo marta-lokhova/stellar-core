@@ -953,6 +953,18 @@ HerderSCPDriver::getPrepareStart(uint64_t slotIndex)
     return res;
 }
 
+std::optional<VirtualClock::time_point>
+HerderSCPDriver::getNominationStart(uint64_t slotIndex)
+{
+    std::optional<VirtualClock::time_point> res;
+    auto it = mSCPExecutionTimes.find(slotIndex);
+    if (it != mSCPExecutionTimes.end())
+    {
+        res = it->second.mNominationStart;
+    }
+    return res;
+}
+
 Json::Value
 HerderSCPDriver::getQsetLagInfo(bool summary, bool fullKeys)
 {

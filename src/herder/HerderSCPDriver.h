@@ -114,6 +114,8 @@ class HerderSCPDriver : public SCPDriver
     void acceptedCommit(uint64_t slotIndex, SCPBallot const& ballot) override;
 
     std::optional<VirtualClock::time_point> getPrepareStart(uint64_t slotIndex);
+    std::optional<VirtualClock::time_point>
+    getNominationStart(uint64_t slotIndex);
 
     // converts a Value into a StellarValue
     // returns false on error

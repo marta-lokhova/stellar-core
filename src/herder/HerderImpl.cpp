@@ -1207,16 +1207,16 @@ HerderImpl::setupTriggerNextLedger()
     // bootstrap with a pessimistic estimate of when
     // the ballot protocol started last
     auto now = mApp.getClock().now();
-    auto lastBallotStart = now - seconds;
-    auto lastStart = mHerderSCPDriver.getPrepareStart(lastIndex);
+    auto lastNominationStart = now - seconds;
+    auto lastStart = mHerderSCPDriver.getNominationStart(lastIndex);
     if (lastStart)
     {
-        lastBallotStart = *lastStart;
+        lastNominationStart = *lastStart;
     }
 
     // Adjust trigger time in case node's clock has drifted.
     // This ensures that next value to nominate is valid
-    auto triggerTime = lastBallotStart + seconds;
+    auto triggerTime = lastNominationStart + seconds;
 
     if (triggerTime < now)
     {
