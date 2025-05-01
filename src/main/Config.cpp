@@ -128,6 +128,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     OP_APPLY_SLEEP_TIME_DURATION_FOR_TESTING =
         std::vector<std::chrono::microseconds>();
     OP_APPLY_SLEEP_TIME_WEIGHT_FOR_TESTING = std::vector<uint32>();
+    PLACE_SCP_IN_HIGH_PRIORITY_QUEUE_FOR_TESTING = false;
     LOADGEN_OP_COUNT_FOR_TESTING = {};
     LOADGEN_OP_COUNT_DISTRIBUTION_FOR_TESTING = {};
     LOADGEN_WASM_BYTES_FOR_TESTING = {};
@@ -1125,6 +1126,11 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                          Bucket,
                          "DEPRECATED_SQL_LEDGER_STATE is deprecated and "
                          "ignored. Please remove from config");
+                 }},
+                {"PLACE_SCP_IN_HIGH_PRIORITY_QUEUE_FOR_TESTING",
+                 [&]() {
+                     PLACE_SCP_IN_HIGH_PRIORITY_QUEUE_FOR_TESTING =
+                         readBool(item);
                  }},
                 // https://github.com/stellar/stellar-core/issues/4581
                 {"EXPERIMENTAL_BUCKETLIST_DB",

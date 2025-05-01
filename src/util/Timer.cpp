@@ -20,6 +20,7 @@ using namespace std;
 static const std::chrono::milliseconds CRANK_TIME_SLICE(500);
 static const size_t CRANK_EVENT_SLICE = 100;
 const std::chrono::seconds SCHEDULER_LATENCY_WINDOW(5);
+const std::string HIGH_PRIORITY_QUEUE_NAME = "HIGH_PRIORITY";
 
 VirtualClock::VirtualClock(Mode mode)
     : mMode(mode)
@@ -391,6 +392,21 @@ VirtualClock::crank(bool block)
         // Dispatch some scheduled actions.
         mLastDispatchStart = now();
         {
+            ZoneNamedN(scpZone, "SCP actions", true);
+            std::vector<std::function<void()>> scpWork;
+            {
+                std::lock_guard<std::mutex> guard(mPendingActionQueueMutex);
+                scpWork = std::move(mPendingSCPWork);
+                mPendingSCPWork.clear();
+            }
+            for (auto& work : scpWork)
+            {
+                work();
+            }
+        }
+
+        mLastDispatchStart = now();
+        {
             ZoneNamedN(schedZone, "scheduler", true);
             progressCount += crankStep(
                 *this, [this] { return this->mActionScheduler->runOne(); });
@@ -440,9 +456,18 @@ VirtualClock::postAction(std::function<void()>&& f, std::string&& name,
     }
 
     bool queueWasEmpty = false;
+    if (name == HIGH_PRIORITY_QUEUE_NAME)
+    {
+        // We don't want to block the main thread if we are posting a high
+        // priority action.
+        std::lock_guard<std::mutex> lock(mPendingActionQueueMutex);
+        queueWasEmpty = mPendingSCPWork.empty() && mPendingActionQueue.empty();
+        mPendingSCPWork.emplace_back(std::move(f));
+    }
+    else
     {
         std::lock_guard<std::mutex> lock(mPendingActionQueueMutex);
-        queueWasEmpty = mPendingActionQueue.empty();
+        queueWasEmpty = mPendingActionQueue.empty() && mPendingSCPWork.empty();
         mPendingActionQueue.emplace(std::move(f), std::move(name), type);
     }
 

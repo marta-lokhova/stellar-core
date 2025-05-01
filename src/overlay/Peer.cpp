@@ -994,6 +994,21 @@ Peer::recvAuthenticatedMessage(AuthenticatedMessage&& msg)
         cat = "MISC";
     }
 
+    switch (msgTracker->getMessage().type())
+    {
+    case SCP_MESSAGE:
+    case GENERALIZED_TX_SET:
+    case GET_TX_SET:
+    case COMPRESSED_GENERALIZED_TX_SET:
+        cat = mAppConnector.getConfig()
+                      .PLACE_SCP_IN_HIGH_PRIORITY_QUEUE_FOR_TESTING
+                  ? HIGH_PRIORITY_QUEUE_NAME
+                  : cat;
+        break;
+    default:
+        break;
+    }
+
     // processing of incoming messages during authenticated must be in-order, so
     // while not authenticated, place all messages onto AUTH_ACTION_QUEUE
     // scheduler queue

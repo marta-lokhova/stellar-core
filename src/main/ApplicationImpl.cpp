@@ -112,6 +112,8 @@ ApplicationImpl::ApplicationImpl(VirtualClock& clock, Config const& cfg)
           std::make_unique<medida::MetricsRegistry>(cfg.HISTOGRAM_WINDOW_SIZE))
     , mPostOnMainThreadDelay(
           mMetrics->NewTimer({"app", "post-on-main-thread", "delay"}))
+    , mPostOnMainThreadSCPDelay(
+          mMetrics->NewTimer({"app", "post-on-main-thread", "scp-delay"}))
     , mPostOnBackgroundThreadDelay(
           mMetrics->NewTimer({"app", "post-on-background-thread", "delay"}))
     , mPostOnOverlayThreadDelay(
@@ -1434,9 +1436,15 @@ ApplicationImpl::postOnMainThread(std::function<void()>&& f, std::string&& name,
 {
     LogSlowExecution isSlow{name, LogSlowExecution::Mode::MANUAL,
                             "executed after"};
+    bool highPriority = name == HIGH_PRIORITY_QUEUE_NAME;
     mVirtualClock.postAction(
-        [this, f = std::move(f), isSlow]() {
-            // mPostOnMainThreadDelay.Update(isSlow.checkElapsedTime());
+        [this, f = std::move(f), isSlow, highPriority]() {
+            auto checkElapsedTime = isSlow.checkElapsedTime();
+            mPostOnMainThreadDelay.Update(checkElapsedTime);
+            if (highPriority)
+            {
+                mPostOnMainThreadSCPDelay.Update(checkElapsedTime);
+            }
             auto sleepFor =
                 this->getConfig().ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING;
             if (sleepFor > std::chrono::microseconds::zero())

@@ -302,6 +302,8 @@ class Config : public std::enable_shared_from_this<Config>
         OP_APPLY_SLEEP_TIME_DURATION_FOR_TESTING;
     std::vector<uint32> OP_APPLY_SLEEP_TIME_WEIGHT_FOR_TESTING;
 
+    bool PLACE_SCP_IN_HIGH_PRIORITY_QUEUE_FOR_TESTING;
+
     // Config parameters that LoadGen uses to decide the number of operations
     // to include in each transaction and its distribution.
     // The probability that transactions will contain COUNT[i] operations

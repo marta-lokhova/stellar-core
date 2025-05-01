@@ -114,5 +114,10 @@ class TransactionFrameBase
     virtual SorobanResources const& sorobanResources() const = 0;
     virtual int64 declaredSorobanResourceFee() const = 0;
     virtual bool XDRProvidesValidFee() const = 0;
+    virtual size_t
+    size() const
+    {
+        return xdr::xdr_size(getEnvelope());
+    }
 };
 }

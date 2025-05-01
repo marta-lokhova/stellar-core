@@ -5,6 +5,7 @@
 #include "util/Scheduler.h"
 #include "lib/util/finally.h"
 #include "util/GlobalChecks.h"
+#include "util/Logging.h"
 #include "util/Timer.h"
 #include <Tracy.hpp>
 
@@ -163,6 +164,14 @@ class Scheduler::ActionQueue
 Scheduler::Scheduler(VirtualClock& clock,
                      std::chrono::nanoseconds latencyWindow)
     : mRunnableActionQueues([](Qptr a, Qptr b) -> bool {
+        if (a->name() == HIGH_PRIORITY_QUEUE_NAME)
+        {
+            return false;
+        }
+        if (b->name() == HIGH_PRIORITY_QUEUE_NAME)
+        {
+            return true;
+        }
         return a->totalService() > b->totalService();
     })
     , mClock(clock)

@@ -246,6 +246,8 @@ class ApplicationImpl : public Application
 
     std::unique_ptr<medida::MetricsRegistry> mMetrics;
     medida::Timer& mPostOnMainThreadDelay;
+    medida::Timer& mPostOnMainThreadSCPDelay;
+
     medida::Timer& mPostOnBackgroundThreadDelay;
     medida::Timer& mPostOnOverlayThreadDelay;
     medida::Timer& mPostOnLedgerCloseThreadDelay;

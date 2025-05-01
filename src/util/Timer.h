@@ -62,6 +62,7 @@ class VirtualClockEventCompare
 };
 
 extern const std::chrono::seconds SCHEDULER_LATENCY_WINDOW;
+extern const std::string HIGH_PRIORITY_QUEUE_NAME;
 
 class VirtualClock
 {
@@ -164,6 +165,7 @@ class VirtualClock
     std::queue<
         std::tuple<std::function<void()>, std::string, Scheduler::ActionType>>
         mPendingActionQueue;
+    std::vector<std::function<void()>> mPendingSCPWork;
 
     using PrQueue =
         std::priority_queue<std::shared_ptr<VirtualClockEvent>,
