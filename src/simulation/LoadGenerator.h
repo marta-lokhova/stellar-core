@@ -29,7 +29,6 @@ class VirtualTimer;
 
 enum class LoadGenMode
 {
-    CREATE,
     PAY,
     PRETEND,
     // Mix of payments and DEX-related transactions.
@@ -52,6 +51,7 @@ enum class LoadGenMode
     // Submit the same type of invoke transaction as ApplyLoad
     SOROBAN_INVOKE_APPLY_LOAD
 };
+;
 
 struct GeneratedLoadConfig
 {
@@ -79,9 +79,6 @@ struct GeneratedLoadConfig
         SorobanNetworkConfig const& baseConfig,
         SorobanNetworkConfig const& updatedConfig);
 
-    static GeneratedLoadConfig createAccountsLoad(uint32_t nAccounts,
-                                                  uint32_t txRate);
-
     static GeneratedLoadConfig createSorobanInvokeSetupLoad(uint32_t nAccounts,
                                                             uint32_t nInstances,
                                                             uint32_t txRate);
@@ -107,7 +104,6 @@ struct GeneratedLoadConfig
     uint32_t getMinSorobanPercentSuccess() const;
     void setMinSorobanPercentSuccess(uint32_t minPercentSuccess);
 
-    bool isCreate() const;
     bool isSoroban() const;
     bool isSorobanSetup() const;
     bool isLoad() const;
@@ -125,7 +121,7 @@ struct GeneratedLoadConfig
     bool areTxsRemaining() const;
     Json::Value getStatus() const;
 
-    LoadGenMode mode = LoadGenMode::CREATE;
+    LoadGenMode mode = LoadGenMode::PAY;
     uint32_t nAccounts = 0;
     uint32_t offset = 0;
     uint32_t nTxs = 0;
@@ -165,6 +161,8 @@ struct GeneratedLoadConfig
 class LoadGenerator
 {
   public:
+    static const uint64_t ROOT_ACCOUNT_ID = UINT64_MAX;
+
     LoadGenerator(Application& app);
 
     static LoadGenMode getMode(std::string const& mode);
@@ -194,7 +192,7 @@ class LoadGenerator
     // Verify cached accounts are properly reflected in the database
     // return any accounts that are inconsistent.
     std::vector<TxGenerator::TestAccountPtr>
-    checkAccountSynced(Application& app, bool isCreate);
+    checkAccountSynced(Application& app);
     std::vector<LedgerKey>
     checkSorobanStateSynced(Application& app, GeneratedLoadConfig const& cfg);
 
@@ -221,7 +219,7 @@ class LoadGenerator
   private:
     struct TxMetrics
     {
-        medida::Meter& mAccountCreated;
+
         medida::Meter& mNativePayment;
         medida::Meter& mManageOfferOps;
         medida::Meter& mPretendOps;
@@ -284,10 +282,6 @@ class LoadGenerator
     uint32_t mNumCreateContractTransactionCalls = 0;
 
     // For account creation only: allocate a few accounts for creation purposes
-    // (with sufficient balance to create new accounts) to avoid source account
-    // collisions.
-    std::unordered_map<uint64_t, TxGenerator::TestAccountPtr>
-        mCreationSourceAccounts;
 
     medida::Timer& mStepTimer;
     medida::Meter& mStepMeter;
@@ -319,7 +313,6 @@ class LoadGenerator
 
     bool mFailed{false};
     bool mStarted{false};
-    bool mInitialAccountsCreated{false};
 
     uint32_t mWaitTillCompleteForLedgers{0};
 
@@ -356,14 +349,10 @@ class LoadGenerator
                              TxGenerator::TestAccountPtr sourceAccount,
                              TransactionQueue::AddResultCode status,
                              TransactionResultCode code);
-    std::pair<TxGenerator::TestAccountPtr, TransactionFrameBaseConstPtr>
-    creationTransaction(uint64_t startAccount, uint64_t numItems,
-                        uint32_t ledgerNum);
+
     void logProgress(std::chrono::nanoseconds submitTimer,
                      GeneratedLoadConfig const& cfg) const;
 
-    uint32_t submitCreationTx(uint32_t nAccounts, uint32_t offset,
-                              uint32_t ledgerNum);
     bool submitTx(GeneratedLoadConfig const& cfg,
                   std::function<std::pair<TxGenerator::TestAccountPtr,
                                           TransactionFrameBaseConstPtr>()>
