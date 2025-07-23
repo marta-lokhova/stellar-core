@@ -209,7 +209,7 @@ class HerderImpl : public Herder
                      xdr::xvector<UpgradeType, 6> const& upgrades,
                      SecretKey const& s) override;
 
-    virtual void beginApply() override;
+    virtual void beginApply(LedgerCloseData const& lcd) override;
 
     void startTxSetGCTimer();
 
@@ -265,7 +265,7 @@ class HerderImpl : public Herder
     std::unique_ptr<SorobanTransactionQueue> mSorobanTransactionQueue;
 
     void updateTransactionQueue(TxSetXDRFrameConstPtr txSet,
-                                bool queueRebuildNeeded);
+                                bool queueRebuildNeeded, bool removePending);
     void maybeSetupSorobanQueue(uint32_t protocolVersion);
 
     PendingEnvelopes mPendingEnvelopes;

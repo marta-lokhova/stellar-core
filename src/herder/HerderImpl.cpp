@@ -59,7 +59,6 @@ constexpr uint32 const CLOSE_TIME_DRIFT_LEDGER_WINDOW_SIZE = 120;
 // 10 seconds of drift threshold
 constexpr uint32 const CLOSE_TIME_DRIFT_SECONDS_THRESHOLD = 10;
 
-constexpr uint32 const TRANSACTION_QUEUE_TIMEOUT_LEDGERS = 4;
 constexpr uint32 const TRANSACTION_QUEUE_BAN_LEDGERS = 10;
 
 std::unique_ptr<Herder>
@@ -84,7 +83,8 @@ HerderImpl::SCPMetrics::SCPMetrics(Application& app)
 }
 
 HerderImpl::HerderImpl(Application& app)
-    : mTransactionQueue(app, TRANSACTION_QUEUE_TIMEOUT_LEDGERS,
+    : mTransactionQueue(app,
+                        app.getConfig().TRANSACTION_QUEUE_TIMEOUT_LEDGERS * 2,
                         TRANSACTION_QUEUE_BAN_LEDGERS,
                         app.getConfig().TRANSACTION_QUEUE_SIZE_MULTIPLIER)
     , mPendingEnvelopes(app, *this)
@@ -286,9 +286,6 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
     ZoneScoped;
     bool validated = getSCP().isSlotFullyValidated(slotIndex);
 
-    CLOG_DEBUG(Herder, "HerderSCPDriver::valueExternalized index: {} txSet: {}",
-               slotIndex, hexAbbrev(value.txSetHash));
-
     if (getSCP().isValidator() && !validated)
     {
         CLOG_WARNING(Herder,
@@ -349,7 +346,55 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
         writeDebugTxSet(ledgerData);
     }
 
+    // This will send ledger to apply
     mLedgerManager.valueExternalized(ledgerData, isLatestSlot);
+
+    // Need to clean up the transaction queue to avoid accidentally including
+    // the same transactions in the next block
+    auto txsPerPhase =
+        ledgerData.getTxSet()->createTransactionFrames(mApp.getNetworkID());
+    mTransactionQueue.removeApplied(
+        txsPerPhase[static_cast<size_t>(TxSetPhase::CLASSIC)]);
+    if (mSorobanTransactionQueue)
+    {
+        mSorobanTransactionQueue->removeApplied(
+            txsPerPhase[static_cast<size_t>(TxSetPhase::SOROBAN)]);
+    }
+
+    // Here we're racing with the apply thread, therefore check both "currently
+    // applying" AND "last applied" ledger.
+    if (mLedgerManager.getLastClosedLedgerNum() + 1 ==
+            trackingConsensusLedgerIndex() ||
+        mLedgerManager.getLastClosedLedgerNum() ==
+            trackingConsensusLedgerIndex())
+    {
+        // TODO: for now, keep the "applying" tx set in the queue
+        // In order to update the transaction queue we need to get the
+        // applied transactions. If a protocol or network config setting upgrade
+        // occurred, we will need to rebuild the queue, as limits may have
+        // changed.
+        updateTransactionQueue(ledgerData.getTxSet(), false, false);
+
+        // If we're in sync and there are no buffered ledgers to apply, trigger
+        // next ledger
+        if (isLatestSlot)
+        {
+            // Re-start heartbeat tracking _after_ applying the most up-to-date
+            // ledger. This guarantees out-of-sync timer won't fire while we
+            // have ledgers to apply (applicable during parallel ledger apply).
+            trackingHeartBeat();
+
+            // Ensure out of sync recovery did not get triggered while we were
+            // applying
+            releaseAssert(isTracking());
+            releaseAssert(mLedgerManager.isSynced());
+
+            CLOG_INFO(Herder, "PIPELINE Triggering next ledger: {}",
+                      trackingConsensusLedgerIndex() + 1);
+
+            setupTriggerNextLedger();
+        }
+    }
 }
 
 void
@@ -425,12 +470,18 @@ recordExternalizeAndCheckCloseTimeDrift(
 }
 
 void
-HerderImpl::beginApply()
+HerderImpl::beginApply(LedgerCloseData const& lcd)
 {
     // Tx set might be applied async: in this case, cancel the timer. It'll be
     // restarted when the tx set is applied. This is needed to not mess with
     // Herder's out of sync recovery mechanism.
     mTrackingTimer.cancel();
+
+    mTransactionQueue.beginApply(lcd);
+    if (mSorobanTransactionQueue)
+    {
+        mSorobanTransactionQueue->beginApply(lcd);
+    }
 }
 
 void
@@ -616,11 +667,11 @@ HerderImpl::recvTransaction(TransactionFrameBasePtr tx, bool submittedFromSelf
         tx->isSoroban();
     if (hasSoroban || hasClassic)
     {
-        CLOG_DEBUG(Herder,
-                   "recv transaction {} for {} rejected due to 1 tx per source "
-                   "account per ledger limit",
-                   hexAbbrev(tx->getFullHash()),
-                   KeyUtils::toShortString(tx->getSourceID()));
+        CLOG_INFO(Herder,
+                  "recv transaction {} for {} rejected due to 1 tx per source "
+                  "account per ledger limit",
+                  hexAbbrev(tx->getFullHash()),
+                  KeyUtils::toShortString(tx->getSourceID()));
         result.code =
             TransactionQueue::AddResultCode::ADD_STATUS_TRY_AGAIN_LATER;
     }
@@ -948,6 +999,30 @@ HerderImpl::sourceAccountPending(AccountID const& accountID) const
         accPending = accPending ||
                      mSorobanTransactionQueue->sourceAccountPending(accountID);
     }
+
+    // Check if account is conflicting with what we're applying
+    for (auto const& [ledgerSeq, ledgerApplying] : mTransactionQueue.mApplying)
+    {
+        if (ledgerApplying.find(accountID) != ledgerApplying.end())
+        {
+            accPending = true;
+            break;
+        }
+    }
+
+    if (mSorobanTransactionQueue)
+    {
+        for (auto const& [ledgerSeq, ledgerApplying] :
+             mSorobanTransactionQueue->mApplying)
+        {
+            if (ledgerApplying.find(accountID) != ledgerApplying.end())
+            {
+                accPending = true;
+                break;
+            }
+        }
+    }
+
     return accPending;
 }
 
@@ -1178,11 +1253,11 @@ HerderImpl::lastClosedLedgerIncreased(bool latest, TxSetXDRFrameConstPtr txSet,
     // In order to update the transaction queue we need to get the
     // applied transactions. If a protocol or network config setting upgrade
     // occurred, we will need to rebuild the queue, as limits may have changed.
-    updateTransactionQueue(txSet, upgradeApplied);
+    updateTransactionQueue(txSet, upgradeApplied, true);
 
     // If we're in sync and there are no buffered ledgers to apply, trigger next
     // ledger
-    if (latest)
+    // if (latest)
     {
         // Re-start heartbeat tracking _after_ applying the most up-to-date
         // ledger. This guarantees out-of-sync timer won't fire while we have
@@ -1192,10 +1267,22 @@ HerderImpl::lastClosedLedgerIncreased(bool latest, TxSetXDRFrameConstPtr txSet,
         // Ensure out of sync recovery did not get triggered while we were
         // applying
         releaseAssert(isTracking());
-        releaseAssert(trackingConsensusLedgerIndex() ==
-                      mLedgerManager.getLastClosedLedgerNum());
+        if (mLedgerManager.isApplying())
+        {
+            // If we're applying, tracking should be at the next ledger
+            releaseAssert(trackingConsensusLedgerIndex() ==
+                          mLedgerManager.getLastClosedLedgerNum() + 1);
+        }
+        else
+        {
+            // If we're not applying, tracking should be at the last closed
+            // ledger
+            releaseAssert(trackingConsensusLedgerIndex() ==
+                          mLedgerManager.getLastClosedLedgerNum());
+        }
         releaseAssert(mLedgerManager.isSynced());
 
+        // TEMPORARY to test pipelining - TIDO need to handle this case
         setupTriggerNextLedger();
     }
 }
@@ -1203,17 +1290,31 @@ HerderImpl::lastClosedLedgerIncreased(bool latest, TxSetXDRFrameConstPtr txSet,
 void
 HerderImpl::setupTriggerNextLedger()
 {
-    // Invariant: core proceeds to vote for the next ledger only when it's _not_
-    // applying to ensure block production does not conflict with ledger close.
-    releaseAssert(!mLedgerManager.isApplying());
+    ZoneScoped;
 
     // Invariant: tracking is equal to LCL when we trigger. This helps ensure
     // core emits SCP messages only for slots it can fully validate
     // (any closed ledger is fully validated)
     releaseAssert(isTracking());
     auto const& lcl = mLedgerManager.getLastClosedLedgerHeader();
-    releaseAssert(trackingConsensusLedgerIndex() == lcl.header.ledgerSeq);
     releaseAssert(mLedgerManager.isSynced());
+
+    // Invariant: core proceeds to vote for the next ledger only when it's _not_
+    // applying to ensure block production does not conflict with ledger close.
+    // OR it might be applying the latest ledger, in which case it is fine to
+    // proceed with voting for the next ledger.
+    auto currentlyApplying = mLedgerManager.isApplying();
+    if (currentlyApplying > 0)
+    {
+        releaseAssert(trackingConsensusLedgerIndex() ==
+                      lcl.header.ledgerSeq + 1);
+        releaseAssert(trackingConsensusLedgerIndex() == currentlyApplying);
+    }
+    else
+    {
+        // nothing is being applied, tracking should be at LCL
+        releaseAssert(trackingConsensusLedgerIndex() == lcl.header.ledgerSeq);
+    }
 
     mTriggerTimer.cancel();
 
@@ -1225,6 +1326,11 @@ HerderImpl::setupTriggerNextLedger()
 
     std::chrono::milliseconds milliseconds =
         mLedgerManager.getExpectedLedgerCloseTime();
+
+    CLOG_INFO(Herder,
+              "Setting up trigger for next ledger: {} "
+              "(last: {}, expected close time: {} ms)",
+              nextIndex, lastIndex, milliseconds.count());
 
     // bootstrap with a pessimistic estimate of when
     // the ballot protocol started last
@@ -1264,6 +1370,7 @@ HerderImpl::setupTriggerNextLedger()
 
     if (!mApp.getConfig().MANUAL_CLOSE)
     {
+        CLOG_INFO(Herder, "Triggering next ledger at {}", nextIndex);
         mTriggerTimer.async_wait(std::bind(&HerderImpl::triggerNextLedger, this,
                                            static_cast<uint32_t>(nextIndex),
                                            true),
@@ -1363,8 +1470,8 @@ HerderImpl::setInSyncAndTriggerNextLedger()
     // to trigger ledger, as the node is already making progress
     if (mTriggerTimer.seq() > 0)
     {
-        CLOG_DEBUG(Herder, "Skipping setInSyncAndTriggerNextLedger: "
-                           "trigger timer already set");
+        CLOG_INFO(Herder, "Skipping setInSyncAndTriggerNextLedger: "
+                          "trigger timer already set");
         return;
     }
 
@@ -1387,23 +1494,25 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
 {
     ZoneScoped;
     ZoneValue(static_cast<int64_t>(ledgerSeqToTrigger));
+    // CLOG_INFO(Herder, "TRIGGER triggerNextLedger: {}", ledgerSeqToTrigger);
 
     auto isTrackingValid = isTracking() || !checkTrackingSCP;
 
     if (!isTrackingValid || !mLedgerManager.isSynced())
     {
-        CLOG_DEBUG(Herder, "triggerNextLedger: skipping (out of sync) : {}",
-                   mApp.getStateHuman());
+        CLOG_INFO(Herder, "triggerNextLedger: skipping (out of sync) : {}",
+                  mApp.getStateHuman());
         return;
     }
 
     // If applying, the next ledger will trigger voting
-    if (mLedgerManager.isApplying())
+    // Don't trigger any old ledgers, but DO trigger one future ledger
+    if (ledgerSeqToTrigger <= mLedgerManager.isApplying())
     {
         // This can only happen when closing ledgers in parallel
         releaseAssert(mApp.getConfig().parallelLedgerClose());
-        CLOG_DEBUG(Herder, "triggerNextLedger: skipping (applying) : {}",
-                   mApp.getStateHuman());
+        CLOG_INFO(Herder, "triggerNextLedger: skipping (applying) : {}",
+                  mApp.getStateHuman());
         return;
     }
 
@@ -1426,6 +1535,7 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     // We pick as next close time the current time unless it's before the last
     // close time. We don't know how much time it will take to reach consensus
     // so this is the most appropriate value to use as closeTime.
+    // TODO: this is wrong
     uint64_t nextCloseTime =
         VirtualClock::to_time_t(mApp.getClock().system_now());
     if (ledgerSeqToTrigger == lcl.header.ledgerSeq + 1)
@@ -1451,9 +1561,13 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
         }
     }
 
-    if (nextCloseTime <= lcl.header.scpValue.closeTime)
+    auto minCloseTime = lcl.header.scpValue.closeTime +
+                        std::chrono::duration_cast<std::chrono::seconds>(
+                            mLedgerManager.getExpectedLedgerCloseTime())
+                            .count();
+    if (nextCloseTime <= minCloseTime)
     {
-        nextCloseTime = lcl.header.scpValue.closeTime + 1;
+        nextCloseTime = minCloseTime + 1;
     }
 
     // Ensure we're about to nominate a value with valid close time
@@ -1505,8 +1619,7 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     // Inform the item fetcher so queries from other peers about his txSet
     // can be answered. Note this can trigger SCP callbacks, externalize, etc
     // if we happen to build a txset that we were trying to download.
-    mPendingEnvelopes.addTxSet(txSetHash, lcl.header.ledgerSeq + 1,
-                               proposedSet);
+    mPendingEnvelopes.addTxSet(txSetHash, ledgerSeqToTrigger, proposedSet);
 
     lcl = mLedgerManager.getLastClosedLedgerHeader();
     // use the slot index from ledger manager here as our vote is based off
@@ -1517,7 +1630,9 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     // externalize was triggered on a more recent ledger
     // Also skip trigger if side effects from `addTxSet` caused us to start
     // applying
-    if (ledgerSeqToTrigger != slotIndex || mLedgerManager.isApplying())
+    bool pipeline = mLedgerManager.isApplying() == slotIndex &&
+                    ledgerSeqToTrigger == slotIndex + 1;
+    if (ledgerSeqToTrigger != slotIndex && !pipeline)
     {
         return;
     }
@@ -1548,19 +1663,20 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
         }
     }
 
-    getHerderSCPDriver().recordSCPEvent(slotIndex, true);
+    getHerderSCPDriver().recordSCPEvent(ledgerSeqToTrigger, true);
 
     // If we are not a validating node we stop here and don't start nomination
     if (!getSCP().isValidator())
     {
-        CLOG_DEBUG(Herder, "Non-validating node, skipping nomination (SCP).");
+        CLOG_INFO(Herder, "Non-validating node, skipping nomination (SCP).");
         return;
     }
 
     StellarValue newProposedValue = makeStellarValue(
         txSetHash, nextCloseTime, newUpgrades, mApp.getConfig().NODE_SEED);
-    mHerderSCPDriver.nominate(slotIndex, newProposedValue, proposedSet,
+    mHerderSCPDriver.nominate(ledgerSeqToTrigger, newProposedValue, proposedSet,
                               lcl.header.scpValue);
+    CLOG_INFO(Herder, "*** NOMINATED: {} ***", ledgerSeqToTrigger);
 }
 
 void
@@ -1898,17 +2014,17 @@ HerderImpl::checkAndMaybeReanalyzeQuorumMapV2()
     {
         if (mLastQuorumMapIntersectionState->mCheckingQuorumMapHash == curr)
         {
-            CLOG_DEBUG(Herder, "Transitive closure of quorum has "
-                               "changed, already analyzing new "
-                               "configuration.");
+            CLOG_INFO(Herder, "Transitive closure of quorum has "
+                              "changed, already analyzing new "
+                              "configuration.");
         }
         else
         {
-            CLOG_DEBUG(Herder, "Transitive closure of quorum has changed,"
-                               "however the previous analysis is still "
-                               "in progress, the new analysis will start after "
-                               "the previous one finishes or gets interrupted "
-                               "by the timer");
+            CLOG_INFO(Herder, "Transitive closure of quorum has changed,"
+                              "however the previous analysis is still "
+                              "in progress, the new analysis will start after "
+                              "the previous one finishes or gets interrupted "
+                              "by the timer");
         }
         return;
     }
@@ -1953,15 +2069,15 @@ HerderImpl::checkAndMaybeReanalyzeQuorumMap()
         // new hash we want.
         if (mLastQuorumMapIntersectionState->mCheckingQuorumMapHash == curr)
         {
-            CLOG_DEBUG(Herder, "Transitive closure of quorum has "
-                               "changed, already analyzing new "
-                               "configuration.");
+            CLOG_INFO(Herder, "Transitive closure of quorum has "
+                              "changed, already analyzing new "
+                              "configuration.");
         }
         else
         {
-            CLOG_DEBUG(Herder, "Transitive closure of quorum has "
-                               "changed, interrupting existing "
-                               "analysis.");
+            CLOG_INFO(Herder, "Transitive closure of quorum has "
+                              "changed, interrupting existing "
+                              "analysis.");
             mLastQuorumMapIntersectionState->mInterruptFlag = true;
         }
     }
@@ -2028,17 +2144,17 @@ HerderImpl::checkAndMaybeReanalyzeQuorumMap()
             }
             catch (QuorumIntersectionChecker::InterruptedException&)
             {
-                CLOG_DEBUG(Herder,
-                           "Quorum transitive closure analysis interrupted.");
+                CLOG_INFO(Herder,
+                          "Quorum transitive closure analysis interrupted.");
                 app.postOnMainThread([hState, &app] { hState->reset(app); },
                                      "QuorumIntersectionChecker interrupted");
             }
             catch (const RustQuorumCheckerError& e)
             {
-                CLOG_DEBUG(Herder,
-                           "Quorum transitive closure analysis failed due to "
-                           "Rust solver error: {}",
-                           e.what());
+                CLOG_INFO(Herder,
+                          "Quorum transitive closure analysis failed due to "
+                          "Rust solver error: {}",
+                          e.what());
                 app.postOnMainThread([hState, &app] { hState->reset(app); },
                                      "QuorumIntersectionChecker rust error");
             }
@@ -2267,7 +2383,7 @@ HerderImpl::maybeSetupSorobanQueue(uint32_t protocolVersion)
         {
             mSorobanTransactionQueue =
                 std::make_unique<SorobanTransactionQueue>(
-                    mApp, TRANSACTION_QUEUE_TIMEOUT_LEDGERS,
+                    mApp, mApp.getConfig().TRANSACTION_QUEUE_TIMEOUT_LEDGERS,
                     TRANSACTION_QUEUE_BAN_LEDGERS,
                     mApp.getConfig().SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER);
         }
@@ -2413,13 +2529,13 @@ HerderImpl::trackingHeartBeat()
 
 void
 HerderImpl::updateTransactionQueue(TxSetXDRFrameConstPtr externalizedTxSet,
-                                   bool queueRebuildNeeded)
+                                   bool queueRebuildNeeded, bool removePending)
 {
     ZoneScoped;
     if (externalizedTxSet == nullptr)
     {
-        CLOG_DEBUG(Herder,
-                   "No tx set to update tx queue - expected during bootstrap");
+        CLOG_INFO(Herder,
+                  "No tx set to update tx queue - expected during bootstrap");
         return;
     }
     auto txsPerPhase =
@@ -2428,7 +2544,7 @@ HerderImpl::updateTransactionQueue(TxSetXDRFrameConstPtr externalizedTxSet,
     auto lhhe = mLedgerManager.getLastClosedLedgerHeader();
 
     auto updateQueue = [&](auto& queue, auto const& applied, bool isSoroban) {
-        queue.removeApplied(applied);
+        queue.removeApplied(applied, removePending);
         queue.shift();
 
         if (isSoroban && queueRebuildNeeded)
@@ -2475,7 +2591,7 @@ HerderImpl::herderOutOfSync()
     // the node does not hear anything from the network after that, then node
     // can go into out of sync recovery.
     releaseAssert(threadIsMain());
-    releaseAssert(!mLedgerManager.isApplying());
+    releaseAssert(mLedgerManager.isApplying() == 0);
 
     CLOG_WARNING(Herder, "Lost track of consensus");
 

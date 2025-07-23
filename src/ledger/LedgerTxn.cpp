@@ -3003,7 +3003,8 @@ LedgerTxnRoot::prepareNewObjects(size_t s)
     mImpl->prepareNewObjects(s);
 }
 
-void LedgerTxnRoot::Impl::prepareNewObjects(size_t)
+void
+LedgerTxnRoot::Impl::prepareNewObjects(size_t)
 {
 }
 

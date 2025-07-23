@@ -465,6 +465,9 @@ class Config : public std::enable_shared_from_this<Config>
     // builds)
     uint32_t SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER;
 
+    // Number of ledgers before a transaction times out in the queue
+    uint32_t TRANSACTION_QUEUE_TIMEOUT_LEDGERS;
+
     // A config parameter that can be set to true (in a captive-core
     // configuration) to delay emitting metadata by one ledger.
     bool EXPERIMENTAL_PRECAUTION_DELAY_META;

@@ -382,16 +382,17 @@ LedgerManagerImpl::moveToSynced()
 }
 
 void
-LedgerManagerImpl::beginApply()
+LedgerManagerImpl::beginApply(LedgerCloseData const& lcd)
 {
     releaseAssert(threadIsMain());
 
     // Go into "applying" state, this will prevent catchup from starting
-    mCurrentlyApplyingLedger = true;
+    // Set a placeholder value, will be updated in applyLedger
+    mCurrentlyApplyingLedger = lcd.getLedgerSeq();
 
     // Notify Herder that application started, so it won't fire out of sync
     // timer
-    mApp.getHerder().beginApply();
+    mApp.getHerder().beginApply(lcd);
 }
 
 void
@@ -1164,13 +1165,14 @@ LedgerManagerImpl::valueExternalized(LedgerCloseData const& ledgerData,
     ZoneScoped;
     releaseAssert(threadIsMain());
 
-    CLOG_INFO(Ledger,
-              "Got consensus: [seq={}, prev={}, txs={}, ops={}, sv: {}]",
-              ledgerData.getLedgerSeq(),
-              hexAbbrev(ledgerData.getTxSet()->previousLedgerHash()),
-              ledgerData.getTxSet()->sizeTxTotal(),
-              ledgerData.getTxSet()->sizeOpTotalForLogging(),
-              stellarValueToString(mApp.getConfig(), ledgerData.getValue()));
+    CLOG_INFO(
+        Ledger,
+        "*** Got consensus: [seq={}, prev={}, txs={}, ops={}, sv: {}] ***",
+        ledgerData.getLedgerSeq(),
+        hexAbbrev(ledgerData.getTxSet()->previousLedgerHash()),
+        ledgerData.getTxSet()->sizeTxTotal(),
+        ledgerData.getTxSet()->sizeOpTotalForLogging(),
+        stellarValueToString(mApp.getConfig(), ledgerData.getValue()));
 
     auto st = getState();
     if (st != LedgerManager::LM_BOOTING_STATE &&
@@ -1320,7 +1322,7 @@ LedgerManagerImpl::ledgerCloseComplete(uint32_t lcl, bool calledViaExternalize,
     releaseAssert(doneApplying || mApp.getConfig().parallelLedgerClose());
     if (doneApplying)
     {
-        mCurrentlyApplyingLedger = false;
+        mCurrentlyApplyingLedger = 0;
     }
 
     // Continue execution on the main thread
@@ -1340,8 +1342,6 @@ LedgerManagerImpl::ledgerCloseComplete(uint32_t lcl, bool calledViaExternalize,
         mApp.getHerder().lastClosedLedgerIncreased(
             appliedLatest, ledgerData.getTxSet(), upgradeApplied);
     }
-
-    mApplyState.markEndOfCommitting();
 }
 
 void
@@ -1381,7 +1381,7 @@ LedgerManagerImpl::advanceLedgerStateAndPublish(
     // Herder trigger next ledger
     ledgerCloseComplete(ledgerSeq, calledViaExternalize, ledgerData,
                         upgradeApplied);
-    CLOG_INFO(Ledger, "Ledger close complete: {}", ledgerSeq);
+    CLOG_INFO(Ledger, "==== END APPLY {} ====", ledgerSeq);
 }
 
 // This is the main entrypoint for the apply thread (and/or synchronous
@@ -1392,11 +1392,18 @@ void
 LedgerManagerImpl::applyLedger(LedgerCloseData const& ledgerData,
                                bool calledViaExternalize)
 {
+    CLOG_INFO(Ledger, "==== START APPLY: seq={}, prev={}, txs={}, ops={} ====",
+              ledgerData.getLedgerSeq(),
+              hexAbbrev(ledgerData.getTxSet()->previousLedgerHash()),
+              ledgerData.getTxSet()->sizeTxTotal(),
+              ledgerData.getTxSet()->sizeOpTotalForLogging());
+
     if (mApp.isStopping())
     {
         return;
     }
 
+    // WE KNOW PREV HASH AHEAD OF TIME
     // Complete any pending wasm-module-compilation before closing the ledger.
     // This might or might-not exist, depending on whether we triggered a
     // compilation in the previous ledger-apply.
@@ -1423,18 +1430,24 @@ LedgerManagerImpl::applyLedger(LedgerCloseData const& ledgerData,
     // stored in LedgerTxn. The issue is that in tests LedgerTxn is sometimes
     // modified manually, which changes ledger header hash compared to the
     // cached one and causes tests to fail.
-    LedgerHeader prevHeader = header.current();
+
+    // PREV header is all kinda messed up, dpeends on LCL
+    // INVARIANT: applyLedger should preserve relying on LCL
+    LedgerHeader currHeader = header.current();
 #ifdef BUILD_TESTS
     if (threadIsMain())
     {
-        prevHeader = getLastClosedLedgerHeader().header;
+        currHeader = getLastClosedLedgerHeader().header;
     }
 #endif
-    auto prevHash = xdrSha256(prevHeader);
+    auto hash = xdrSha256(currHeader);
+    auto previousHash = currHeader.previousLedgerHash;
 
     auto initialLedgerVers = header.current().ledgerVersion;
     ++header.current().ledgerSeq;
-    header.current().previousLedgerHash = prevHash;
+    header.current().previousPreviousLedgerHash = previousHash;
+    header.current().previousLedgerHash = hash;
+
     CLOG_DEBUG(Ledger, "starting applyLedger() on ledgerSeq={}",
                header.current().ledgerSeq);
 
@@ -1461,14 +1474,20 @@ LedgerManagerImpl::applyLedger(LedgerCloseData const& ledgerData,
             header.current().ledgerVersion));
     }
 
-    if (txSet->previousLedgerHash() != prevHash)
+    // Note: at this time, we don't actually know previousLedgerhash because
+    // consensus hasn't agreed onit. Best we can check is
+    // previousPreviousLedgerHash (N-2)
+    if (txSet->previousLedgerHash() != hash &&
+        txSet->previousLedgerHash() != previousHash)
     {
+        CLOG_ERROR(Ledger, "XDR {}", xdr::xdr_to_string(currHeader));
+
         CLOG_ERROR(Ledger, "TxSet mismatch: LCD wants {}, LCL is {}",
                    ledgerAbbrev(ledgerData.getLedgerSeq() - 1,
                                 txSet->previousLedgerHash()),
-                   ledgerAbbrev(prevHeader));
+                   ledgerAbbrev(currHeader));
 
-        CLOG_ERROR(Ledger, "{}", xdrToCerealString(prevHeader, "Full LCL"));
+        CLOG_ERROR(Ledger, "{}", xdrToCerealString(currHeader, "Full LCL"));
         CLOG_ERROR(Ledger, "{}", POSSIBLY_CORRUPTED_LOCAL_DATA);
 
         throw std::runtime_error("txset mismatch");
@@ -1490,7 +1509,7 @@ LedgerManagerImpl::applyLedger(LedgerCloseData const& ledgerData,
     header.current().scpValue = sv;
 
     maybeResetLedgerCloseMetaDebugStream(header.current().ledgerSeq);
-    auto applicableTxSet = txSet->prepareForApply(mApp, prevHeader);
+    auto applicableTxSet = txSet->prepareForApply(mApp, currHeader);
 
     if (applicableTxSet == nullptr)
     {
@@ -1512,7 +1531,7 @@ LedgerManagerImpl::applyLedger(LedgerCloseData const& ledgerData,
     {
         if (mNextMetaToEmit)
         {
-            releaseAssert(mNextMetaToEmit->ledgerHeader().hash == prevHash);
+            releaseAssert(mNextMetaToEmit->ledgerHeader().hash == previousHash);
             emitNextMeta();
         }
         releaseAssert(!mNextMetaToEmit);
@@ -1694,7 +1713,7 @@ LedgerManagerImpl::applyLedger(LedgerCloseData const& ledgerData,
 
     // Step 1. Maybe queue the current checkpoint file for publishing; this
     // should not race with main, since publish on main begins strictly _after_
-    // this call. There is a bug in the upgrade path where the initial
+    // this call. There is a bug in the upgrade path where tqhe initial
     // ledgerVers is used in some places during ledgerClose, and the upgraded
     // ledgerVers is used in other places (see comment in ledgerClosed).
     // On the ledger when an upgrade occurs, the ledger header will contain the
@@ -1722,6 +1741,8 @@ LedgerManagerImpl::applyLedger(LedgerCloseData const& ledgerData,
             mApplyState.getSorobanNetworkConfigForCommit());
     }
 
+    mApplyState.markEndOfCommitting();
+
     // Steps 5, 6, 7 are done in `advanceLedgerStateAndPublish`
     // NB: appliedLedgerState is invalidated after this call.
     if (threadIsMain())
@@ -1732,9 +1753,28 @@ LedgerManagerImpl::applyLedger(LedgerCloseData const& ledgerData,
     }
     else
     {
+        // Wait until mCurrentlyApplyingLedger is greater than the ledger that
+        // was JUST applied
+
+        // TODO: current limitation, SCP relies on LCL so updating lCL in the
+        // middle of SCP can put it into borked state
+        while (mCurrentlyApplyingLedger.load() != 0 &&
+               mCurrentlyApplyingLedger.load() <= ledgerSeq)
+        {
+            if (mApp.isStopping())
+            {
+                // If we are stopping, don't wait for the apply thread to finish
+                // and just return.
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
         auto cb = [this, ledgerSeq, calledViaExternalize, ledgerData,
                    appliedLedgerState = std::move(appliedLedgerState),
                    upgradeApplied]() mutable {
+            // This will also trigger next ledger, other flow (in
+            // valueExternalized) should be stalled waiting for this callback
             advanceLedgerStateAndPublish(
                 ledgerSeq, calledViaExternalize, ledgerData,
                 std::move(appliedLedgerState), upgradeApplied);
@@ -2588,6 +2628,7 @@ LedgerManagerImpl::applySequentialPhase(
                 subSha256(sorobanBasePrngSeed, static_cast<uint64_t>(index));
         }
 
+        // Here we correctly set BAD_SEQ
         tx->apply(mApp.getAppConnector(), ltx, tm, mutableTxResult, subSeed);
         tx->processPostApply(mApp.getAppConnector(), ltx, tm, mutableTxResult);
 

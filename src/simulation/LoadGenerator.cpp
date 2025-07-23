@@ -187,6 +187,7 @@ LoadGenerator::chooseOpCount(Config const& cfg) const
                           DEFAULT_OP_COUNT);
 }
 
+// Double the rate of submission to saturate the queue better
 int64_t
 LoadGenerator::getTxPerStep(uint32_t txRate, std::chrono::seconds spikeInterval,
                             uint32_t spikeSize)
@@ -1636,6 +1637,7 @@ GeneratedLoadConfig::createSorobanUpgradeSetupLoad()
 {
     GeneratedLoadConfig cfg;
     cfg.mode = LoadGenMode::SOROBAN_UPGRADE_SETUP;
+    // TODO: 1 doesnt work anymore, loadgen bug
     cfg.nAccounts = 1;
     cfg.getMutSorobanConfig().nInstances = 1;
     cfg.txRate = 1;

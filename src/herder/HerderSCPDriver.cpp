@@ -292,7 +292,7 @@ HerderSCPDriver::validateValueAgainstLocalState(uint64_t slotIndex,
     SCPDriver::ValidationLevel res;
     if (isCurrentLedger)
     {
-        // The value is for LCL+1, perform all possible checks
+        // The value is for LCL+1 or pipelined, perform all possible checks
         if (!checkCloseTime(slotIndex, lcl.header.scpValue.closeTime, b))
         {
             return SCPDriver::kInvalidValue;
@@ -318,6 +318,65 @@ HerderSCPDriver::validateValueAgainstLocalState(uint64_t slotIndex,
             res = SCPDriver::kInvalidValue;
         }
         else
+        {
+            CLOG_DEBUG(Herder,
+                       "HerderSCPDriver::validateValue i: {} valid txSet {}",
+                       slotIndex, hexAbbrev(txSetHash));
+            res = SCPDriver::kFullyValidatedValue;
+        }
+    }
+    // TODO: so what if voting continues while ledger close completes and main
+    // thread bumps LCL?
+    else if (slotIndex == lcl.header.ledgerSeq + 2)
+    {
+        auto applying = mLedgerManager.isApplying();
+        // CLOG_INFO(Herder, "HerderSCPDriver::validateValue i: {} applying
+        // previous ledger {}", slotIndex, applying); Must be applying previous
+        // ledger
+        releaseAssert(applying == lcl.header.ledgerSeq + 1 || applying == 0 ||
+                      applying == lcl.header.ledgerSeq + 2);
+
+        // TODO: need to ensure tx set fetching is still happening (should be)
+        // The value is for LCL+1 or pipelined, perform all possible checks
+        // Guess next ledger's close time
+        if (!checkCloseTime(
+                slotIndex,
+                lcl.header.scpValue.closeTime +
+                    std::chrono::duration_cast<std::chrono::seconds>(
+                        mLedgerManager.getExpectedLedgerCloseTime())
+                        .count(),
+                b))
+        {
+            // CLOG_INFO(Herder,
+            //            "validateValue i:{} close time {} is not valid for
+            //            LCL+1 close time {}", slotIndex, b.closeTime,
+            //            lcl.header.scpValue.closeTime);
+            return SCPDriver::kInvalidValue;
+        }
+
+        Hash const& txSetHash = b.txSetHash;
+
+        // Must have the tx set
+        TxSetXDRFrameConstPtr txSet = mPendingEnvelopes.getTxSet(txSetHash);
+
+        auto closeTimeOffset = b.closeTime - lcl.header.scpValue.closeTime;
+
+        if (!txSet)
+        {
+            CLOG_ERROR(Herder, "validateValue i:{} unknown txSet {}", slotIndex,
+                       hexAbbrev(txSetHash));
+
+            res = SCPDriver::kInvalidValue;
+        }
+        // TODO: what to do about this cache?
+        // else if (!checkAndCacheTxSetValid(*txSet, lcl, closeTimeOffset))
+        // {
+        //     CLOG_DEBUG(Herder,
+        //                "HerderSCPDriver::validateValue i: {} invalid txSet
+        //                {}", slotIndex, hexAbbrev(txSetHash));
+        //     res = SCPDriver::kInvalidValue;
+        // }
+        // else
         {
             CLOG_DEBUG(Herder,
                        "HerderSCPDriver::validateValue i: {} valid txSet {}",
@@ -664,7 +723,8 @@ HerderSCPDriver::combineCandidates(uint64_t slotIndex,
 
     std::set<TransactionFramePtr> aggSet;
 
-    releaseAssert(!mLedgerManager.isApplying());
+    auto applying = mLedgerManager.isApplying();
+    releaseAssert(!applying || applying == slotIndex - 1);
     releaseAssert(threadIsMain());
     auto const& lcl = mLedgerManager.getLastClosedLedgerHeader();
 
@@ -1364,7 +1424,7 @@ uint64
 HerderSCPDriver::getNodeWeight(NodeID const& nodeID, SCPQuorumSet const& qset,
                                bool const isLocalNode) const
 {
-    releaseAssert(!mLedgerManager.isApplying());
+    // releaseAssert(!mLedgerManager.isApplying());
     Config const& cfg = mApp.getConfig();
     bool const unsupportedProtocol = protocolVersionIsBefore(
         mApp.getLedgerManager()

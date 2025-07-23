@@ -118,7 +118,7 @@ class TransactionQueueTest
                   bool noChangeExpected = false)
     {
         auto size = mTransactionQueue.getTransactions({}).size();
-        mTransactionQueue.removeApplied(toRemove);
+        mTransactionQueue.removeApplied(toRemove, true);
 
         if (noChangeExpected)
         {

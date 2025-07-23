@@ -389,6 +389,7 @@ GlobalParallelApplyLedgerState::GlobalParallelApplyLedgerState(
     std::vector<ApplyStage> const& stages,
     InMemorySorobanState const& inMemoryState)
     : mHotArchiveSnapshot(app.copySearchableHotArchiveBucketListSnapshot())
+    // TODO: this might be a problem, snapshot might be outdated?
     , mLiveSnapshot(app.copySearchableLiveBucketListSnapshot())
     , mInMemorySorobanState(inMemoryState)
 {

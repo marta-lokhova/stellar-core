@@ -320,7 +320,7 @@ class LedgerManagerImpl : public LedgerManager
 
     // Use in the context of parallel ledger apply to indicate background thread
     // is currently closing a ledger or has ledgers queued to apply.
-    bool mCurrentlyApplyingLedger{false};
+    std::atomic<uint32_t> mCurrentlyApplyingLedger{0};
 
     static std::vector<MutableTxResultPtr> processFeesSeqNums(
         ApplicableTxSetFrame const& txSet, AbstractLedgerTxn& ltxOuter,
@@ -475,7 +475,7 @@ class LedgerManagerImpl : public LedgerManager
     // This call is read-only and hence `ltx` can be read-only.
     void updateSorobanNetworkConfigForCommit(AbstractLedgerTxn& ltx) override;
     void moveToSynced() override;
-    void beginApply() override;
+    void beginApply(LedgerCloseData const& lcd) override;
     State getState() const override;
     std::string getStateHuman() const override;
 
@@ -551,10 +551,10 @@ class LedgerManagerImpl : public LedgerManager
 
     SorobanMetrics& getSorobanMetrics() override;
     SearchableSnapshotConstPtr getLastClosedSnaphot() const override;
-    virtual bool
+    virtual uint32_t
     isApplying() const override
     {
-        return mCurrentlyApplyingLedger;
+        return mCurrentlyApplyingLedger.load();
     }
     void markApplyStateReset() override;
     ::rust::Box<rust_bridge::SorobanModuleCache> getModuleCache() override;

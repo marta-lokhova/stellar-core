@@ -525,7 +525,10 @@ LedgerApplyManagerImpl::tryApplySyncingLedgers()
         if (mApp.getConfig().parallelLedgerClose())
         {
             // Notify LM that application has started
-            mApp.getLedgerManager().beginApply();
+            // TODO: is it worth throttling applicaiton here? Only send apply to
+            // the queue when previous apply is done? If main thread falls
+            // behind by a LOT, operating on a super stale snapshot?
+            mApp.getLedgerManager().beginApply(lcd);
             mApp.postOnLedgerCloseThread(
                 [&app = mApp, lcd]() {
                     // No-op if app is shutting down

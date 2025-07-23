@@ -167,7 +167,8 @@ Config::Config() : NODE_SEED(SecretKey::random())
     CATCHUP_COMPLETE = false;
     CATCHUP_RECENT = 0;
     BACKGROUND_OVERLAY_PROCESSING = true;
-    EXPERIMENTAL_PARALLEL_LEDGER_APPLY = false;
+    // Must be enabled for pipelining
+    EXPERIMENTAL_PARALLEL_LEDGER_APPLY = true;
     EXPERIMENTAL_BACKGROUND_TX_SIG_VERIFICATION = false;
     BUCKETLIST_DB_INDEX_PAGE_SIZE_EXPONENT = 14; // 2^14 == 16 kb
     BUCKETLIST_DB_INDEX_CUTOFF = 20;             // 20 mb
@@ -206,8 +207,9 @@ Config::Config() : NODE_SEED(SecretKey::random())
     DISABLE_BUCKET_GC = false;
     DISABLE_XDR_FSYNC = false;
     MAX_SLOTS_TO_REMEMBER = 12;
-    TRANSACTION_QUEUE_SIZE_MULTIPLIER = 2;
-    SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER = 2;
+    TRANSACTION_QUEUE_SIZE_MULTIPLIER = 4;
+    SOROBAN_TRANSACTION_QUEUE_SIZE_MULTIPLIER = 4;
+    TRANSACTION_QUEUE_TIMEOUT_LEDGERS = 4;
 
     // Configure MAXIMUM_LEDGER_CLOSETIME_DRIFT based on MAX_SLOTS_TO_REMEMBER
     // (plus a small buffer) to make sure we don't reject SCP state sent to us
@@ -1088,6 +1090,11 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                 {"OUTBOUND_TX_QUEUE_BYTE_LIMIT",
                  [&]() {
                      OUTBOUND_TX_QUEUE_BYTE_LIMIT = readInt<uint32_t>(item, 1);
+                 }},
+                {"TRANSACTION_QUEUE_TIMEOUT_LEDGERS",
+                 [&]() {
+                     TRANSACTION_QUEUE_TIMEOUT_LEDGERS =
+                         readInt<uint32_t>(item, 1);
                  }},
 #ifdef BUILD_TESTS
                 {"TRANSACTION_QUEUE_SIZE_MULTIPLIER_FOR_TESTING",
