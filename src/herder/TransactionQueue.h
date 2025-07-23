@@ -153,7 +153,7 @@ class TransactionQueue
 #else
     AddResult tryAdd(TransactionFrameBasePtr tx, bool submittedFromSelf);
 #endif
-    AccountStates removeApplied(Transactions const& txs,
+    AccountStates removeApplied(Transactions const& txs, uint32_t ledger,
                                 bool removePending = true);
     // Ban transactions that are no longer valid or have insufficient fee;
     // transaction per account limit applies here, so `txs` should have no
@@ -229,6 +229,8 @@ class TransactionQueue
         medida::Counter& mTransactionsDelayCounter;
         medida::Counter& mTransactionsSelfDelayCounter;
     };
+
+    medida::Counter& mApplyingCounter;
 
     // TODO: rework transaction queue acceptance
     // TODO: rework checkValid when constructing block.

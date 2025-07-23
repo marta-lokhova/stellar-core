@@ -188,6 +188,8 @@ Config::Config() : NODE_SEED(SecretKey::random())
     // automatic self-check happens once every 3 hours
     AUTOMATIC_SELF_CHECK_PERIOD = std::chrono::seconds{3 * 60 * 60};
     ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING = false;
+    SKIP_SCP_PERSISTENCE_FOR_TESTING = false;
+    TRIGGER_OFFSET_FOR_TESTING = 0;
     LOADGEN_PREGENERATED_TRANSACTIONS_FILE = "stellar-load-transactions.xdr";
     UPDATE_SOROBAN_COSTS_DURING_PROTOCOL_UPGRADE_FOR_TESTING = false;
     ARTIFICIALLY_ACCELERATE_TIME_FOR_TESTING = false;
@@ -1198,6 +1200,12 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                 {"ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING",
                  [&]() {
                      ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING = readBool(item);
+                 }},
+                {"SKIP_SCP_PERSISTENCE_FOR_TESTING",
+                 [&]() { SKIP_SCP_PERSISTENCE_FOR_TESTING = readBool(item); }},
+                {"TRIGGER_OFFSET_FOR_TESTING",
+                 [&]() {
+                     TRIGGER_OFFSET_FOR_TESTING = readInt<uint32_t>(item);
                  }},
                 {"LOADGEN_PREGENERATED_TRANSACTIONS_FILE",
                  [&]() {

@@ -354,11 +354,13 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
     auto txsPerPhase =
         ledgerData.getTxSet()->createTransactionFrames(mApp.getNetworkID());
     mTransactionQueue.removeApplied(
-        txsPerPhase[static_cast<size_t>(TxSetPhase::CLASSIC)]);
+        txsPerPhase[static_cast<size_t>(TxSetPhase::CLASSIC)], slotIndex,
+        false);
     if (mSorobanTransactionQueue)
     {
         mSorobanTransactionQueue->removeApplied(
-            txsPerPhase[static_cast<size_t>(TxSetPhase::SOROBAN)]);
+            txsPerPhase[static_cast<size_t>(TxSetPhase::SOROBAN)], slotIndex,
+            false);
     }
 
     // Here we're racing with the apply thread, therefore check both "currently
@@ -377,7 +379,9 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
 
         // If we're in sync and there are no buffered ledgers to apply, trigger
         // next ledger
-        if (isLatestSlot)
+        // Check is synced, for genesis ledger, where consensus kicks in while
+        // we're in booting
+        if (isLatestSlot && mLedgerManager.isSynced())
         {
             // Re-start heartbeat tracking _after_ applying the most up-to-date
             // ledger. This guarantees out-of-sync timer won't fire while we
@@ -387,6 +391,8 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
             // Ensure out of sync recovery did not get triggered while we were
             // applying
             releaseAssert(isTracking());
+
+            // TODO: wait for consensus flag doesn't work here on genesis
             releaseAssert(mLedgerManager.isSynced());
 
             CLOG_INFO(Herder, "PIPELINE Triggering next ledger: {}",
@@ -993,6 +999,7 @@ HerderImpl::externalizeValue(TxSetXDRFrameConstPtr txSet, uint32_t ledgerSeq,
 bool
 HerderImpl::sourceAccountPending(AccountID const& accountID) const
 {
+    ZoneScoped;
     bool accPending = mTransactionQueue.sourceAccountPending(accountID);
     if (mSorobanTransactionQueue)
     {
@@ -1257,6 +1264,7 @@ HerderImpl::lastClosedLedgerIncreased(bool latest, TxSetXDRFrameConstPtr txSet,
 
     // If we're in sync and there are no buffered ledgers to apply, trigger next
     // ledger
+    // This if condition causes a deadlock
     // if (latest)
     {
         // Re-start heartbeat tracking _after_ applying the most up-to-date
@@ -1282,7 +1290,7 @@ HerderImpl::lastClosedLedgerIncreased(bool latest, TxSetXDRFrameConstPtr txSet,
         }
         releaseAssert(mLedgerManager.isSynced());
 
-        // TEMPORARY to test pipelining - TIDO need to handle this case
+        // TEMPORARY to test pipelining - TODO need to handle this case
         setupTriggerNextLedger();
     }
 }
@@ -1340,6 +1348,12 @@ HerderImpl::setupTriggerNextLedger()
     if (lastStart)
     {
         lastBallotStart = *lastStart;
+        // use a guesstimate based on previous nomination value
+        if (mApp.getConfig().TRIGGER_OFFSET_FOR_TESTING > 0)
+        {
+            lastBallotStart -= std::chrono::seconds(
+                mApp.getConfig().TRIGGER_OFFSET_FOR_TESTING);
+        }
     }
 
     // Adjust trigger time in case node's clock has drifted.
@@ -2167,6 +2181,11 @@ void
 HerderImpl::persistSCPState(uint64 slot)
 {
     ZoneScoped;
+    if (mApp.getConfig().SKIP_SCP_PERSISTENCE_FOR_TESTING)
+    {
+        return;
+    }
+
     if (slot < mLastSlotSaved)
     {
         return;
@@ -2544,7 +2563,7 @@ HerderImpl::updateTransactionQueue(TxSetXDRFrameConstPtr externalizedTxSet,
     auto lhhe = mLedgerManager.getLastClosedLedgerHeader();
 
     auto updateQueue = [&](auto& queue, auto const& applied, bool isSoroban) {
-        queue.removeApplied(applied, removePending);
+        queue.removeApplied(applied, lhhe.header.ledgerSeq, removePending);
         queue.shift();
 
         if (isSoroban && queueRebuildNeeded)

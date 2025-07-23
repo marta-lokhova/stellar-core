@@ -223,7 +223,13 @@ class Config : public std::enable_shared_from_this<Config>
     // production networks.
     bool ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING;
 
-    // Path to pre-generated transaction file for LoadGenerator's
+    // Skip expensive persistent state operations for testing. This is useful
+    // for high throughput synthetic load generation tests.
+    bool SKIP_SCP_PERSISTENCE_FOR_TESTING;
+
+    uint32_t TRIGGER_OFFSET_FOR_TESTING;
+
+    // Path to pre-generated transaction fiCle for LoadGenerator's
     // PAY_PREGENERATED mode
     std::string LOADGEN_PREGENERATED_TRANSACTIONS_FILE;
 

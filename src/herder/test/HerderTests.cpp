@@ -3295,14 +3295,20 @@ TEST_CASE("overlay parallel processing", "[herder][parallel]")
     SECTION("background ledger close")
     {
         // Set threshold to 1 so all have to vote
-        simulation =
-            Topologies::core(4, 1, Simulation::OVER_TCP, networkID, [](int i) {
+        simulation = Topologies::core(
+            4, 0.5, Simulation::OVER_TCP, networkID, [](int i) {
                 auto cfg = getTestConfig(i, Config::TESTDB_POSTGRESQL);
                 cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 1000;
                 cfg.EXPERIMENTAL_PARALLEL_LEDGER_APPLY = true;
                 cfg.GENESIS_TEST_ACCOUNT_COUNT = 10000;
                 cfg.ARTIFICIALLY_DELAY_LEDGER_CLOSE_FOR_TESTING =
                     std::chrono::milliseconds(1000);
+                if (i == 2)
+                {
+                    // One watcher to test trigger setup
+                    cfg.NODE_IS_VALIDATOR = false;
+                    cfg.FORCE_SCP = false;
+                }
                 return cfg;
             });
     }

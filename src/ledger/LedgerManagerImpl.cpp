@@ -1330,9 +1330,10 @@ LedgerManagerImpl::ledgerCloseComplete(uint32_t lcl, bool calledViaExternalize,
     // "synced"
     bool appliedLatest = false;
 
-    if (latestHeardFromNetwork == lcl)
+    if (latestHeardFromNetwork == lcl ||
+        latestHeardFromNetwork == mCurrentlyApplyingLedger)
     {
-        mApp.getLedgerManager().moveToSynced();
+        moveToSynced();
         appliedLatest = true;
     }
 
@@ -1445,7 +1446,7 @@ LedgerManagerImpl::applyLedger(LedgerCloseData const& ledgerData,
 
     auto initialLedgerVers = header.current().ledgerVersion;
     ++header.current().ledgerSeq;
-    header.current().previousPreviousLedgerHash = previousHash;
+    // header.current().previousPreviousLedgerHash = previousHash;
     header.current().previousLedgerHash = hash;
 
     CLOG_DEBUG(Ledger, "starting applyLedger() on ledgerSeq={}",
@@ -1743,6 +1744,13 @@ LedgerManagerImpl::applyLedger(LedgerCloseData const& ledgerData,
 
     mApplyState.markEndOfCommitting();
 
+    // This fixes the ledger close metric
+    maybeSimulateSleep(mApp.getConfig(), txSet->sizeOpTotalForLogging(),
+                       applyLedgerTime);
+    std::chrono::duration<double> ledgerTimeSeconds = ledgerTime.Stop();
+    CLOG_DEBUG(Perf, "Applied ledger {} in {} seconds", ledgerSeq,
+               ledgerTimeSeconds.count());
+
     // Steps 5, 6, 7 are done in `advanceLedgerStateAndPublish`
     // NB: appliedLedgerState is invalidated after this call.
     if (threadIsMain())
@@ -1767,6 +1775,7 @@ LedgerManagerImpl::applyLedger(LedgerCloseData const& ledgerData,
                 // and just return.
                 return;
             }
+            // TODO: The queuing should be happening on the main thread?
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
 
@@ -1781,12 +1790,6 @@ LedgerManagerImpl::applyLedger(LedgerCloseData const& ledgerData,
         };
         mApp.postOnMainThread(std::move(cb), "advanceLedgerStateAndPublish");
     }
-
-    maybeSimulateSleep(mApp.getConfig(), txSet->sizeOpTotalForLogging(),
-                       applyLedgerTime);
-    std::chrono::duration<double> ledgerTimeSeconds = ledgerTime.Stop();
-    CLOG_DEBUG(Perf, "Applied ledger {} in {} seconds", ledgerSeq,
-               ledgerTimeSeconds.count());
     FrameMark;
 }
 

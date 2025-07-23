@@ -1446,7 +1446,7 @@ ApplicationImpl::postOnMainThread(std::function<void()>&& f, std::string&& name,
                             "executed after"};
     mVirtualClock.postAction(
         [this, f = std::move(f), isSlow]() {
-            mPostOnMainThreadDelay.Update(isSlow.checkElapsedTime());
+            // mPostOnMainThreadDelay.Update(isSlow.checkElapsedTime());
             auto sleepFor =
                 this->getConfig().ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING;
             if (sleepFor > std::chrono::microseconds::zero())
@@ -1465,7 +1465,7 @@ ApplicationImpl::postOnBackgroundThread(std::function<void()>&& f,
     LogSlowExecution isSlow{std::move(jobName), LogSlowExecution::Mode::MANUAL,
                             "executed after"};
     asio::post(getWorkerIOContext(), [this, f = std::move(f), isSlow]() {
-        mPostOnBackgroundThreadDelay.Update(isSlow.checkElapsedTime());
+        // mPostOnBackgroundThreadDelay.Update(isSlow.checkElapsedTime());
         f();
     });
 }
@@ -1477,7 +1477,7 @@ ApplicationImpl::postOnEvictionBackgroundThread(std::function<void()>&& f,
     LogSlowExecution isSlow{std::move(jobName), LogSlowExecution::Mode::MANUAL,
                             "executed after"};
     asio::post(getEvictionIOContext(), [this, f = std::move(f), isSlow]() {
-        mPostOnBackgroundThreadDelay.Update(isSlow.checkElapsedTime());
+        // mPostOnBackgroundThreadDelay.Update(isSlow.checkElapsedTime());
         f();
     });
 }
@@ -1490,7 +1490,7 @@ ApplicationImpl::postOnOverlayThread(std::function<void()>&& f,
     LogSlowExecution isSlow{std::move(jobName), LogSlowExecution::Mode::MANUAL,
                             "executed after"};
     asio::post(*mOverlayIOContext, [this, f = std::move(f), isSlow]() {
-        mPostOnOverlayThreadDelay.Update(isSlow.checkElapsedTime());
+        // mPostOnOverlayThreadDelay.Update(isSlow.checkElapsedTime());
         f();
     });
 }
@@ -1503,7 +1503,7 @@ ApplicationImpl::postOnLedgerCloseThread(std::function<void()>&& f,
     LogSlowExecution isSlow{std::move(jobName), LogSlowExecution::Mode::MANUAL,
                             "executed after"};
     asio::post(*mLedgerCloseIOContext, [this, f = std::move(f), isSlow]() {
-        mPostOnLedgerCloseThreadDelay.Update(isSlow.checkElapsedTime());
+        // mPostOnLedgerCloseThreadDelay.Update(isSlow.checkElapsedTime());
         f();
     });
 }
