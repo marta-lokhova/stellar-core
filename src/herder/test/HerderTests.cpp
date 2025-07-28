@@ -3263,19 +3263,6 @@ TEST_CASE("overlay parallel processing", "[herder][parallel]")
 
     std::shared_ptr<Simulation> simulation;
 
-    SECTION("background traffic processing")
-    {
-        // Set threshold to 1 so all have to vote
-        simulation =
-            Topologies::core(4, 1, Simulation::OVER_TCP, networkID, [](int i) {
-                auto cfg = getTestConfig(i);
-                cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 100;
-                cfg.BACKGROUND_OVERLAY_PROCESSING = true;
-                cfg.GENESIS_TEST_ACCOUNT_COUNT = 100;
-                return cfg;
-            });
-    }
-
     SECTION("background signature validation")
     {
         // Set threshold to 1 so all have to vote
@@ -3283,7 +3270,6 @@ TEST_CASE("overlay parallel processing", "[herder][parallel]")
             Topologies::core(4, 1, Simulation::OVER_TCP, networkID, [](int i) {
                 auto cfg = getTestConfig(i);
                 cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 100;
-                cfg.BACKGROUND_OVERLAY_PROCESSING = true;
                 cfg.EXPERIMENTAL_BACKGROUND_TX_SIG_VERIFICATION = true;
                 cfg.GENESIS_TEST_ACCOUNT_COUNT = 100;
                 return cfg;

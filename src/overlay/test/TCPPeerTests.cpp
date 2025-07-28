@@ -29,7 +29,6 @@ TEST_CASE("TCPPeer lifetime", "[overlay]")
             cfg.MAX_OUTBOUND_PENDING_CONNECTIONS = i % 2;
             cfg.TARGET_PEER_CONNECTIONS = i % 2;
             cfg.MAX_ADDITIONAL_PEER_CONNECTIONS = i % 2;
-            cfg.BACKGROUND_OVERLAY_PROCESSING = true;
             return cfg;
         });
 
@@ -91,23 +90,6 @@ TEST_CASE("TCPPeer can communicate", "[overlay]")
     Hash networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
     Simulation::ConfigGen cfgGen = [](int i) { return getTestConfig(i); };
 
-    SECTION("with background processing")
-    {
-        cfgGen = [](int i) {
-            Config cfg = getTestConfig(i);
-            cfg.BACKGROUND_OVERLAY_PROCESSING = true;
-            return cfg;
-        };
-    }
-    SECTION("main thread only")
-    {
-        cfgGen = [](int i) {
-            Config cfg = getTestConfig(i);
-            cfg.BACKGROUND_OVERLAY_PROCESSING = false;
-            return cfg;
-        };
-    }
-
     Simulation::pointer s =
         std::make_shared<Simulation>(Simulation::OVER_TCP, networkID, cfgGen);
 
@@ -162,7 +144,6 @@ TEST_CASE("TCPPeer read malformed messages", "[overlay]")
     Simulation::pointer s = std::make_shared<Simulation>(
         Simulation::OVER_TCP, networkID, [](int i) {
             Config cfg = getTestConfig(i);
-            cfg.BACKGROUND_OVERLAY_PROCESSING = true;
             // Slow down the main thread to delay drops
             cfg.ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING =
                 std::chrono::milliseconds(300);
