@@ -179,8 +179,8 @@ class LoadGenerator
     // modes that do not generate SOROBAN_INVOKE load.
     bool checkMinimumSorobanSuccess(GeneratedLoadConfig const& cfg);
 
-    // Generate one "step" worth of load (assuming 1 step per STEP_MSECS) at a
-    // given target number of accounts and txs, a given target tx/s rate, and
+    // Generate one "step" worth of load (assuming 1 step per getStepMsecs()) at
+    // a given target number of accounts and txs, a given target tx/s rate, and
     // according to the other parameters provided in configuration.
     // If work remains after the current step, calls scheduleLoadGeneration()
     // with the remainder.
@@ -250,7 +250,7 @@ class LoadGenerator
                                             LoadGenMode mode,
                                             TransactionResultCode& code);
 
-    static const uint32_t STEP_MSECS;
+    uint32_t getStepMsecs() const;
     static const uint32_t TX_SUBMIT_MAX_TRIES;
     static const uint32_t TIMEOUT_NUM_LEDGERS;
     static const uint32_t COMPLETION_TIMEOUT_WITHOUT_CHECKS;
@@ -324,7 +324,8 @@ class LoadGenerator
     int64_t getTxPerStep(uint32_t txRate, std::chrono::seconds spikeInterval,
                          uint32_t spikeSize);
 
-    // Schedule a callback to generateLoad() STEP_MSECS milliseconds from now.
+    // Schedule a callback to generateLoad() getStepMsecs() milliseconds from
+    // now.
     void scheduleLoadGeneration(GeneratedLoadConfig cfg);
 
     // Create a transaction in MIXED_CLASSIC_SOROBAN mode

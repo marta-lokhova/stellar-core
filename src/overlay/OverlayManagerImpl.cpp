@@ -1221,7 +1221,8 @@ OverlayManagerImpl::recvTransaction(TransactionFrameBasePtr transaction,
         // add it to the floodmap so that this peer gets credit for it
         recvFloodedMsgID(peer, index);
         // TODO: this is too expensive, remove for now
-        // mTxDemandsManager.recordTxPullLatency(transaction->getFullHash(), peer);
+        // mTxDemandsManager.recordTxPullLatency(transaction->getFullHash(),
+        // peer);
 
         // add it to our current set
         // and make sure it is valid

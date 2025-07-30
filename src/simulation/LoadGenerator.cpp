@@ -64,8 +64,12 @@ sampleDiscrete(std::vector<T> const& values,
 }
 } // namespace
 
-// Units of load are scheduled at 100ms intervals.
-const uint32_t LoadGenerator::STEP_MSECS = 100;
+// Units of load are scheduled at configurable intervals.
+uint32_t
+LoadGenerator::getStepMsecs() const
+{
+    return mApp.getConfig().LOADGEN_STEP_MSECS_FOR_TESTING;
+}
 
 // If submission fails with txBAD_SEQ, attempt refreshing the account or
 // re-submitting a new payment
@@ -461,7 +465,7 @@ LoadGenerator::getConfigUpgradeSetKey(
     return mTxGenerator.getConfigUpgradeSetKey(upgradeCfg, contractId);
 }
 
-// Schedule a callback to generateLoad() STEP_MSECS milliseconds from now.
+// Schedule a callback to generateLoad() getStepMsecs() milliseconds from now.
 void
 LoadGenerator::scheduleLoadGeneration(GeneratedLoadConfig cfg)
 {
@@ -551,7 +555,7 @@ LoadGenerator::scheduleLoadGeneration(GeneratedLoadConfig cfg)
 
     if (mApp.getState() == Application::APP_SYNCED_STATE)
     {
-        mLoadTimer->expires_from_now(std::chrono::milliseconds(STEP_MSECS));
+        mLoadTimer->expires_from_now(std::chrono::milliseconds(getStepMsecs()));
         mLoadTimer->async_wait([this, cfg]() { this->generateLoad(cfg); },
                                &VirtualTimer::onFailureNoop);
     }
@@ -663,7 +667,7 @@ GeneratedLoadConfig::getStatus() const
     return ret;
 }
 
-// Generate one "step" worth of load (assuming 1 step per STEP_MSECS) at a
+// Generate one "step" worth of load (assuming 1 step per getStepMsecs()) at a
 // given target number of accounts and txs, and a given target tx/s rate.
 // If work remains after the current step, call scheduleLoadGeneration()
 // with the remainder.

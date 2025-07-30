@@ -340,6 +340,10 @@ class Config : public std::enable_shared_from_this<Config>
     std::vector<uint32_t> LOADGEN_INSTRUCTIONS_FOR_TESTING;
     std::vector<uint32_t> LOADGEN_INSTRUCTIONS_DISTRIBUTION_FOR_TESTING;
 
+    // Configurable step interval for LoadGenerator (in milliseconds)
+    // Default is 100ms
+    uint32_t LOADGEN_STEP_MSECS_FOR_TESTING;
+
     // apply-load-specific configuration parameters:
     // Size of the synthetic contract data entries used in apply-load.
     // Currently we generate entries of the equal size for more precise
