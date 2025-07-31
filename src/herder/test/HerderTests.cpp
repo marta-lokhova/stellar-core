@@ -3269,9 +3269,9 @@ TEST_CASE("overlay parallel processing", "[herder][parallel]")
         simulation =
             Topologies::core(4, 1, Simulation::OVER_TCP, networkID, [](int i) {
                 auto cfg = getTestConfig(i);
-                cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 100;
+                cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 1000;
                 cfg.EXPERIMENTAL_BACKGROUND_TX_SIG_VERIFICATION = true;
-                cfg.GENESIS_TEST_ACCOUNT_COUNT = 100;
+                cfg.GENESIS_TEST_ACCOUNT_COUNT = 10000;
                 return cfg;
             });
     }

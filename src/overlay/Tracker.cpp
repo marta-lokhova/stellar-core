@@ -19,7 +19,6 @@
 namespace stellar
 {
 
-std::chrono::milliseconds const Tracker::MS_TO_WAIT_FOR_FETCH_REPLY{1500};
 int const Tracker::MAX_REBUILD_FETCH_LIST = 10;
 
 Tracker::Tracker(Application& app, Hash const& hash, AskPeer& askPeer)
@@ -134,7 +133,7 @@ Tracker::tryNextPeer()
             auto& p = mp.second;
             if (canAskPeer(p, peersHave))
             {
-                int64 GROUPSIZE_MS = (MS_TO_WAIT_FOR_FETCH_REPLY.count() / 3);
+                int64 GROUPSIZE_MS = (mApp.getConfig().MS_TO_WAIT_FOR_FETCH_REPLY.count() / 3);
                 int64 plat = p->getPing().count() / GROUPSIZE_MS;
                 if (plat < curBest)
                 {
@@ -196,7 +195,7 @@ Tracker::tryNextPeer()
         CLOG_TRACE(Overlay, "tryNextPeer {} restarting fetch #{}",
                    hexAbbrev(mItemHash), mNumListRebuild);
 
-        nextTry = MS_TO_WAIT_FOR_FETCH_REPLY *
+        nextTry = mApp.getConfig().MS_TO_WAIT_FOR_FETCH_REPLY *
                   std::min(MAX_REBUILD_FETCH_LIST, mNumListRebuild);
     }
     else
@@ -205,7 +204,7 @@ Tracker::tryNextPeer()
         CLOG_TRACE(Overlay, "Asking for {} to {}", hexAbbrev(mItemHash),
                    mLastAskedPeer->toString());
         mAskPeer(mLastAskedPeer, mItemHash);
-        nextTry = MS_TO_WAIT_FOR_FETCH_REPLY;
+        nextTry = mApp.getConfig().MS_TO_WAIT_FOR_FETCH_REPLY;
     }
 
     mTimer.expires_from_now(nextTry);

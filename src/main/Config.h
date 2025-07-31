@@ -682,6 +682,9 @@ class Config : public std::enable_shared_from_this<Config>
     std::chrono::milliseconds FLOOD_DEMAND_PERIOD_MS;
     std::chrono::milliseconds FLOOD_ADVERT_PERIOD_MS;
     std::chrono::milliseconds FLOOD_DEMAND_BACKOFF_DELAY_MS;
+    
+    // Milliseconds to wait for item fetch reply in overlay
+    std::chrono::milliseconds MS_TO_WAIT_FOR_FETCH_REPLY;
     static constexpr size_t const POSSIBLY_PREFERRED_EXTRA = 2;
     static constexpr size_t const REALLY_DEAD_NUM_FAILURES_CUTOFF = 120;
 

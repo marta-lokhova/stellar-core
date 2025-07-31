@@ -150,22 +150,11 @@ CapacityTrackedMessage::CapacityTrackedMessage(std::weak_ptr<Peer> peer,
         transaction->getFullHash();
         transaction->getContentsHash();
         mTxsMap[hash] = transaction;
-        return transaction;
     };
-
-    // Whether to check transaction signatures in the background, adding them to
-    // the signature cache in the process.
-    bool const checkTxSig = self->mAppConnector.getConfig()
-                                .EXPERIMENTAL_BACKGROUND_TX_SIG_VERIFICATION &&
-                            self->useBackgroundThread();
 
     if (mMsg.type() == TRANSACTION)
     {
-        auto const txn = populateTxMap(mMsg, mMaybeHash.value());
-        if (checkTxSig)
-        {
-            populateSignatureCache(self->mAppConnector, txn);
-        }
+        populateTxMap(mMsg, mMaybeHash.value());
     }
 #ifdef BUILD_TESTS
     else if (mMsg.type() == TX_SET && OverlayManager::isFloodMessage(mMsg))
@@ -175,11 +164,7 @@ CapacityTrackedMessage::CapacityTrackedMessage(std::weak_ptr<Peer> peer,
             StellarMessage txMsg;
             txMsg.type(TRANSACTION);
             txMsg.transaction() = tx;
-            auto const txn = populateTxMap(txMsg, xdrBlake2(txMsg));
-            if (checkTxSig)
-            {
-                populateSignatureCache(self->mAppConnector, txn);
-            }
+            populateTxMap(txMsg, xdrBlake2(txMsg));
         }
     }
 #endif
@@ -1069,25 +1054,57 @@ Peer::recvAuthenticatedMessage(AuthenticatedMessage&& msg)
         return true;
     }
 
-    // Verify SCP signatures when in the background
-    if (useBackgroundThread() && msg.v0().message.type() == SCP_MESSAGE)
-    {
-        auto& envelope = msg.v0().message.envelope();
-        PubKeyUtils::verifySig(envelope.statement.nodeID, envelope.signature,
-                               xdr::xdr_to_opaque(mNetworkID, ENVELOPE_TYPE_SCP,
-                                                  envelope.statement));
-    }
-
     // Subtle: move `msgTracker` shared_ptr into the lambda, to ensure
     // its destructor is invoked from main thread only. Note that we can't use
     // unique_ptr here, because std::function requires its callable
     // to be copyable (C++23 fixes this with std::move_only_function, but we're
     // not there yet)
-    mAppConnector.postOnMainThread(
-        [self = shared_from_this(), t = std::move(msgTracker)]() {
-            self->recvMessage(t);
-        },
-        std::move(queueName), type);
+    if (!useBackgroundThread())
+    {
+        mAppConnector.postOnMainThread(
+            [self = shared_from_this(), t = std::move(msgTracker)]() {
+                self->recvMessage(t);
+            },
+            std::move(queueName), type);
+    }
+    else
+    {
+        mAppConnector.postOnOverlayThread(
+            [self = shared_from_this(), t = std::move(msgTracker),
+             queueName = std::move(queueName), type]() mutable {
+                // Whether to check transaction signatures in the background,
+                // adding them to the signature cache in the process.
+                bool const checkTxSig =
+                    self->mAppConnector.getConfig()
+                        .EXPERIMENTAL_BACKGROUND_TX_SIG_VERIFICATION;
+                auto const& msg = t->getMessage();
+                if (checkTxSig)
+                {
+                    // Process all transactions in the map (single or batch)
+                    for (auto const& [hash, transaction] : t->getTxMap())
+                    {
+                        populateSignatureCache(self->mAppConnector,
+                                               transaction);
+                    }
+                }
+
+                // Verify SCP signatures when in the background
+                if (msg.type() == SCP_MESSAGE)
+                {
+                    auto& envelope = msg.envelope();
+                    PubKeyUtils::verifySig(
+                        envelope.statement.nodeID, envelope.signature,
+                        xdr::xdr_to_opaque(self->mAppConnector.getNetworkID(),
+                                           ENVELOPE_TYPE_SCP,
+                                           envelope.statement));
+                }
+
+                self->mAppConnector.postOnMainThread(
+                    [self, t = std::move(t)]() { self->recvMessage(t); },
+                    std::move(queueName), type);
+            },
+            "SigVerify");
+    }
 
     // msgTracker should be null now
     releaseAssert(!msgTracker);

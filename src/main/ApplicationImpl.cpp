@@ -1446,7 +1446,7 @@ ApplicationImpl::postOnMainThread(std::function<void()>&& f, std::string&& name,
                             "executed after"};
     mVirtualClock.postAction(
         [this, f = std::move(f), isSlow]() {
-            // mPostOnMainThreadDelay.Update(isSlow.checkElapsedTime());
+            mPostOnMainThreadDelay.Update(isSlow.checkElapsedTime());
             auto sleepFor =
                 this->getConfig().ARTIFICIALLY_SLEEP_MAIN_THREAD_FOR_TESTING;
             if (sleepFor > std::chrono::microseconds::zero())
