@@ -284,6 +284,7 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
                                 bool isLatestSlot)
 {
     ZoneScoped;
+    releaseAssert(threadIsMain());
     bool validated = getSCP().isSlotFullyValidated(slotIndex);
 
     if (getSCP().isValidator() && !validated)
@@ -349,20 +350,6 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
     // This will send ledger to apply
     mLedgerManager.valueExternalized(ledgerData, isLatestSlot);
 
-    // Need to clean up the transaction queue to avoid accidentally including
-    // the same transactions in the next block
-    auto txsPerPhase =
-        ledgerData.getTxSet()->createTransactionFrames(mApp.getNetworkID());
-    mTransactionQueue.removeApplied(
-        txsPerPhase[static_cast<size_t>(TxSetPhase::CLASSIC)], slotIndex,
-        false);
-    if (mSorobanTransactionQueue)
-    {
-        mSorobanTransactionQueue->removeApplied(
-            txsPerPhase[static_cast<size_t>(TxSetPhase::SOROBAN)], slotIndex,
-            false);
-    }
-
     // Here we're racing with the apply thread, therefore check both "currently
     // applying" AND "last applied" ledger.
     if (mLedgerManager.getLastClosedLedgerNum() + 1 ==
@@ -375,7 +362,7 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
         // applied transactions. If a protocol or network config setting upgrade
         // occurred, we will need to rebuild the queue, as limits may have
         // changed.
-        updateTransactionQueue(ledgerData.getTxSet(), false, false);
+        updateTransactionQueue(ledgerData.getTxSet(), false);
 
         // If we're in sync and there are no buffered ledgers to apply, trigger
         // next ledger
@@ -482,12 +469,6 @@ HerderImpl::beginApply(LedgerCloseData const& lcd)
     // restarted when the tx set is applied. This is needed to not mess with
     // Herder's out of sync recovery mechanism.
     mTrackingTimer.cancel();
-
-    mTransactionQueue.beginApply(lcd);
-    if (mSorobanTransactionQueue)
-    {
-        mSorobanTransactionQueue->beginApply(lcd);
-    }
 }
 
 void
@@ -1007,29 +988,6 @@ HerderImpl::sourceAccountPending(AccountID const& accountID) const
                      mSorobanTransactionQueue->sourceAccountPending(accountID);
     }
 
-    // Check if account is conflicting with what we're applying
-    for (auto const& [ledgerSeq, ledgerApplying] : mTransactionQueue.mApplying)
-    {
-        if (ledgerApplying.find(accountID) != ledgerApplying.end())
-        {
-            accPending = true;
-            break;
-        }
-    }
-
-    if (mSorobanTransactionQueue)
-    {
-        for (auto const& [ledgerSeq, ledgerApplying] :
-             mSorobanTransactionQueue->mApplying)
-        {
-            if (ledgerApplying.find(accountID) != ledgerApplying.end())
-            {
-                accPending = true;
-                break;
-            }
-        }
-    }
-
     return accPending;
 }
 
@@ -1260,7 +1218,7 @@ HerderImpl::lastClosedLedgerIncreased(bool latest, TxSetXDRFrameConstPtr txSet,
     // In order to update the transaction queue we need to get the
     // applied transactions. If a protocol or network config setting upgrade
     // occurred, we will need to rebuild the queue, as limits may have changed.
-    updateTransactionQueue(txSet, upgradeApplied, true);
+    updateTransactionQueue(txSet, upgradeApplied);
 
     // If we're in sync and there are no buffered ledgers to apply, trigger next
     // ledger
@@ -1607,6 +1565,9 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
 
     PerPhaseTransactionList invalidTxPhases;
     invalidTxPhases.resize(txPhases.size());
+
+    // TODO: checkValid is not necessary here, because mempool txs are checked for valifity upon admission, 
+    // and increasing LCL purges invalid txs anyways. 
 
     auto [proposedSet, applicableProposedSet] =
         makeTxSetFromTransactions(txPhases, mApp, lowerBoundCloseTimeOffset,
@@ -2548,7 +2509,7 @@ HerderImpl::trackingHeartBeat()
 
 void
 HerderImpl::updateTransactionQueue(TxSetXDRFrameConstPtr externalizedTxSet,
-                                   bool queueRebuildNeeded, bool removePending)
+                                   bool queueRebuildNeeded)
 {
     ZoneScoped;
     if (externalizedTxSet == nullptr)
@@ -2563,7 +2524,8 @@ HerderImpl::updateTransactionQueue(TxSetXDRFrameConstPtr externalizedTxSet,
     auto lhhe = mLedgerManager.getLastClosedLedgerHeader();
 
     auto updateQueue = [&](auto& queue, auto const& applied, bool isSoroban) {
-        queue.removeApplied(applied, lhhe.header.ledgerSeq, removePending);
+        // We've already removed applied when we externalized
+        queue.removeApplied(applied, lhhe.header.ledgerSeq);
         queue.shift();
 
         if (isSoroban && queueRebuildNeeded)

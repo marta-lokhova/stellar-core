@@ -172,6 +172,8 @@ SurgePricingPriorityQueue::getMostTopTxsWithinLimits(
     return outTxs;
 }
 
+// TODO: this is expensive
+// TODO: hashing is expensive
 void
 SurgePricingPriorityQueue::visitTopTxs(
     std::vector<TransactionFrameBasePtr> const& txs,

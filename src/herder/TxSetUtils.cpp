@@ -161,6 +161,7 @@ TxSetUtils::buildAccountTxQueues(TxFrameList const& txs)
     return queues;
 }
 
+// After the cleanup, what can invalidate 
 TxFrameList
 TxSetUtils::getInvalidTxList(TxFrameList const& txs, Application& app,
                              uint64_t lowerBoundCloseTimeOffset,

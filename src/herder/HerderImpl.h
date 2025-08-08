@@ -265,7 +265,7 @@ class HerderImpl : public Herder
     std::unique_ptr<SorobanTransactionQueue> mSorobanTransactionQueue;
 
     void updateTransactionQueue(TxSetXDRFrameConstPtr txSet,
-                                bool queueRebuildNeeded, bool removePending);
+                                bool queueRebuildNeeded);
     void maybeSetupSorobanQueue(uint32_t protocolVersion);
 
     PendingEnvelopes mPendingEnvelopes;

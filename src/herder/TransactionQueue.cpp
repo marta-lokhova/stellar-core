@@ -98,8 +98,6 @@ TransactionQueue::TransactionQueue(Application& app, uint32 pendingDepth,
     , mPendingDepth(pendingDepth)
     , mBannedTransactions(banDepth)
     , mBroadcastTimer(app)
-    , mApplyingCounter(
-          app.getMetrics().NewCounter({"herder", "applying", "tx"}))
 {
     mTxQueueLimiter =
         std::make_unique<TxQueueLimiter>(poolLedgerMultiplier, app, isSoroban);
@@ -377,17 +375,6 @@ TransactionQueue::canAdd(
     {
         return AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR, *tx,
                          txMALFORMED);
-    }
-
-    for (auto const& [ledgerSeq, ledgerSeqMap] : mApplying)
-    {
-        // If the transaction is being applied in this ledger, we cannot add it
-        // to the queue
-        if (ledgerSeqMap.find(tx->getSourceID()) != ledgerSeqMap.end())
-        {
-            return AddResult(
-                TransactionQueue::AddResultCode::ADD_STATUS_TRY_AGAIN_LATER);
-        }
     }
 
     stateIter = mAccountStates.find(tx->getSourceID());
@@ -803,8 +790,7 @@ TransactionQueue::dropTransaction(AccountStates::iterator stateIter)
 }
 
 TransactionQueue::AccountStates
-TransactionQueue::removeApplied(Transactions const& appliedTxs, uint32_t ledger,
-                                bool removePending)
+TransactionQueue::removeApplied(Transactions const& appliedTxs, uint32_t ledger)
 {
     ZoneScoped;
 
@@ -860,18 +846,7 @@ TransactionQueue::removeApplied(Transactions const& appliedTxs, uint32_t ledger,
                 }
             }
         }
-        // Tx is removed from the queue but kept in Applying
-        else if (removePending)
-        {
-            // Find and remove from all ledgers
-            auto it = mApplying.find(ledger);
-            if (it != mApplying.end())
-            {
-                it->second.erase(appliedTx->getSourceID());
-                mApplyingCounter.dec();
-            }
-        }
-
+        
         // Ban applied tx
         auto& bannedFront = mBannedTransactions.front();
         bannedFront.emplace(appliedTx->getFullHash());
@@ -1496,29 +1471,12 @@ std::optional<int64_t>
 TransactionQueue::getInQueueSeqNum(AccountID const& account) const
 {
     auto stateIter = mAccountStates.find(account);
-    if (stateIter == mAccountStates.end())
+    if (stateIter != mAccountStates.end())
     {
-        // Check all ledgers in mApplying for this account
-        int64_t currMax = std::numeric_limits<int64_t>::min();
-        for (auto const& [ledgerSeq, ledgerApplying] : mApplying)
+        if (stateIter->second.mTransaction)
         {
-            auto applyingIter = ledgerApplying.find(account);
-            if (applyingIter != ledgerApplying.end())
-            {
-                if (!applyingIter->second.mTransaction)
-                {
-                    continue;
-                }
-                currMax = std::max(
-                    currMax,
-                    applyingIter->second.mTransaction->mTx->getSeqNum());
-            }
+            return stateIter->second.mTransaction->mTx->getSeqNum();
         }
-        return currMax >= 0 ? std::make_optional(currMax) : std::nullopt;
-    }
-    if (stateIter->second.mTransaction)
-    {
-        return stateIter->second.mTransaction->mTx->getSeqNum();
     }
     return std::nullopt;
 }
@@ -1531,47 +1489,4 @@ ClassicTransactionQueue::getMaxQueueSizeOps() const
     releaseAssert(res.size() == NUM_CLASSIC_TX_RESOURCES);
     return res.getVal(Resource::Type::OPERATIONS);
 }
-
-// Currently applying uint32_t needs to be thread-safe now
-void
-SorobanTransactionQueue::beginApply(LedgerCloseData const& lcd)
-{
-    // auto txsPerPhase =
-    //     lcd.getTxSet()->createTransactionFrames(mApp.getNetworkID());
-    // // mTransactionsDelayAccumulator will be incorrect, but this is ok for
-    // now. uint32_t ledgerSeq = lcd.getLedgerSeq(); auto& ledgerApplying =
-    // mApplying[ledgerSeq];
-
-    // for (auto const& tx :
-    // txsPerPhase[static_cast<size_t>(TxSetPhase::SOROBAN)])
-    // {
-    //     ledgerApplying.emplace(
-    //         tx->getSourceID(),
-    //         AccountState{tx->getFullFee(), 0,
-    //                      std::make_optional<TimestampedTx>(TimestampedTx{
-    //                          tx, false, mApp.getClock().now(), false})});
-    // }
-}
-
-void
-ClassicTransactionQueue::beginApply(LedgerCloseData const& lcd)
-{
-    ZoneScoped;
-    auto txsPerPhase =
-        lcd.getTxSet()->createTransactionFrames(mApp.getNetworkID());
-    // mTransactionsDelayAccumulator will be incorrect, but this is ok for now.
-    uint32_t ledgerSeq = lcd.getLedgerSeq();
-    auto& ledgerApplying = mApplying[ledgerSeq];
-
-    for (auto const& tx : txsPerPhase[static_cast<size_t>(TxSetPhase::CLASSIC)])
-    {
-        ledgerApplying.emplace(
-            tx->getSourceID(),
-            AccountState{tx->getFullFee(), 0,
-                         std::make_optional<TimestampedTx>(TimestampedTx{
-                             tx, false, mApp.getClock().now(), false})});
-        mApplyingCounter.inc();
-    }
-}
-
 }

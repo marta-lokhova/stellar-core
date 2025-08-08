@@ -153,8 +153,7 @@ class TransactionQueue
 #else
     AddResult tryAdd(TransactionFrameBasePtr tx, bool submittedFromSelf);
 #endif
-    AccountStates removeApplied(Transactions const& txs, uint32_t ledger,
-                                bool removePending = true);
+    AccountStates removeApplied(Transactions const& txs, uint32_t ledger);
     // Ban transactions that are no longer valid or have insufficient fee;
     // transaction per account limit applies here, so `txs` should have no
     // duplicate source accounts
@@ -175,12 +174,7 @@ class TransactionQueue
     bool sourceAccountPending(AccountID const& accountID) const;
 
     virtual size_t getMaxQueueSizeOps() const = 0;
-    virtual void beginApply(LedgerCloseData const& lcd) = 0;
-
-    // TODO: these can span multiple ledgers? So should allow multilpe
-    UnorderedMap<uint32_t, AccountStates>
-        mApplying; // ledgerSeq -> AccountStates
-
+    
 #ifdef BUILD_TESTS
     AccountState
     getAccountTransactionQueueInfo(AccountID const& accountID) const;
@@ -229,8 +223,6 @@ class TransactionQueue
         medida::Counter& mTransactionsDelayCounter;
         medida::Counter& mTransactionsSelfDelayCounter;
     };
-
-    medida::Counter& mApplyingCounter;
 
     // TODO: rework transaction queue acceptance
     // TODO: rework checkValid when constructing block.
@@ -314,7 +306,6 @@ class SorobanTransactionQueue : public TransactionQueue
     }
 
     size_t getMaxQueueSizeOps() const override;
-    void beginApply(LedgerCloseData const& lcd) override;
 
     /**
      * Reset and rebuild the Soroban transaction queue with respect to new
@@ -360,7 +351,6 @@ class ClassicTransactionQueue : public TransactionQueue
     }
 
     size_t getMaxQueueSizeOps() const override;
-    void beginApply(LedgerCloseData const& lcd) override;
 
   private:
     medida::Counter& mArbTxSeenCounter;
