@@ -340,8 +340,9 @@ TEST_CASE("ItemFetcher fetches", "[overlay][ItemFetcher]")
                         }
                         else
                         {
-                            REQUIRE(delta >=
-                                    app->getConfig().MS_TO_WAIT_FOR_FETCH_REPLY);
+                            REQUIRE(
+                                delta >=
+                                app->getConfig().MS_TO_WAIT_FOR_FETCH_REPLY);
                         }
                         if (i > 0)
                         {

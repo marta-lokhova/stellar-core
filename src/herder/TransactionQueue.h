@@ -174,7 +174,7 @@ class TransactionQueue
     bool sourceAccountPending(AccountID const& accountID) const;
 
     virtual size_t getMaxQueueSizeOps() const = 0;
-    
+
 #ifdef BUILD_TESTS
     AccountState
     getAccountTransactionQueueInfo(AccountID const& accountID) const;

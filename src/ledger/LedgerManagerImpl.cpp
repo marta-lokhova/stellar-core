@@ -2489,7 +2489,7 @@ LedgerManagerImpl::applyTransactions(
     txResultSet.results.reserve(numTxs);
 
     prefetchTransactionData(mApp.getLedgerTxnRoot(), txSet, mApp.getConfig());
-    // TODO: this call is expensive 
+    // TODO: this call is expensive
     auto phases = txSet.getPhasesInApplyOrder();
 
     Hash sorobanBasePrngSeed = txSet.getContentsHash();

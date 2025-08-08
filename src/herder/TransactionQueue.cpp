@@ -846,7 +846,7 @@ TransactionQueue::removeApplied(Transactions const& appliedTxs, uint32_t ledger)
                 }
             }
         }
-        
+
         // Ban applied tx
         auto& bannedFront = mBannedTransactions.front();
         bannedFront.emplace(appliedTx->getFullHash());

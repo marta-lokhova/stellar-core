@@ -350,6 +350,17 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
     // This will send ledger to apply
     mLedgerManager.valueExternalized(ledgerData, isLatestSlot);
 
+    // Need to clean up the transaction queue to avoid accidentally including
+    // the same transactions in the next block
+    auto txsPerPhase =
+        ledgerData.getTxSet()->createTransactionFrames(mApp.getNetworkID());
+    mTransactionQueue.removeApplied(
+        txsPerPhase[static_cast<size_t>(TxSetPhase::CLASSIC)], slotIndex);
+    if (mSorobanTransactionQueue)
+    {
+        mSorobanTransactionQueue->removeApplied(
+            txsPerPhase[static_cast<size_t>(TxSetPhase::SOROBAN)], slotIndex);
+    }
     // Here we're racing with the apply thread, therefore check both "currently
     // applying" AND "last applied" ledger.
     if (mLedgerManager.getLastClosedLedgerNum() + 1 ==
@@ -1607,8 +1618,9 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     PerPhaseTransactionList invalidTxPhases;
     invalidTxPhases.resize(txPhases.size());
 
-    // TODO: checkValid is not necessary here, because mempool txs are checked for valifity upon admission, 
-    // and increasing LCL purges invalid txs anyways. 
+    // TODO: checkValid is not necessary here, because mempool txs are checked
+    // for valifity upon admission, and increasing LCL purges invalid txs
+    // anyways.
 
     auto [proposedSet, applicableProposedSet] =
         makeTxSetFromTransactions(txPhases, mApp, lowerBoundCloseTimeOffset,

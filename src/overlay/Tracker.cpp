@@ -133,7 +133,8 @@ Tracker::tryNextPeer()
             auto& p = mp.second;
             if (canAskPeer(p, peersHave))
             {
-                int64 GROUPSIZE_MS = (mApp.getConfig().MS_TO_WAIT_FOR_FETCH_REPLY.count() / 3);
+                int64 GROUPSIZE_MS =
+                    (mApp.getConfig().MS_TO_WAIT_FOR_FETCH_REPLY.count() / 3);
                 int64 plat = p->getPing().count() / GROUPSIZE_MS;
                 if (plat < curBest)
                 {
