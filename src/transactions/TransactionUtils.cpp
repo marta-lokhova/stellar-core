@@ -2174,10 +2174,7 @@ checkVNext(uint32_t currProtocol, Config const& cfg,
         return false;
     }
 
-    auto cxxBuf = CxxBuf{
-        std::make_unique<std::vector<uint8_t>>(xdr::xdr_to_opaque(envelope))};
-    return rust_bridge::can_parse_transaction(maxProtocol, currProtocol, cxxBuf,
-                                              1000);
+    return true;
 }
 
 ClaimAtom

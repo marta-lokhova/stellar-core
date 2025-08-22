@@ -17,6 +17,7 @@
 #include "herder/TxSetFrame.h"
 #include "herder/TxSetUtils.h"
 #include "ledger/LedgerManager.h"
+#include "ledger/LedgerStateSnapshot.h"
 #include "lib/json/json.h"
 #include "main/Application.h"
 #include "main/Config.h"
@@ -27,6 +28,7 @@
 #include "scp/LocalNode.h"
 #include "scp/Slot.h"
 #include "transactions/MutableTransactionResult.h"
+#include "transactions/TransactionFrameBase.h"
 #include "transactions/TransactionUtils.h"
 #include "util/DebugMetaUtils.h"
 #include "util/LogSlowExecution.h"
@@ -80,6 +82,10 @@ HerderImpl::SCPMetrics::SCPMetrics(Application& app)
           {"scp", "envelope", "validsig"}, "envelope"))
     , mEnvelopeInvalidSig(app.getMetrics().NewMeter(
           {"scp", "envelope", "invalidsig"}, "envelope"))
+    , mTxValidityCacheHits(
+          app.getMetrics().NewCounter({"herder", "txvalidity", "cache-hits"}))
+    , mTxValidityCacheMisses(
+          app.getMetrics().NewCounter({"herder", "txvalidity", "cache-misses"}))
 {
 }
 
@@ -101,6 +107,7 @@ HerderImpl::HerderImpl(Application& app)
     , mLastQuorumMapIntersectionState(
           std::make_shared<QuorumMapIntersectionState>(app))
     , mState(Herder::HERDER_BOOTING_STATE)
+    , mTxValidCache(TX_VALIDITY_CACHE_SIZE)
 {
     auto ln = getSCP().getLocalNode();
 
@@ -2676,6 +2683,56 @@ HerderImpl::getTx(Hash const& hash) const
         return mSorobanTransactionQueue->getTx(hash);
     }
     return classic;
+}
+
+std::shared_ptr<MutableTransactionResultBase const>
+HerderImpl::checkValidCached(LedgerSnapshot const& ls,
+                             TransactionFrameBaseConstPtr const& tx,
+                             uint64_t lowerBoundCloseTimeOffset,
+                             uint64_t upperBoundCloseTimeOffset,
+                             DiagnosticEventManager& diagnosticEvents)
+{
+    ZoneScoped;
+    releaseAssert(threadIsMain());
+
+    bool timeDependent = tx->getTimeBounds() || tx->getLedgerBounds();
+    if (!timeDependent)
+    {
+        lowerBoundCloseTimeOffset = 0;
+        upperBoundCloseTimeOffset = 0;
+    }
+
+    auto key =
+        TxValidityKey{mApp.getLedgerManager().getLastClosedLedgerHeader().hash,
+                      tx->getFullHash(), lowerBoundCloseTimeOffset,
+                      upperBoundCloseTimeOffset};
+
+    if (mTxValidCache.exists(key))
+    {
+        mSCPMetrics.mTxValidityCacheHits.inc();
+        return mTxValidCache.get(key);
+    }
+
+    mSCPMetrics.mTxValidityCacheMisses.inc();
+    auto result =
+        tx->checkValid(mApp.getAppConnector(), ls, 0, lowerBoundCloseTimeOffset,
+                       upperBoundCloseTimeOffset, diagnosticEvents);
+    auto sharedResult =
+        std::shared_ptr<MutableTransactionResultBase const>(std::move(result));
+
+    mTxValidCache.put(key, sharedResult);
+
+    return sharedResult;
+}
+
+size_t
+HerderImpl::TxValidityKeyHash::operator()(TxValidityKey const& key) const
+{
+    size_t res = std::hash<Hash>()(std::get<0>(key));
+    stellar::hashMix(res, std::hash<Hash>()(std::get<1>(key)));
+    stellar::hashMix(res, std::get<2>(key));
+    stellar::hashMix(res, std::get<3>(key));
+    return res;
 }
 
 }
