@@ -352,7 +352,58 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
         writeDebugTxSet(ledgerData);
     }
 
+    // This will send ledger to apply
     mLedgerManager.valueExternalized(ledgerData, isLatestSlot);
+
+    // Need to clean up the transaction queue to avoid accidentally including
+    // the same transactions in the next block
+    auto txsPerPhase =
+        ledgerData.getTxSet()->createTransactionFrames(mApp.getNetworkID());
+    mTransactionQueue.removeApplied(
+        txsPerPhase[static_cast<size_t>(TxSetPhase::CLASSIC)], slotIndex);
+    if (mSorobanTransactionQueue)
+    {
+        mSorobanTransactionQueue->removeApplied(
+            txsPerPhase[static_cast<size_t>(TxSetPhase::SOROBAN)], slotIndex);
+    }
+    // Here we're racing with the apply thread, therefore check both "currently
+    // applying" AND "last applied" ledger.
+    if (mLedgerManager.getLastClosedLedgerNum() + 1 ==
+            trackingConsensusLedgerIndex() ||
+        mLedgerManager.getLastClosedLedgerNum() ==
+            trackingConsensusLedgerIndex())
+    {
+        // TODO: for now, keep the "applying" tx set in the queue
+        // In order to update the transaction queue we need to get the
+        // applied transactions. If a protocol or network config setting upgrade
+        // occurred, we will need to rebuild the queue, as limits may have
+        // changed.
+        updateTransactionQueue(ledgerData.getTxSet(), false);
+
+        // If we're in sync and there are no buffered ledgers to apply, trigger
+        // next ledger
+        // Check is synced, for genesis ledger, where consensus kicks in while
+        // we're in booting
+        if (isLatestSlot && mLedgerManager.isSynced())
+        {
+            // Re-start heartbeat tracking _after_ applying the most up-to-date
+            // ledger. This guarantees out-of-sync timer won't fire while we
+            // have ledgers to apply (applicable during parallel ledger apply).
+            trackingHeartBeat();
+
+            // Ensure out of sync recovery did not get triggered while we were
+            // applying
+            releaseAssert(isTracking());
+
+            // TODO: wait for consensus flag doesn't work here on genesis
+            releaseAssert(mLedgerManager.isSynced());
+
+            CLOG_INFO(Herder, "PIPELINE Triggering next ledger: {}",
+                      trackingConsensusLedgerIndex() + 1);
+
+            setupTriggerNextLedger();
+        }
+    }
 }
 
 void
@@ -439,6 +490,8 @@ HerderImpl::valueExternalized(uint64 slotIndex, StellarValue const& value,
 
     if (isLatestSlot)
     {
+        mLastExternalizedValue = value;
+
         // called both here and at the end (this one is in case of an exception)
         trackingHeartBeat();
 
@@ -936,12 +989,14 @@ HerderImpl::externalizeValue(TxSetXDRFrameConstPtr txSet, uint32_t ledgerSeq,
 bool
 HerderImpl::sourceAccountPending(AccountID const& accountID) const
 {
+    ZoneScoped;
     bool accPending = mTransactionQueue.sourceAccountPending(accountID);
     if (mSorobanTransactionQueue)
     {
         accPending = accPending ||
                      mSorobanTransactionQueue->sourceAccountPending(accountID);
     }
+
     return accPending;
 }
 
@@ -1186,8 +1241,9 @@ HerderImpl::lastClosedLedgerIncreased(bool latest, TxSetXDRFrameConstPtr txSet,
         // Ensure out of sync recovery did not get triggered while we were
         // applying
         releaseAssert(isTracking());
-        releaseAssert(trackingConsensusLedgerIndex() ==
-                      mLedgerManager.getLastClosedLedgerNum());
+        releaseAssert(mLedgerManager.isApplying());
+        releaseAssert(mLedgerManager.getLastClosedLedgerNum() + 1 ==
+                      trackingConsensusLedgerIndex());
         releaseAssert(mLedgerManager.isSynced());
 
         setupTriggerNextLedger();
@@ -1197,17 +1253,36 @@ HerderImpl::lastClosedLedgerIncreased(bool latest, TxSetXDRFrameConstPtr txSet,
 void
 HerderImpl::setupTriggerNextLedger()
 {
-    // Invariant: core proceeds to vote for the next ledger only when it's _not_
-    // applying to ensure block production does not conflict with ledger close.
-    releaseAssert(!mLedgerManager.isApplying());
+    ZoneScoped;
 
     // Invariant: tracking is equal to LCL when we trigger. This helps ensure
     // core emits SCP messages only for slots it can fully validate
     // (any closed ledger is fully validated)
     releaseAssert(isTracking());
-    auto const& lcl = mLedgerManager.getLastClosedLedgerHeader();
-    releaseAssert(trackingConsensusLedgerIndex() == lcl.header.ledgerSeq);
     releaseAssert(mLedgerManager.isSynced());
+
+    auto const& lcl = mLedgerManager.getLastClosedLedgerHeader();
+    if (lcl.header.ledgerSeq > LedgerManager::GENESIS_LEDGER_SEQ)
+    {
+        releaseAssert(mLedgerManager.isApplying());
+        releaseAssert(trackingConsensusLedgerIndex() ==
+                      lcl.header.ledgerSeq + 1);
+        releaseAssert(trackingConsensusLedgerIndex() ==
+                      mLedgerManager.isApplying());
+    }
+    else
+    {
+        if (mLedgerManager.isApplying())
+        {
+            releaseAssert(trackingConsensusLedgerIndex() ==
+                          lcl.header.ledgerSeq + 1);
+        }
+        else
+        {
+            releaseAssert(trackingConsensusLedgerIndex() ==
+                          lcl.header.ledgerSeq);
+        }
+    }
 
     mTriggerTimer.cancel();
 
@@ -1242,7 +1317,7 @@ HerderImpl::setupTriggerNextLedger()
     auto triggerOffset = std::chrono::duration_cast<std::chrono::milliseconds>(
         triggerTime - now);
 
-    auto minCandidateCt = lcl.header.scpValue.closeTime + 1;
+    auto minCandidateCt = trackingConsensusCloseTime() + 1;
     auto ctOffset = ctValidityOffset(minCandidateCt, triggerOffset);
 
     if (ctOffset > std::chrono::milliseconds::zero())
@@ -1384,6 +1459,10 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
 
     auto isTrackingValid = isTracking() || !checkTrackingSCP;
 
+    CLOG_INFO(Herder, "triggerNextLedger: {} (tracking: {}, {}) : {}",
+              ledgerSeqToTrigger, isTracking(), checkTrackingSCP,
+              mApp.getStateHuman());
+
     if (!isTrackingValid || !mLedgerManager.isSynced())
     {
         CLOG_DEBUG(Herder, "triggerNextLedger: skipping (out of sync) : {}",
@@ -1392,7 +1471,7 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     }
 
     // If applying, the next ledger will trigger voting
-    if (mLedgerManager.isApplying())
+    if (ledgerSeqToTrigger <= mLedgerManager.isApplying())
     {
         // This can only happen when closing ledgers in parallel
         releaseAssert(mApp.getConfig().parallelLedgerClose());
@@ -1422,32 +1501,10 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     // so this is the most appropriate value to use as closeTime.
     uint64_t nextCloseTime =
         VirtualClock::to_time_t(mApp.getClock().system_now());
-    if (ledgerSeqToTrigger == lcl.header.ledgerSeq + 1)
+    auto lastCloseTime = trackingConsensusCloseTime();
+    if (nextCloseTime <= lastCloseTime)
     {
-        auto it = mDriftCTSlidingWindow.find(ledgerSeqToTrigger);
-        if (it == mDriftCTSlidingWindow.end())
-        {
-            // Record local close time _before_ it gets adjusted to be valid
-            // below
-            mDriftCTSlidingWindow[ledgerSeqToTrigger] =
-                std::make_pair(nextCloseTime, std::nullopt);
-            while (mDriftCTSlidingWindow.size() >
-                   CLOSE_TIME_DRIFT_LEDGER_WINDOW_SIZE)
-            {
-                mDriftCTSlidingWindow.erase(mDriftCTSlidingWindow.begin());
-            }
-        }
-        else
-        {
-            CLOG_WARNING(Herder,
-                         "Herder::triggerNextLedger called twice on ledger {}",
-                         ledgerSeqToTrigger);
-        }
-    }
-
-    if (nextCloseTime <= lcl.header.scpValue.closeTime)
-    {
-        nextCloseTime = lcl.header.scpValue.closeTime + 1;
+        nextCloseTime = lastCloseTime + 1;
     }
 
     // Ensure we're about to nominate a value with valid close time
@@ -1468,7 +1525,7 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     // validate here -- 'nextCloseTime'.  (The _offset_, therefore, is
     // the difference between 'nextCloseTime' and the last ledger close time.)
     TimePoint upperBoundCloseTimeOffset, lowerBoundCloseTimeOffset;
-    upperBoundCloseTimeOffset = nextCloseTime - lcl.header.scpValue.closeTime;
+    upperBoundCloseTimeOffset = nextCloseTime - lastCloseTime;
     lowerBoundCloseTimeOffset = upperBoundCloseTimeOffset;
 
     PerPhaseTransactionList invalidTxPhases;
@@ -1499,8 +1556,7 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     // Inform the item fetcher so queries from other peers about his txSet
     // can be answered. Note this can trigger SCP callbacks, externalize, etc
     // if we happen to build a txset that we were trying to download.
-    mPendingEnvelopes.addTxSet(txSetHash, lcl.header.ledgerSeq + 1,
-                               proposedSet);
+    mPendingEnvelopes.addTxSet(txSetHash, ledgerSeqToTrigger, proposedSet);
 
     lcl = mLedgerManager.getLastClosedLedgerHeader();
     // use the slot index from ledger manager here as our vote is based off
@@ -1511,7 +1567,9 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     // externalize was triggered on a more recent ledger
     // Also skip trigger if side effects from `addTxSet` caused us to start
     // applying
-    if (ledgerSeqToTrigger != slotIndex || mLedgerManager.isApplying())
+    bool pipeline = mLedgerManager.isApplying() == slotIndex &&
+                    ledgerSeqToTrigger == slotIndex + 1;
+    if (ledgerSeqToTrigger != slotIndex && !pipeline)
     {
         return;
     }
@@ -1542,7 +1600,7 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
         }
     }
 
-    getHerderSCPDriver().recordSCPEvent(slotIndex, true);
+    getHerderSCPDriver().recordSCPEvent(ledgerSeqToTrigger, true);
 
     // If we are not a validating node we stop here and don't start nomination
     if (!getSCP().isValidator())
@@ -1553,8 +1611,9 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
 
     StellarValue newProposedValue = makeStellarValue(
         txSetHash, nextCloseTime, newUpgrades, mApp.getConfig().NODE_SEED);
-    mHerderSCPDriver.nominate(slotIndex, newProposedValue, proposedSet,
-                              lcl.header.scpValue);
+    mHerderSCPDriver.nominate(ledgerSeqToTrigger, newProposedValue, proposedSet,
+                              mLastExternalizedValue);
+    CLOG_INFO(Herder, "NOMINATING for ledger {}", ledgerSeqToTrigger);
 }
 
 void
@@ -2436,7 +2495,8 @@ HerderImpl::updateTransactionQueue(TxSetXDRFrameConstPtr externalizedTxSet,
     auto lhhe = mLedgerManager.getLastClosedLedgerHeader();
 
     auto updateQueue = [&](auto& queue, auto const& applied, bool isSoroban) {
-        queue.removeApplied(applied);
+        // We've already removed applied when we externalized
+        // queue.removeApplied(applied, lhhe.header.ledgerSeq);
         queue.shift();
 
         if (isSoroban && queueRebuildNeeded)
@@ -2483,7 +2543,7 @@ HerderImpl::herderOutOfSync()
     // the node does not hear anything from the network after that, then node
     // can go into out of sync recovery.
     releaseAssert(threadIsMain());
-    releaseAssert(!mLedgerManager.isApplying());
+    releaseAssert(mLedgerManager.isApplying() == 0);
 
     CLOG_WARNING(Herder, "Lost track of consensus");
 

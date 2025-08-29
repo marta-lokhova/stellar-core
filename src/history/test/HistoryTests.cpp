@@ -1128,7 +1128,7 @@ TEST_CASE("History catchup with different modes",
 }
 
 TEST_CASE("Retriggering catchups after trimming mSyncingLedgers",
-          "[history][catchup]")
+          "[history][catchup][acceptance]")
 {
     CatchupSimulation catchupSimulation{};
 

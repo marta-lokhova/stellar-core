@@ -525,7 +525,7 @@ LedgerApplyManagerImpl::tryApplySyncingLedgers()
         if (mApp.getConfig().parallelLedgerClose())
         {
             // Notify LM that application has started
-            mApp.getLedgerManager().beginApply();
+            mApp.getLedgerManager().beginApply(lcd);
             mApp.postOnLedgerCloseThread(
                 [&app = mApp, lcd]() {
                     // No-op if app is shutting down

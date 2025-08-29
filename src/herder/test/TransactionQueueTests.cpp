@@ -118,7 +118,7 @@ class TransactionQueueTest
                   bool noChangeExpected = false)
     {
         auto size = mTransactionQueue.getTransactions({}).size();
-        mTransactionQueue.removeApplied(toRemove);
+        mTransactionQueue.removeApplied(toRemove, true);
 
         if (noChangeExpected)
         {
@@ -452,7 +452,7 @@ TEST_CASE("TransactionQueue complex scenarios", "[herder][transactionqueue]")
             test.shift();
             test.check(
                 {{{account1, 1, {txSeqA1T1}}, {account2, 1, {txSeqA2T1}}}});
-            test.removeApplied({txSeqA1T1, txSeqA2T1});
+            test.removeApplied({txSeqA1T1, txSeqA2T1}, 0);
             test.check({{{account1, 0, {}}, {account2}},
                         {{txSeqA1T1, txSeqA2T1}, {}}});
         }
@@ -470,10 +470,10 @@ TEST_CASE("TransactionQueue complex scenarios", "[herder][transactionqueue]")
                 TransactionQueue::AddResultCode::ADD_STATUS_TRY_AGAIN_LATER);
             test.check(
                 {{{account1, 0, {txSeqA1T1}}, {account2, 0, {txSeqA2T1}}}});
-            test.removeApplied({txSeqA2T1});
+            test.removeApplied({txSeqA2T1}, 0);
             test.check({{{account1, 0, {txSeqA1T1}}, {account2, 0, {}}},
                         {{txSeqA2T1}, {}}});
-            test.removeApplied({txSeqA1T1});
+            test.removeApplied({txSeqA1T1}, 0);
             test.check(
                 {{{account1}, {account2}}, {{txSeqA2T1, txSeqA1T1}, {}}});
         }

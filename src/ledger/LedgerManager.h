@@ -12,6 +12,7 @@
 #include "rust/RustBridge.h"
 #include "transactions/TransactionMeta.h"
 #include <memory>
+#include <optional>
 
 namespace stellar
 {
@@ -195,7 +196,7 @@ class LedgerManager
     };
 
     virtual void moveToSynced() = 0;
-    virtual void beginApply() = 0;
+    virtual void beginApply(LedgerCloseData const& lcd) = 0;
     virtual State getState() const = 0;
     virtual std::string getStateHuman() const = 0;
 
@@ -349,7 +350,7 @@ class LedgerManager
     {
     }
 
-    virtual bool isApplying() const = 0;
+    virtual uint32_t isApplying() const = 0;
 
     // Sets apply state phase to SETTING_UP_STATE. This only changes the phase,
     // but does not actually reset any state. This should be called when

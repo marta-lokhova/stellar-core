@@ -279,6 +279,8 @@ class HerderImpl : public Herder
     // keep track of all messages for MAX_SLOTS_TO_REMEMBER slots
     uint64 mLastSlotSaved;
 
+    StellarValue mLastExternalizedValue;
+
     // timer that detects that we're stuck on an SCP slot
     VirtualTimer mTrackingTimer;
 

@@ -287,12 +287,11 @@ HerderSCPDriver::validateValueAgainstLocalState(uint64_t slotIndex,
     // We can only fully validate values for LCL+1
     // For past and future slots, perform partial validity checks, specifically
     // validate close time and network tracking ledger sequence.
-    bool isCurrentLedger = slotIndex == lcl.header.ledgerSeq + 1;
 
     SCPDriver::ValidationLevel res;
-    if (isCurrentLedger)
+    if (slotIndex == lcl.header.ledgerSeq + 1)
     {
-        // The value is for LCL+1, perform all possible checks
+        // The value is for LCL+1 or pipelined, perform all possible checks
         if (!checkCloseTime(slotIndex, lcl.header.scpValue.closeTime, b))
         {
             return SCPDriver::kInvalidValue;
@@ -302,6 +301,49 @@ HerderSCPDriver::validateValueAgainstLocalState(uint64_t slotIndex,
         TxSetXDRFrameConstPtr txSet = mPendingEnvelopes.getTxSet(txSetHash);
 
         auto closeTimeOffset = b.closeTime - lcl.header.scpValue.closeTime;
+
+        if (!txSet)
+        {
+            CLOG_ERROR(Herder, "validateValue i:{} unknown txSet {}", slotIndex,
+                       hexAbbrev(txSetHash));
+
+            res = SCPDriver::kInvalidValue;
+        }
+        else if (!checkAndCacheTxSetValid(*txSet, lcl, closeTimeOffset))
+        {
+            CLOG_DEBUG(Herder,
+                       "HerderSCPDriver::validateValue i: {} invalid txSet {}",
+                       slotIndex, hexAbbrev(txSetHash));
+            res = SCPDriver::kInvalidValue;
+        }
+        else
+        {
+            CLOG_DEBUG(Herder,
+                       "HerderSCPDriver::validateValue i: {} valid txSet {}",
+                       slotIndex, hexAbbrev(txSetHash));
+            res = SCPDriver::kFullyValidatedValue;
+        }
+    }
+    else if (slotIndex == lcl.header.ledgerSeq + 2 && slotIndex == mHerder.trackingConsensusLedgerIndex() + 1)
+    {
+        // Guess next ledger's close time
+        if (!checkCloseTime(slotIndex, mHerder.trackingConsensusCloseTime(), b))
+        {
+            CLOG_INFO(Herder,
+                      "validateValue i:{} close time {} is not valid for LCL+1 "
+                      "close time {}",
+                      slotIndex, b.closeTime,
+                      mHerder.trackingConsensusCloseTime());
+            return SCPDriver::kInvalidValue;
+        }
+
+        Hash const& txSetHash = b.txSetHash;
+
+        // Must have the tx set
+        TxSetXDRFrameConstPtr txSet = mPendingEnvelopes.getTxSet(txSetHash);
+
+        auto closeTimeOffset =
+            b.closeTime - mHerder.trackingConsensusCloseTime();
 
         if (!txSet)
         {
@@ -664,7 +706,8 @@ HerderSCPDriver::combineCandidates(uint64_t slotIndex,
 
     std::set<TransactionFramePtr> aggSet;
 
-    releaseAssert(!mLedgerManager.isApplying());
+    auto applying = mLedgerManager.isApplying();
+    releaseAssert(!applying || applying == slotIndex - 1);
     releaseAssert(threadIsMain());
     auto const& lcl = mLedgerManager.getLastClosedLedgerHeader();
 
@@ -1321,6 +1364,7 @@ HerderSCPDriver::checkAndCacheTxSetValid(TxSetXDRFrame const& txSet,
         // might end up with malformed tx set that doesn't refer to the
         // LCL.
         ApplicableTxSetFrameConstPtr applicableTxSet;
+        // LCL changes? after we receive externalize message i guess
         if (txSet.previousLedgerHash() == lcl.hash)
         {
             applicableTxSet = txSet.prepareForApply(mApp, lcl.header);
@@ -1364,7 +1408,8 @@ uint64
 HerderSCPDriver::getNodeWeight(NodeID const& nodeID, SCPQuorumSet const& qset,
                                bool const isLocalNode) const
 {
-    releaseAssert(!mLedgerManager.isApplying());
+    releaseAssert(!mLedgerManager.isApplying() || mApp.getLedgerManager().getLastClosedLedgerNum() + 1 ==
+                                              mLedgerManager.isApplying());
     Config const& cfg = mApp.getConfig();
     bool const unsupportedProtocol = protocolVersionIsBefore(
         mApp.getLedgerManager()

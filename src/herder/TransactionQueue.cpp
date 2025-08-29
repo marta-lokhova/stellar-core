@@ -734,12 +734,13 @@ TransactionQueue::dropTransaction(AccountStates::iterator stateIter)
     }
 }
 
-void
-TransactionQueue::removeApplied(Transactions const& appliedTxs)
+TransactionQueue::AccountStates
+TransactionQueue::removeApplied(Transactions const& appliedTxs, uint32_t ledger)
 {
     ZoneScoped;
 
     auto now = mApp.getClock().now();
+    AccountStates result;
     for (auto const& appliedTx : appliedTxs)
     {
         // If the source account is not in mAccountStates, then it has no
@@ -762,29 +763,11 @@ TransactionQueue::removeApplied(Transactions const& appliedTxs)
                     auto& age = stateIter->second.mAge;
                     mQueueMetrics->mSizeByAge[age]->dec();
                     age = 0;
-
-                    // update the metric for the time spent for applied
-                    // transactions using exact match
-                    if (transaction->mTx->getFullHash() ==
-                        appliedTx->getFullHash())
-                    {
-                        auto elapsed = std::chrono::duration_cast<
-                            std::chrono::milliseconds>(
-                            now - transaction->mInsertionTime);
-                        mQueueMetrics->mTransactionsDelayAccumulator.inc(
-                            elapsed.count());
-                        mQueueMetrics->mTransactionsDelayCounter.inc();
-                        if (transaction->mSubmittedFromSelf)
-                        {
-                            mQueueMetrics->mTransactionsSelfDelayAccumulator
-                                .inc(elapsed.count());
-                            mQueueMetrics->mTransactionsSelfDelayCounter.inc();
-                        }
-                    }
-
+                    
                     // WARNING: stateIter and everything that references it
                     // may be invalid from this point onward and should not
                     // be used.
+                    result.emplace(stateIter->first, stateIter->second);
                     dropTransaction(stateIter);
                 }
             }
@@ -799,6 +782,8 @@ TransactionQueue::removeApplied(Transactions const& appliedTxs)
         // do not mark metric for banning as this is the result of normal
         // flow of operations
     }
+
+    return result;
 }
 
 void
@@ -1198,7 +1183,7 @@ SorobanTransactionQueue::resetAndRebuild()
     ZoneScoped;
     releaseAssert(threadIsMain());
 
-    CLOG_DEBUG(Herder, "Resetting Soroban transaction queue due to upgrade");
+    CLOG_INFO(Herder, "Resetting Soroban transaction queue due to upgrade");
 
     // Extract all current transactions before clearing state
     std::vector<TransactionFrameBasePtr> existingTxs;

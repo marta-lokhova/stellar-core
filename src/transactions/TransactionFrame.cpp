@@ -1397,7 +1397,17 @@ TransactionFrame::isBadSeq(LedgerHeaderWrapper const& header,
     }
 
     // If we get here, we need to do the strict seqnum check
-    return seqNum == INT64_MAX || seqNum + 1 != getSeqNum();
+
+    bool bad = seqNum == INT64_MAX || seqNum + 1 != getSeqNum();
+
+    if (bad)
+    {
+        // So loadgen is not submitting correct transactions somehow
+        CLOG_INFO(Tx, "Bad sequence number: {} vs expected: {}", seqNum,
+                  getSeqNum());
+    }
+
+    return bad;
 }
 
 TransactionFrame::ValidationType
@@ -1453,7 +1463,17 @@ TransactionFrame::commonValid(AppConnector& app,
             }
             if (isBadSeq(header, current))
             {
+                // TODO: why by the time we get to apply, we're applying wrong
+                // transactions?
+                // TODO: add check for tx success in loadgen (applicable
+                // in 22.4.1)
+                CLOG_INFO(Tx, "{} {} Bad sequence number: {} vs expected: {}",
+                          app.getConfig().toShortString(
+                              app.getConfig().NODE_SEED.getPublicKey()),
+                          applying ? "Applying" : "Validating", current,
+                          getSeqNum());
                 txResult.setInnermostError(txBAD_SEQ);
+                // throw std::runtime_error("Bad sequence number");
                 return;
             }
         }
@@ -1786,6 +1806,9 @@ maybeTriggerTestInternalError(TransactionEnvelope const& env)
 }
 #endif
 
+// So for some reason sequence number check fails, however test reports
+// successful transactions why? Why bad sequence num -> but transactions is
+// applied?
 std::unique_ptr<SignatureChecker>
 TransactionFrame::commonPreApply(
     bool chargeFee, AppConnector& app, AbstractLedgerTxn& ltx,

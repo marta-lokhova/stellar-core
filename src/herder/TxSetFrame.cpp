@@ -66,7 +66,7 @@ validateSequentialPhaseXDRStructure(TransactionPhase const& phase)
                        });
     if (!componentsNormalized)
     {
-        CLOG_DEBUG(Herder, "Got bad txSet: incorrect component order");
+        CLOG_INFO(Herder, "Got bad txSet: incorrect component order");
         return false;
     }
 
@@ -85,14 +85,14 @@ validateSequentialPhaseXDRStructure(TransactionPhase const& phase)
                            }) == phase.v0Components().end();
     if (!componentBaseFeesUnique)
     {
-        CLOG_DEBUG(Herder, "Got bad txSet: duplicate component base fees");
+        CLOG_INFO(Herder, "Got bad txSet: duplicate component base fees");
         return false;
     }
     for (auto const& component : phase.v0Components())
     {
         if (component.txsMaybeDiscountedFee().txs.empty())
         {
-            CLOG_DEBUG(Herder, "Got bad txSet: empty component");
+            CLOG_INFO(Herder, "Got bad txSet: empty component");
             return false;
         }
     }
@@ -106,14 +106,14 @@ validateParallelComponent(ParallelTxsComponent const& component)
     {
         if (stage.empty())
         {
-            CLOG_DEBUG(Herder, "Got bad txSet: empty stage");
+            CLOG_INFO(Herder, "Got bad txSet: empty stage");
             return false;
         }
         for (auto const& cluster : stage)
         {
             if (cluster.empty())
             {
-                CLOG_DEBUG(Herder, "Got bad txSet: empty cluster");
+                CLOG_INFO(Herder, "Got bad txSet: empty cluster");
                 return false;
             }
         }
@@ -128,7 +128,7 @@ validateTxSetXDRStructure(GeneralizedTransactionSet const& txSet)
 
     if (txSet.v() != 1)
     {
-        CLOG_DEBUG(Herder, "Got bad txSet: unsupported version {}", txSet.v());
+        CLOG_INFO(Herder, "Got bad txSet: unsupported version {}", txSet.v());
         return false;
     }
     auto phaseCount = static_cast<size_t>(TxSetPhase::PHASE_COUNT);
@@ -136,9 +136,9 @@ validateTxSetXDRStructure(GeneralizedTransactionSet const& txSet)
     // There was no protocol with 1 phase, so checking for 2 phases only
     if (txSetV1.phases.size() != phaseCount)
     {
-        CLOG_DEBUG(Herder,
-                   "Got bad txSet: exactly 2 phases are expected, got {}",
-                   txSetV1.phases.size());
+        CLOG_INFO(Herder,
+                  "Got bad txSet: exactly 2 phases are expected, got {}",
+                  txSetV1.phases.size());
         return false;
     }
 
@@ -147,17 +147,17 @@ validateTxSetXDRStructure(GeneralizedTransactionSet const& txSet)
         auto const& phase = txSetV1.phases[phaseId];
         if (phase.v() > MAX_PHASE)
         {
-            CLOG_DEBUG(Herder, "Got bad txSet: unsupported phase version {}",
-                       phase.v());
+            CLOG_INFO(Herder, "Got bad txSet: unsupported phase version {}",
+                      phase.v());
             return false;
         }
         if (phase.v() == 1)
         {
             if (phaseId != static_cast<size_t>(TxSetPhase::SOROBAN))
             {
-                CLOG_DEBUG(Herder,
-                           "Got bad txSet: non-Soroban parallel phase {}",
-                           phase.v());
+                CLOG_INFO(Herder,
+                          "Got bad txSet: non-Soroban parallel phase {}",
+                          phase.v());
                 return false;
             }
             if (!validateParallelComponent(phase.parallelTxsComponent()))
@@ -480,7 +480,9 @@ createSurgePricingLangeConfig(TxSetPhase phase, Application& app)
 {
     ZoneScoped;
     releaseAssert(threadIsMain());
-    releaseAssert(!app.getLedgerManager().isApplying());
+    releaseAssert(!app.getLedgerManager().isApplying() ||
+                  app.getLedgerManager().getLastClosedLedgerNum() + 1 ==
+                      app.getLedgerManager().isApplying());
 
     auto const& lclHeader =
         app.getLedgerManager().getLastClosedLedgerHeader().header;
@@ -730,20 +732,20 @@ checkFeeMap(InclusionFeeMap const& feeMap, LedgerHeader const& lclHeader)
         if (*fee < lclHeader.baseFee)
         {
 
-            CLOG_DEBUG(Herder,
-                       "Got bad txSet: {} has too low component "
-                       "base fee {}",
-                       hexAbbrev(lclHeader.previousLedgerHash), *fee);
+            CLOG_INFO(Herder,
+                      "Got bad txSet: {} has too low component "
+                      "base fee {}",
+                      hexAbbrev(lclHeader.previousLedgerHash), *fee);
             return false;
         }
         if (tx->getInclusionFee() < getMinInclusionFee(*tx, lclHeader, fee))
         {
-            CLOG_DEBUG(Herder,
-                       "Got bad txSet: {} has tx with fee bid ({}) lower "
-                       "than base fee ({})",
-                       hexAbbrev(lclHeader.previousLedgerHash),
-                       tx->getInclusionFee(),
-                       getMinInclusionFee(*tx, lclHeader, fee));
+            CLOG_INFO(Herder,
+                      "Got bad txSet: {} has tx with fee bid ({}) lower "
+                      "than base fee ({})",
+                      hexAbbrev(lclHeader.previousLedgerHash),
+                      tx->getInclusionFee(),
+                      getMinInclusionFee(*tx, lclHeader, fee));
             return false;
         }
     }
@@ -827,7 +829,14 @@ makeTxSetFromTransactions(
 )
 {
     releaseAssert(threadIsMain());
-    releaseAssert(!app.getLedgerManager().isApplying());
+    auto applying = app.getLedgerManager().isApplying();
+    if (applying)
+    {
+        releaseAssert(
+            applying ==
+            app.getLedgerManager().getLastClosedLedgerNum() + 1);
+    }
+
     releaseAssert(txPhases.size() == invalidTxs.size());
     releaseAssert(txPhases.size() <=
                   static_cast<size_t>(TxSetPhase::PHASE_COUNT));
@@ -1008,7 +1017,11 @@ makeTxSetFromTransactions(
     txtest::ParallelSorobanOrder const& parallelSorobanOrder)
 {
     releaseAssert(threadIsMain());
-    releaseAssert(!app.getLedgerManager().isApplying());
+    if (app.getLedgerManager().isApplying())
+    {
+        releaseAssert(app.getLedgerManager().isApplying() ==
+                      app.getLedgerManager().getLastClosedLedgerNum() + 1);
+    }
     auto lclHeader = app.getLedgerManager().getLastClosedLedgerHeader();
     PerPhaseTransactionList perPhaseTxs;
     perPhaseTxs.resize(protocolVersionStartsFrom(lclHeader.header.ledgerVersion,
@@ -1098,8 +1111,8 @@ TxSetXDRFrame::prepareForApply(Application& app,
         auto const& xdrTxSet = std::get<GeneralizedTransactionSet>(mXDRTxSet);
         if (!validateTxSetXDRStructure(xdrTxSet))
         {
-            CLOG_DEBUG(Herder,
-                       "Got bad generalized txSet with invalid XDR structure");
+            CLOG_INFO(Herder,
+                      "Got bad generalized txSet with invalid XDR structure");
             return nullptr;
         }
         auto const& xdrPhases = xdrTxSet.v1TxSet().phases;
@@ -1111,6 +1124,7 @@ TxSetXDRFrame::prepareForApply(Application& app,
                 xdrPhases[phaseId]);
             if (!maybePhase)
             {
+                CLOG_INFO(Herder, "COULDNT make from WIRE");
                 return nullptr;
             }
             phaseFrames.emplace_back(std::move(*maybePhase));
@@ -1445,10 +1459,9 @@ TxSetPhaseFrame::makeFromWire(TxSetPhase phase, Hash const& networkID,
                                       component.txsMaybeDiscountedFee().txs,
                                       txList))
                 {
-                    CLOG_DEBUG(Herder,
-                               "Got bad generalized txSet: transactions "
-                               "are not ordered correctly or contain "
-                               "invalid transactions");
+                    CLOG_INFO(Herder, "Got bad generalized txSet: transactions "
+                                      "are not ordered correctly or contain "
+                                      "invalid transactions");
                     return std::nullopt;
                 }
                 for (auto it = txList.begin() + prevSize; it != txList.end();
@@ -1487,8 +1500,8 @@ TxSetPhaseFrame::makeFromWire(TxSetPhase phase, Hash const& networkID,
                         networkID, env);
                     if (!tx->XDRProvidesValidFee())
                     {
-                        CLOG_DEBUG(Herder, "Got bad generalized txSet: "
-                                           "transaction has invalid XDR");
+                        CLOG_INFO(Herder, "Got bad generalized txSet: "
+                                          "transaction has invalid XDR");
                         return std::nullopt;
                     }
                     cluster.push_back(tx);
@@ -1497,8 +1510,8 @@ TxSetPhaseFrame::makeFromWire(TxSetPhase phase, Hash const& networkID,
                 if (!std::is_sorted(cluster.begin(), cluster.end(),
                                     &TxSetUtils::hashTxSorter))
                 {
-                    CLOG_DEBUG(Herder, "Got bad generalized txSet: "
-                                       "cluster is not sorted");
+                    CLOG_INFO(Herder, "Got bad generalized txSet: "
+                                      "cluster is not sorted");
                     return std::nullopt;
                 }
             }
@@ -1509,8 +1522,8 @@ TxSetPhaseFrame::makeFromWire(TxSetPhase phase, Hash const& networkID,
                                                                     b.front());
                                 }))
             {
-                CLOG_DEBUG(Herder, "Got bad generalized txSet: "
-                                   "stage is not sorted");
+                CLOG_INFO(Herder, "Got bad generalized txSet: "
+                                  "stage is not sorted");
                 return std::nullopt;
             }
         }
@@ -1521,8 +1534,8 @@ TxSetPhaseFrame::makeFromWire(TxSetPhase phase, Hash const& networkID,
                                     a.front().front(), b.front().front());
                             }))
         {
-            CLOG_DEBUG(Herder, "Got bad generalized txSet: "
-                               "stages are not sorted");
+            CLOG_INFO(Herder, "Got bad generalized txSet: "
+                              "stages are not sorted");
             return std::nullopt;
         }
         phaseFrame.emplace(
@@ -1730,10 +1743,10 @@ TxSetPhaseFrame::checkValid(Application& app,
     {
         if (tx->isSoroban() != isSoroban)
         {
-            CLOG_DEBUG(Herder,
-                       "Got bad generalized txSet with invalid "
-                       "phase {} transactions",
-                       static_cast<size_t>(mPhase));
+            CLOG_INFO(Herder,
+                      "Got bad generalized txSet with invalid "
+                      "phase {} transactions",
+                      static_cast<size_t>(mPhase));
             return false;
         }
     }
@@ -1765,13 +1778,13 @@ TxSetPhaseFrame::checkValidClassic(LedgerHeader const& lclHeader) const
 {
     if (isParallel())
     {
-        CLOG_DEBUG(Herder, "Got bad txSet: classic phase can't be parallel");
+        CLOG_INFO(Herder, "Got bad txSet: classic phase can't be parallel");
         return false;
     }
     if (this->size(lclHeader) > lclHeader.maxTxSetSize)
     {
-        CLOG_DEBUG(Herder, "Got bad txSet: too many classic txs {} > {}",
-                   this->size(lclHeader), lclHeader.maxTxSetSize);
+        CLOG_INFO(Herder, "Got bad txSet: too many classic txs {} > {}",
+                  this->size(lclHeader), lclHeader.maxTxSetSize);
         return false;
     }
     return true;
@@ -1786,18 +1799,18 @@ TxSetPhaseFrame::checkValidSoroban(
         lclHeader.ledgerVersion, PARALLEL_SOROBAN_PHASE_PROTOCOL_VERSION);
     if (isParallel() != needParallelSorobanPhase)
     {
-        CLOG_DEBUG(Herder,
-                   "Got bad txSet: Soroban phase parallel support "
-                   "does not match the current protocol; '{}' was "
-                   "expected",
-                   needParallelSorobanPhase);
+        CLOG_INFO(Herder,
+                  "Got bad txSet: Soroban phase parallel support "
+                  "does not match the current protocol; '{}' was "
+                  "expected",
+                  needParallelSorobanPhase);
         return false;
     }
     // Ensure the total resources are not over ledger limit.
     auto totalResources = getTotalResources(lclHeader.ledgerVersion);
     if (!totalResources)
     {
-        CLOG_DEBUG(Herder, "Got bad txSet: total Soroban resources overflow");
+        CLOG_INFO(Herder, "Got bad txSet: total Soroban resources overflow");
         return false;
     }
 
@@ -1815,10 +1828,10 @@ TxSetPhaseFrame::checkValidSoroban(
     }
     if (anyGreater(*totalResources, maxResources))
     {
-        CLOG_DEBUG(Herder,
-                   "Got bad txSet: needed resources exceed ledger "
-                   "limits {} > {}",
-                   totalResources->toString(), maxResources.toString());
+        CLOG_INFO(Herder,
+                  "Got bad txSet: needed resources exceed ledger "
+                  "limits {} > {}",
+                  totalResources->toString(), maxResources.toString());
         return false;
     }
 
@@ -1834,11 +1847,11 @@ TxSetPhaseFrame::checkValidSoroban(
     {
         if (stage.size() > sorobanConfig.ledgerMaxDependentTxClusters())
         {
-            CLOG_DEBUG(Herder,
-                       "Got bad txSet: too many clusters in Soroban "
-                       "stage {} > {}",
-                       stage.size(),
-                       sorobanConfig.ledgerMaxDependentTxClusters());
+            CLOG_INFO(Herder,
+                      "Got bad txSet: too many clusters in Soroban "
+                      "stage {} > {}",
+                      stage.size(),
+                      sorobanConfig.ledgerMaxDependentTxClusters());
             return false;
         }
     }
@@ -1864,8 +1877,8 @@ TxSetPhaseFrame::checkValidSoroban(
                     std::numeric_limits<int64_t>::max() -
                         tx->sorobanResources().instructions)
                 {
-                    CLOG_DEBUG(Herder, "Got bad txSet: Soroban sequential "
-                                       "instructions overflow");
+                    CLOG_INFO(Herder, "Got bad txSet: Soroban sequential "
+                                      "instructions overflow");
                     return false;
                 }
                 clusterInstructions += tx->sorobanResources().instructions;
@@ -1878,8 +1891,8 @@ TxSetPhaseFrame::checkValidSoroban(
         if (totalInstructions >
             std::numeric_limits<int64_t>::max() - stageInstructions)
         {
-            CLOG_DEBUG(Herder,
-                       "Got bad txSet: Soroban total instructions overflow");
+            CLOG_INFO(Herder,
+                      "Got bad txSet: Soroban total instructions overflow");
             return false;
         }
         totalInstructions += stageInstructions;
@@ -2092,8 +2105,8 @@ ApplicableTxSetFrame::checkValidInternal(Application& app,
     // Start by checking previousLedgerHash
     if (lcl.hash != mPreviousLedgerHash)
     {
-        CLOG_DEBUG(Herder, "Got bad txSet: {}, expected {}",
-                   hexAbbrev(mPreviousLedgerHash), hexAbbrev(lcl.hash));
+        CLOG_INFO(Herder, "Got bad txSet: {}, expected {}",
+                  hexAbbrev(mPreviousLedgerHash), hexAbbrev(lcl.hash));
         return false;
     }
 
@@ -2101,10 +2114,10 @@ ApplicableTxSetFrame::checkValidInternal(Application& app,
         lcl.header.ledgerVersion, SOROBAN_PROTOCOL_VERSION);
     if (needGeneralizedTxSet != isGeneralizedTxSet())
     {
-        CLOG_DEBUG(Herder,
-                   "Got bad txSet {}: need generalized '{}', expected '{}'",
-                   hexAbbrev(mPreviousLedgerHash), needGeneralizedTxSet,
-                   isGeneralizedTxSet());
+        CLOG_INFO(Herder,
+                  "Got bad txSet {}: need generalized '{}', expected '{}'",
+                  hexAbbrev(mPreviousLedgerHash), needGeneralizedTxSet,
+                  isGeneralizedTxSet());
         return false;
     }
 

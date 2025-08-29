@@ -129,6 +129,16 @@ class TransactionQueue
         std::optional<TimestampedTx> mTransaction;
     };
 
+    /**
+     * The AccountState for every account. As noted above, an AccountID is in
+     * AccountStates iff at least one of the following is true for the
+     * corresponding AccountState
+     * - AccountState.mTotalFees > 0
+     * - !AccountState.mTransactions.empty()
+     */
+
+    using AccountStates = UnorderedMap<AccountID, AccountState>;
+
     explicit TransactionQueue(Application& app, uint32 pendingDepth,
                               uint32 banDepth, uint32 poolLedgerMultiplier,
                               bool isSoroban);
@@ -143,7 +153,7 @@ class TransactionQueue
 #else
     AddResult tryAdd(TransactionFrameBasePtr tx, bool submittedFromSelf);
 #endif
-    void removeApplied(Transactions const& txs);
+    AccountStates removeApplied(Transactions const& txs, uint32_t ledger);
     // Ban transactions that are no longer valid or have insufficient fee;
     // transaction per account limit applies here, so `txs` should have no
     // duplicate source accounts
@@ -172,15 +182,6 @@ class TransactionQueue
 #endif
 
   protected:
-    /**
-     * The AccountState for every account. As noted above, an AccountID is in
-     * AccountStates iff at least one of the following is true for the
-     * corresponding AccountState
-     * - AccountState.mTotalFees > 0
-     * - !AccountState.mTransactions.empty()
-     */
-    using AccountStates = UnorderedMap<AccountID, AccountState>;
-
     /**
      * Banned transactions are stored in deque of depth banDepth, so it is easy
      * to unban all transactions that were banned for long enough.
@@ -222,6 +223,19 @@ class TransactionQueue
         medida::Counter& mTransactionsDelayCounter;
         medida::Counter& mTransactionsSelfDelayCounter;
     };
+
+    // TODO: rework transaction queue acceptance
+    // TODO: rework checkValid when constructing block.
+    // Account state is still stale (LCL-2)
+    // "Guess" if tx is valid
+    // If acount is NOT in the block
+    // For the purposes of this prototype, start with completely partitioned
+    // accounts. Dont accept accounts into tx queue if the same source account
+    // is in "being applied" block What close time to select? Close time will
+    // never be invalid, becuase we know the close time of LCL-1, actually wait,
+    // do we? Applying means LCL-1 closed,, so close time can never be invalid.
+    // This is a blocker for continuing to vote for futuren ledgers when we
+    // don't know close time ahead of time.
 
     std::unique_ptr<QueueMetrics> mQueueMetrics;
 

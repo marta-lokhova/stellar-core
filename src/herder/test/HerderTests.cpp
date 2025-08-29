@@ -6,6 +6,7 @@
 #include "herder/HerderImpl.h"
 #include "herder/LedgerCloseData.h"
 #include "herder/test/TestTxSetUtils.h"
+#include "history/test/HistoryTestsUtils.h"
 #include "main/Application.h"
 #include "main/Config.h"
 #include "scp/LocalNode.h"
@@ -16,8 +17,7 @@
 #include "test/TestAccount.h"
 #include "test/TestUtils.h"
 #include "test/test.h"
-
-#include "history/test/HistoryTestsUtils.h"
+#include "util/finally.h"
 
 #include "catchup/LedgerApplyManagerImpl.h"
 #include "crypto/SHA.h"
@@ -3271,9 +3271,9 @@ TEST_CASE("overlay parallel processing", "[herder][parallel]")
         simulation =
             Topologies::core(4, 1, Simulation::OVER_TCP, networkID, [](int i) {
                 auto cfg = getTestConfig(i);
-                cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 100;
+                cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 1000;
                 cfg.EXPERIMENTAL_BACKGROUND_TX_SIG_VERIFICATION = true;
-                cfg.GENESIS_TEST_ACCOUNT_COUNT = 100;
+                cfg.GENESIS_TEST_ACCOUNT_COUNT = 10000;
                 return cfg;
             });
     }
@@ -3283,14 +3283,20 @@ TEST_CASE("overlay parallel processing", "[herder][parallel]")
     SECTION("background ledger close")
     {
         // Set threshold to 1 so all have to vote
-        simulation =
-            Topologies::core(4, 1, Simulation::OVER_TCP, networkID, [](int i) {
+        simulation = Topologies::core(
+            4, 0.5, Simulation::OVER_TCP, networkID, [](int i) {
                 auto cfg = getTestConfig(i, Config::TESTDB_POSTGRESQL);
-                cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 100;
+                cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 1000;
                 cfg.EXPERIMENTAL_PARALLEL_LEDGER_APPLY = true;
-                cfg.ARTIFICIALLY_DELAY_LEDGER_CLOSE_FOR_TESTING =
-                    std::chrono::milliseconds(500);
-                cfg.GENESIS_TEST_ACCOUNT_COUNT = 100;
+                cfg.GENESIS_TEST_ACCOUNT_COUNT = 1000;
+                // cfg.ARTIFICIALLY_DELAY_LEDGER_CLOSE_FOR_TESTING =
+                //     std::chrono::milliseconds(1000);
+                if (i == 2)
+                {
+                    // One watcher to test trigger setup
+                    cfg.NODE_IS_VALIDATOR = false;
+                    cfg.FORCE_SCP = false;
+                }
                 return cfg;
             });
     }
@@ -3312,7 +3318,6 @@ TEST_CASE("overlay parallel processing", "[herder][parallel]")
     auto& loadGenDone =
         nodes[0]->getMetrics().NewMeter({"loadgen", "run", "complete"}, "run");
     auto currLoadGenCount = loadGenDone.count();
-
     auto& secondLoadGen = nodes[1]->getLoadGenerator();
     auto& secondLoadGenDone =
         nodes[1]->getMetrics().NewMeter({"loadgen", "run", "complete"}, "run");
@@ -3322,20 +3327,26 @@ TEST_CASE("overlay parallel processing", "[herder][parallel]")
     auto secondLoadGenCount = secondLoadGenDone.count();
     uint32_t const txCount = 50;
     // Generate Soroban txs from one node
-    loadGen.generateLoad(GeneratedLoadConfig::txLoad(
-        LoadGenMode::SOROBAN_UPLOAD, 50,
-        /* nTxs */ txCount, desiredTxRate, /* offset */ 0));
+    // loadGen.generateLoad(GeneratedLoadConfig::txLoad(
+    //     LoadGenMode::SOROBAN_UPLOAD, 50,
+    //     /* nTxs */ txCount, desiredTxRate, /* offset */ 0));
+
     // Generate classic txs from another node (with offset to prevent
     // overlapping accounts)
-    secondLoadGen.generateLoad(GeneratedLoadConfig::txLoad(
-        LoadGenMode::PAY, 50, txCount, desiredTxRate,
-        /* offset */ 50));
+    auto cfg = nodes[0]->getConfig();
+    std::string fileName = cfg.LOADGEN_PREGENERATED_TRANSACTIONS_FILE;
+    auto cleanup = gsl::finally([&]() { std::remove(fileName.c_str()); });
+
+    generateTransactions(*nodes[0], fileName, txCount,
+                         cfg.GENESIS_TEST_ACCOUNT_COUNT,
+                         /* offset */ 0);
+
+    secondLoadGen.generateLoad(GeneratedLoadConfig::pregeneratedTxLoad(
+        cfg.GENESIS_TEST_ACCOUNT_COUNT, /* nTxs */ txCount, /* txRate */ 20,
+        /* offset*/ 0, cfg.LOADGEN_PREGENERATED_TRANSACTIONS_FILE));
 
     simulation->crankUntil(
-        [&]() {
-            return loadGenDone.count() > currLoadGenCount &&
-                   secondLoadGenDone.count() > secondLoadGenCount;
-        },
+        [&]() { return secondLoadGenDone.count() > secondLoadGenCount; },
         200 * simulation->getExpectedLedgerCloseTime(), false);
     auto& loadGenFailed =
         nodes[0]->getMetrics().NewMeter({"loadgen", "run", "failed"}, "run");
