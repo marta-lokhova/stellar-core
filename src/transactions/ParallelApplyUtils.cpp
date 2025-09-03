@@ -391,7 +391,6 @@ GlobalParallelApplyLedgerState::GlobalParallelApplyLedgerState(
     InMemorySorobanState const& inMemoryState,
     SorobanNetworkConfig const& sorobanConfig)
     : mHotArchiveSnapshot(app.copySearchableHotArchiveBucketListSnapshot())
-    // TODO: this might be a problem, snapshot might be outdated?
     , mLiveSnapshot(app.copySearchableLiveBucketListSnapshot())
     , mInMemorySorobanState(inMemoryState)
     , mSorobanConfig(sorobanConfig)

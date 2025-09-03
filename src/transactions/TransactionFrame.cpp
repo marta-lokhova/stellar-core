@@ -1463,10 +1463,6 @@ TransactionFrame::commonValid(AppConnector& app,
             }
             if (isBadSeq(header, current))
             {
-                // TODO: why by the time we get to apply, we're applying wrong
-                // transactions?
-                // TODO: add check for tx success in loadgen (applicable
-                // in 22.4.1)
                 CLOG_INFO(Tx, "{} {} Bad sequence number: {} vs expected: {}",
                           app.getConfig().toShortString(
                               app.getConfig().NODE_SEED.getPublicKey()),
@@ -1807,9 +1803,6 @@ maybeTriggerTestInternalError(TransactionEnvelope const& env)
 }
 #endif
 
-// So for some reason sequence number check fails, however test reports
-// successful transactions why? Why bad sequence num -> but transactions is
-// applied?
 std::unique_ptr<SignatureChecker>
 TransactionFrame::commonPreApply(
     bool chargeFee, AppConnector& app, AbstractLedgerTxn& ltx,
