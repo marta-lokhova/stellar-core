@@ -23,7 +23,8 @@ class TCPPeer : public Peer
 {
   public:
     typedef asio::buffered_read_stream<asio::ip::tcp::socket> SocketType;
-    static constexpr size_t BUFSZ = 0x40000; // 256KB
+    static constexpr size_t BUFSZ = 0x40000;                 // 256KB
+    static constexpr size_t SEND_BUF_SIZE = 8 * 1024 * 1024; // 8MB
 
   private:
     // Helper class which provides invariance for various data structures;

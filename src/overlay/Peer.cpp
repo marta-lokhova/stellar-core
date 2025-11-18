@@ -1452,11 +1452,17 @@ Peer::recvTxBatch(CapacityTrackedMessage const& msgTracker)
 }
 #endif
 
+// Prepare the response to a GET_TX_SET message in the backgorund
 void
 Peer::recvGetTxSet(StellarMessage const& msg)
 {
     ZoneScoped;
     releaseAssert(threadIsMain());
+
+    CLOG_INFO(Overlay, "Peer {} requested tx set {}",
+              mAppConnector.getConfig().toShortString(mPeerID),
+              hexAbbrev(msg.txSetHash()));
+
     if (!process(mTxSetQueryInfo))
     {
         return;
@@ -1477,6 +1483,9 @@ Peer::recvGetTxSet(StellarMessage const& msg)
             txSet->toXDR(newMsg->txSet());
         }
 
+        CLOG_INFO(Overlay, "Sending tx set {} to peer {}",
+                  hexAbbrev(msg.txSetHash()),
+                  mAppConnector.getConfig().toShortString(mPeerID));
         self->sendMessage(newMsg);
     }
     else

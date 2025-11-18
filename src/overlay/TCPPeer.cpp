@@ -97,6 +97,8 @@ TCPPeer::initiate(Application& app, PeerBareAddress const& address)
                     result->mSocket->next_layer().set_option(nodelay, ec);
                 std::ignore =
                     result->mSocket->next_layer().set_option(linger, lingerEc);
+                asio::socket_base::send_buffer_size option(SEND_BUF_SIZE);
+                result->mSocket->next_layer().set_option(option);
             }
             else
             {
@@ -235,6 +237,11 @@ TCPPeer::sendMessage(xdr::msg_ptr&& xdrBytes,
     msg.mMsgPtr = msgPtr;
     mThreadVars.getWriteQueue().emplace_back(std::move(msg));
 
+    if (msgPtr->type() == GENERALIZED_TX_SET)
+    {
+        CLOG_INFO(Overlay, "TCPPeer::sendMessage: queued GENERALIZED_TX_SET");
+    }
+
     if (!mThreadVars.isWriting())
     {
         mThreadVars.setWriting(true);
@@ -292,6 +299,9 @@ TCPPeer::shutdown()
     maybeExecuteInBackground("TCPPeer: close", socketClose);
 }
 
+// potential blockers
+// main thread for recvGetTXSet -> tuck before responding
+//
 void
 TCPPeer::messageSender()
 {
@@ -327,6 +337,11 @@ TCPPeer::messageSender()
                                                    sz);
         expected_length += sz;
         mEnqueueTimeOfLastWrite = tsm.mEnqueuedTime;
+        if (tsm.mMsgPtr->type() == GENERALIZED_TX_SET)
+        {
+            CLOG_INFO(Overlay, "TCPPeer::messageSender: preparing "
+                               "GENERALIZED_TX_SET for send");
+        }
         // check if we reached any limit
         if (expected_length >= maxTotalBytes)
             break;
@@ -372,6 +387,12 @@ TCPPeer::messageSender()
                 {
                     sentMessages[FlowControl::getMessagePriority(msg)]
                         .emplace_back(i->mMsgPtr);
+                }
+                else if (msg.type() == GENERALIZED_TX_SET)
+                {
+                    CLOG_INFO(
+                        Overlay,
+                        "TCPPeer::messageSender: sent GENERALIZED_TX_SET");
                 }
                 ++i;
                 self->mThreadVars.getWriteBuffers().pop_back();

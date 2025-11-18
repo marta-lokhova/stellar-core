@@ -601,6 +601,11 @@ NominationProtocol::nominate(ValueWrapperPtr value, Value const& previousValue,
     if (updated)
     {
         emitNomination();
+        CLOG_INFO(SCP,
+                  "NominationProtocol::emitNomination: emitted "
+                  "nomination for fully validated slot {}: {}",
+                  mSlot.getSlotIndex(),
+                  mSlot.getSCP().getValueString(value->getValue()));
     }
     else
     {
