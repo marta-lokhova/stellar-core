@@ -135,7 +135,8 @@ Floodgate::broadcast(std::shared_ptr<StellarMessage const> msg,
             {
                 mSendFromBroadcast.Mark();
 
-                if (msg->type() == SCP_MESSAGE)
+                if (msg->type() == SCP_MESSAGE ||
+                    msg->type() == GENERALIZED_TX_SET || msg->type() == TX_SET)
                 {
                     peer.second->sendMessage(msg, !broadcasted);
                 }

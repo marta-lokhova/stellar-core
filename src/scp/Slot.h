@@ -126,7 +126,7 @@ class Slot : public std::enable_shared_from_this<Slot>
 
     // attempts to nominate a value for consensus
     bool nominate(ValueWrapperPtr value, Value const& previousValue,
-                  bool timedout);
+                  bool timedout, std::optional<Hash> txSetHash = std::nullopt);
 
     void stopNomination();
 

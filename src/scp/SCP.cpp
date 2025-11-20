@@ -35,10 +35,11 @@ SCP::receiveEnvelope(SCPEnvelopeWrapperPtr envelope)
 
 bool
 SCP::nominate(uint64 slotIndex, ValueWrapperPtr value,
-              Value const& previousValue)
+              Value const& previousValue, std::optional<Hash> txSetHash)
 {
     dbgAssert(isValidator());
-    return getSlot(slotIndex, true)->nominate(value, previousValue, false);
+    return getSlot(slotIndex, true)
+        ->nominate(value, previousValue, false, txSetHash);
 }
 
 void

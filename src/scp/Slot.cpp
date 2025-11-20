@@ -213,9 +213,11 @@ Slot::bumpState(Value const& value, bool force)
 }
 
 bool
-Slot::nominate(ValueWrapperPtr value, Value const& previousValue, bool timedout)
+Slot::nominate(ValueWrapperPtr value, Value const& previousValue, bool timedout,
+               std::optional<Hash> txSetHash)
 {
-    return mNominationProtocol.nominate(value, previousValue, timedout);
+    return mNominationProtocol.nominate(value, previousValue, timedout,
+                                        txSetHash);
 }
 
 void

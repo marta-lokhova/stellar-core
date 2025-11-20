@@ -182,6 +182,18 @@ OverlayMetrics::OverlayMetrics(Application& app)
           {"overlay", "fetch", "duplicate-recv"}, "byte"))
     , mTxBatchSizeHistogram(
           app.getMetrics().NewHistogram({"overlay", "flood", "tx-batch-size"}))
+    , mTxSetPushBroadcast(app.getMetrics().NewMeter(
+          {"overlay", "txset-push", "broadcast"}, "message"))
+    , mTxSetPushReceived(app.getMetrics().NewMeter(
+          {"overlay", "txset-push", "received"}, "message"))
+    , mTxSetPushProcessTimer(
+          app.getMetrics().NewTimer({"overlay", "txset-push", "process"}))
+    , mTxSetPushLatency(
+          app.getMetrics().NewTimer({"overlay", "txset-push", "latency"}))
+    , mTxSetPullRequested(app.getMetrics().NewMeter(
+          {"overlay", "txset-pull", "requested"}, "message"))
+    , mTxSetPullFulfilled(app.getMetrics().NewMeter(
+          {"overlay", "txset-pull", "fulfilled"}, "message"))
 {
 }
 }

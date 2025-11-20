@@ -165,10 +165,11 @@ HerderSCPDriver::signEnvelope(SCPEnvelope& envelope)
 }
 
 void
-HerderSCPDriver::emitEnvelope(SCPEnvelope const& envelope)
+HerderSCPDriver::emitEnvelope(SCPEnvelope const& envelope,
+                              std::optional<Hash> txSetHash)
 {
     ZoneScoped;
-    mHerder.emitEnvelope(envelope);
+    mHerder.emitEnvelope(envelope, txSetHash);
 }
 
 // value validation
@@ -933,7 +934,8 @@ HerderSCPDriver::logQuorumInformationAndUpdateMetrics(uint64_t index)
 void
 HerderSCPDriver::nominate(uint64_t slotIndex, StellarValue const& value,
                           TxSetXDRFrameConstPtr proposedSet,
-                          StellarValue const& previousValue)
+                          StellarValue const& previousValue,
+                          std::optional<Hash> txSetHash)
 {
     ZoneScoped;
     mCurrentValue = wrapStellarValue(value);
@@ -948,7 +950,7 @@ HerderSCPDriver::nominate(uint64_t slotIndex, StellarValue const& value,
                hexAbbrev(valueHash), slotIndex);
 
     auto prevValue = xdr::xdr_to_opaque(previousValue);
-    mSCP.nominate(slotIndex, mCurrentValue, prevValue);
+    mSCP.nominate(slotIndex, mCurrentValue, prevValue, txSetHash);
 }
 
 SCPQuorumSetPtr

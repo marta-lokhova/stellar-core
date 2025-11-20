@@ -30,6 +30,7 @@
 #include "medida/meter.h"
 #include "medida/metrics_registry.h"
 #include "overlay/OverlayManager.h"
+#include "overlay/OverlayMetrics.h"
 #include "process/ProcessManager.h"
 #include "scp/LocalNode.h"
 #include "scp/Slot.h"
@@ -578,7 +579,8 @@ HerderImpl::startOutOfSyncTimer()
 }
 
 void
-HerderImpl::emitEnvelope(SCPEnvelope const& envelope)
+HerderImpl::emitEnvelope(SCPEnvelope const& envelope,
+                         std::optional<Hash> txSetHash)
 {
     ZoneScoped;
     uint64 slotIndex = envelope.statement.slotIndex;
@@ -588,6 +590,34 @@ HerderImpl::emitEnvelope(SCPEnvelope const& envelope)
                mApp.getStateHuman());
 
     persistSCPState(slotIndex);
+
+    // First, broadcast the tx set, then the message referencing it
+    // Can even broadcast a bit earlier by prediction you'll be the leader.
+    if (txSetHash)
+    {
+        auto txSet = mPendingEnvelopes.getTxSet(*txSetHash);
+        releaseAssert(txSet);
+        auto newMsg = std::make_shared<StellarMessage>();
+        if (txSet->isGeneralizedTxSet())
+        {
+            newMsg->type(GENERALIZED_TX_SET);
+            txSet->toXDR(newMsg->generalizedTxSet());
+        }
+        else
+        {
+            newMsg->type(TX_SET);
+            txSet->toXDR(newMsg->txSet());
+        }
+
+        // Record push-based broadcast metric
+        auto& overlayMetrics = mApp.getOverlayManager().getOverlayMetrics();
+        overlayMetrics.mTxSetPushBroadcast.Mark();
+        CLOG_INFO(Herder,
+                  "Broadcasting TxSet {} proactively before vote (push-based)",
+                  hexAbbrev(*txSetHash));
+
+        mApp.getOverlayManager().broadcastMessage(newMsg);
+    }
 
     broadcast(envelope);
 }
@@ -1563,7 +1593,7 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     StellarValue newProposedValue = makeStellarValue(
         txSetHash, nextCloseTime, newUpgrades, mApp.getConfig().NODE_SEED);
     mHerderSCPDriver.nominate(slotIndex, newProposedValue, proposedSet,
-                              lcl.header.scpValue);
+                              lcl.header.scpValue, txSetHash);
 }
 
 void

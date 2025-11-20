@@ -144,7 +144,7 @@ NominationProtocol::recordEnvelope(SCPEnvelopeWrapperPtr env)
 }
 
 void
-NominationProtocol::emitNomination()
+NominationProtocol::emitNomination(std::optional<Hash> txSetHash)
 {
     ZoneScoped;
     SCPStatement st;
@@ -176,7 +176,7 @@ NominationProtocol::emitNomination()
             mLastEnvelope = envW;
             if (mSlot.isFullyValidated())
             {
-                mSlot.getSCPDriver().emitEnvelope(envelope);
+                mSlot.getSCPDriver().emitEnvelope(envelope, txSetHash);
             }
         }
     }
@@ -519,7 +519,7 @@ NominationProtocol::getStatementValues(SCPStatement const& st)
 // attempts to nominate a value for consensus
 bool
 NominationProtocol::nominate(ValueWrapperPtr value, Value const& previousValue,
-                             bool timedout)
+                             bool timedout, std::optional<Hash> txSetHash)
 {
     ZoneScoped;
 
@@ -600,7 +600,7 @@ NominationProtocol::nominate(ValueWrapperPtr value, Value const& previousValue,
 
     if (updated)
     {
-        emitNomination();
+        emitNomination(txSetHash);
         CLOG_INFO(SCP,
                   "NominationProtocol::emitNomination: emitted "
                   "nomination for fully validated slot {}: {}",

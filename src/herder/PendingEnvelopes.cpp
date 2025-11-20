@@ -340,6 +340,9 @@ PendingEnvelopes::recvSCPEnvelope(SCPEnvelope const& envelope)
 
         // we are fetching this envelope
         // check if we are done fetching it
+
+        // TODO: delay fetching a little bit, because the leader is supposed to
+        // have already sent us the block.
         if (isFullyFetched(envelope))
         {
             std::chrono::nanoseconds durationNano =

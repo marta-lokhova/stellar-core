@@ -9,6 +9,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 
 #include "xdr/Stellar-SCP.h"
@@ -98,7 +99,9 @@ class SCPDriver
 
     // Delegates the emission of an SCPEnvelope to the user of SCP. Envelopes
     // should be flooded to the network.
-    virtual void emitEnvelope(SCPEnvelope const& envelope) = 0;
+    // txSetHash is optional - if provided, it will be used for the envelope
+    virtual void emitEnvelope(SCPEnvelope const& envelope,
+                              std::optional<Hash> txSetHash = std::nullopt) = 0;
 
     // methods to hand over the validation and ordering of values and ballots.
 

@@ -63,7 +63,8 @@ class TestNominationSCP : public SCPDriver
     }
 
     void
-    emitEnvelope(SCPEnvelope const& envelope) override
+    emitEnvelope(SCPEnvelope const& envelope,
+                 std::optional<Hash> txSetHash) override
     {
     }
 

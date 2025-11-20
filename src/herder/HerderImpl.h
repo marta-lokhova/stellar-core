@@ -95,7 +95,8 @@ class HerderImpl : public Herder
                              bool isLatestSlot);
     void valueExternalized(uint64 slotIndex, StellarValue const& value,
                            bool isLatestSlot);
-    void emitEnvelope(SCPEnvelope const& envelope);
+    void emitEnvelope(SCPEnvelope const& envelope,
+                      std::optional<Hash> txSetHash = std::nullopt);
 
 #ifdef BUILD_TESTS
     TransactionQueue::AddResult

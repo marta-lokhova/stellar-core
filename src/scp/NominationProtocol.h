@@ -8,6 +8,7 @@
 #include "scp/SCP.h"
 #include <functional>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -55,7 +56,7 @@ class NominationProtocol
 
     void recordEnvelope(SCPEnvelopeWrapperPtr env);
 
-    void emitNomination();
+    void emitNomination(std::optional<Hash> txSetHash = std::nullopt);
 
     // returns true if v is in the accepted list from the statement
     static bool acceptPredicate(Value const& v, SCPStatement const& st);
@@ -93,7 +94,7 @@ class NominationProtocol
 
     // attempts to nominate a value for consensus
     bool nominate(ValueWrapperPtr value, Value const& previousValue,
-                  bool timedout);
+                  bool timedout, std::optional<Hash> txSetHash = std::nullopt);
 
     // stops the nomination protocol
     void stopNomination();

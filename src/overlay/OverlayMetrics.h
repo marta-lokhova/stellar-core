@@ -136,5 +136,19 @@ struct OverlayMetrics
     medida::Meter& mUniqueFetchBytesRecv;
     medida::Meter& mDuplicateFetchBytesRecv;
     medida::Histogram& mTxBatchSizeHistogram;
+
+    // Push-based block broadcasting metrics
+    // Tracks when TxSets are broadcast proactively (before votes)
+    medida::Meter& mTxSetPushBroadcast;
+    // Counts received pushed TxSets
+    medida::Meter& mTxSetPushReceived;
+    // Timer for processing pushed TxSets
+    medida::Timer& mTxSetPushProcessTimer;
+    // Tracks latency from broadcast to receipt of pushed TxSet
+    medida::Timer& mTxSetPushLatency;
+    // Counts requests for TxSets (should be lower with push-based approach)
+    medida::Meter& mTxSetPullRequested;
+    // Counts fulfilled pull requests (indicates fallback to pull-based)
+    medida::Meter& mTxSetPullFulfilled;
 };
 }

@@ -650,6 +650,14 @@ Peer::sendGetTxSet(uint256 const& setID)
     newMsg.type(GET_TX_SET);
     newMsg.txSetHash() = setID;
 
+    // Record pull-based request metric (indicates push-based approach was not
+    // used)
+    mOverlayMetrics.mTxSetPullRequested.Mark();
+    CLOG_INFO(Overlay,
+              "Requesting TxSet {} via pull-based approach (push-based not "
+              "available)",
+              hexAbbrev(setID));
+
     auto msgPtr = std::make_shared<StellarMessage const>(newMsg);
     sendMessage(msgPtr);
 }
@@ -1006,6 +1014,7 @@ Peer::shouldAbort(RecursiveLockGuard const& stateGuard) const
     return mState == CLOSING || mAppConnector.overlayShuttingDown();
 }
 
+// For some reason, still requesting blocks
 bool
 Peer::recvAuthenticatedMessage(AuthenticatedMessage&& msg)
 {
@@ -1120,6 +1129,9 @@ Peer::recvAuthenticatedMessage(AuthenticatedMessage&& msg)
     // unique_ptr here, because std::function requires its callable
     // to be copyable (C++23 fixes this with std::move_only_function, but we're
     // not there yet)
+
+    CLOG_INFO(Overlay, "Scheduling processing of {} from {} on queue {}",
+              msgSummary(msgTracker->getMessage()), toString(), queueName);
     mAppConnector.postOnMainThread(
         [self = shared_from_this(), t = std::move(msgTracker)]() {
             self->recvMessage(t);
@@ -1483,7 +1495,10 @@ Peer::recvGetTxSet(StellarMessage const& msg)
             txSet->toXDR(newMsg->txSet());
         }
 
-        CLOG_INFO(Overlay, "Sending tx set {} to peer {}",
+        // Record fulfilled pull request metric
+        mOverlayMetrics.mTxSetPullFulfilled.Mark();
+        CLOG_INFO(Overlay,
+                  "Sending tx set {} to peer {} (fulfilling pull request)",
                   hexAbbrev(msg.txSetHash()),
                   mAppConnector.getConfig().toShortString(mPeerID));
         self->sendMessage(newMsg);
@@ -1513,7 +1528,14 @@ Peer::recvTxSet(StellarMessage const& msg)
     ZoneScoped;
     releaseAssert(threadIsMain());
     auto frame = TxSetXDRFrame::makeFromWire(msg.txSet());
-    mAppConnector.getHerder().recvTxSet(frame->getContentsHash(), frame);
+    auto hash = frame->getContentsHash();
+
+    // Record push-based reception metric
+    mOverlayMetrics.mTxSetPushReceived.Mark();
+    CLOG_INFO(Overlay, "Received TxSet {} via push-based broadcast",
+              hexAbbrev(hash));
+
+    mAppConnector.getHerder().recvTxSet(hash, frame);
 }
 
 void
@@ -1522,7 +1544,14 @@ Peer::recvGeneralizedTxSet(StellarMessage const& msg)
     ZoneScoped;
     releaseAssert(threadIsMain());
     auto frame = TxSetXDRFrame::makeFromWire(msg.generalizedTxSet());
-    mAppConnector.getHerder().recvTxSet(frame->getContentsHash(), frame);
+    auto hash = frame->getContentsHash();
+
+    // Record push-based reception metric
+    mOverlayMetrics.mTxSetPushReceived.Mark();
+    CLOG_INFO(Overlay, "Received generalized TxSet {} via push-based broadcast",
+              hexAbbrev(hash));
+
+    mAppConnector.getHerder().recvTxSet(hash, frame);
 }
 
 void

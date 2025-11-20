@@ -63,7 +63,8 @@ class HerderSCPDriver : public SCPDriver
     // envelope handling
     SCPEnvelopeWrapperPtr wrapEnvelope(SCPEnvelope const& envelope) override;
     void signEnvelope(SCPEnvelope& envelope) override;
-    void emitEnvelope(SCPEnvelope const& envelope) override;
+    void emitEnvelope(SCPEnvelope const& envelope,
+                      std::optional<Hash> txSetHash = std::nullopt) override;
 
     // value validation
     SCPDriver::ValidationLevel validateValue(uint64_t slotIndex,
@@ -96,9 +97,11 @@ class HerderSCPDriver : public SCPDriver
 
     // Submit a value to consider for slotIndex
     // previousValue is the value from slotIndex-1
+    // txSetHash is optional - if provided, it will be used for the nomination
     void nominate(uint64_t slotIndex, StellarValue const& value,
                   TxSetXDRFrameConstPtr proposedSet,
-                  StellarValue const& previousValue);
+                  StellarValue const& previousValue,
+                  std::optional<Hash> txSetHash = std::nullopt);
 
     SCPQuorumSetPtr getQSet(Hash const& qSetHash) override;
 

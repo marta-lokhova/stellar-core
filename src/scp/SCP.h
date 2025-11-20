@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 
 #include "lib/json/json-forwards.h"
@@ -53,7 +54,8 @@ class SCP
     // Submit a value to consider for slotIndex
     // previousValue is the value from slotIndex-1
     bool nominate(uint64 slotIndex, ValueWrapperPtr value,
-                  Value const& previousValue);
+                  Value const& previousValue,
+                  std::optional<Hash> txSetHash = std::nullopt);
 
     // stops nomination for a slot
     void stopNomination(uint64 slotIndex);
