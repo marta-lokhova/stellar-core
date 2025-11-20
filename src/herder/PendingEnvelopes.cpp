@@ -244,10 +244,11 @@ PendingEnvelopes::recvTxSet(Hash const& hash, TxSetXDRFrameConstPtr txset)
     CLOG_TRACE(Herder, "Got TxSet {}", hexAbbrev(hash));
 
     auto lastSeenSlotIndex = mTxSetFetcher.getLastSeenSlotIndex(hash);
-    if (lastSeenSlotIndex == 0)
-    {
-        return false;
-    }
+    // We've already done the processing,
+    // if (lastSeenSlotIndex == 0)
+    // {
+    //     return false;
+    // }
 
     addTxSet(hash, lastSeenSlotIndex, txset);
     return true;

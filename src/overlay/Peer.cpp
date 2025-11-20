@@ -1130,8 +1130,6 @@ Peer::recvAuthenticatedMessage(AuthenticatedMessage&& msg)
     // to be copyable (C++23 fixes this with std::move_only_function, but we're
     // not there yet)
 
-    CLOG_INFO(Overlay, "Scheduling processing of {} from {} on queue {}",
-              msgSummary(msgTracker->getMessage()), toString(), queueName);
     mAppConnector.postOnMainThread(
         [self = shared_from_this(), t = std::move(msgTracker)]() {
             self->recvMessage(t);
