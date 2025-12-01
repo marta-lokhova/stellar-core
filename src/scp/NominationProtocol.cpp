@@ -577,6 +577,8 @@ NominationProtocol::nominate(ValueWrapperPtr value, Value const& previousValue,
         }
     }
 
+    std::optional<Hash> txSetHashOpt;
+
     // if we're leader, add our value if we haven't added any votes yet
     if (mRoundLeaders.find(mSlot.getLocalNode()->getNodeID()) !=
             mRoundLeaders.end() &&
@@ -586,6 +588,7 @@ NominationProtocol::nominate(ValueWrapperPtr value, Value const& previousValue,
         if (ins.second)
         {
             updated = true;
+            txSetHashOpt = txSetHash;
             mSlot.getSCPDriver().nominatingValue(mSlot.getSlotIndex(),
                                                  value->getValue());
         }
@@ -600,7 +603,7 @@ NominationProtocol::nominate(ValueWrapperPtr value, Value const& previousValue,
 
     if (updated)
     {
-        emitNomination(txSetHash);
+        emitNomination(txSetHashOpt);
         CLOG_INFO(SCP,
                   "NominationProtocol::emitNomination: emitted "
                   "nomination for fully validated slot {}: {}",
