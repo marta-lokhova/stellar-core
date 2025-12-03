@@ -50,8 +50,7 @@ LedgerEntryWrapper::current() const
     }
 }
 
-LedgerEntryWrapper::
-operator bool() const
+LedgerEntryWrapper::operator bool() const
 {
     switch (mEntry.index())
     {

@@ -111,8 +111,7 @@ TrustLineWrapper::TrustLineWrapper(LedgerTxnEntry&& entry)
     }
 }
 
-TrustLineWrapper::
-operator bool() const
+TrustLineWrapper::operator bool() const
 {
     return (bool)mImpl && (bool)(*mImpl);
 }
@@ -207,8 +206,7 @@ TrustLineWrapper::NonIssuerImpl::NonIssuerImpl(LedgerTxnEntry&& entry)
 {
 }
 
-TrustLineWrapper::NonIssuerImpl::
-operator bool() const
+TrustLineWrapper::NonIssuerImpl::operator bool() const
 {
     return (bool)mEntry;
 }
@@ -293,8 +291,7 @@ TrustLineWrapper::IssuerImpl::IssuerImpl(AccountID const& accountID,
 {
 }
 
-TrustLineWrapper::IssuerImpl::
-operator bool() const
+TrustLineWrapper::IssuerImpl::operator bool() const
 {
     return true;
 }
@@ -443,8 +440,7 @@ ConstTrustLineWrapper::ConstTrustLineWrapper(ConstLedgerTxnEntry&& entry)
     }
 }
 
-ConstTrustLineWrapper::
-operator bool() const
+ConstTrustLineWrapper::operator bool() const
 {
     return (bool)mImpl && (bool)(*mImpl);
 }
@@ -495,8 +491,7 @@ ConstTrustLineWrapper::NonIssuerImpl::NonIssuerImpl(ConstLedgerTxnEntry&& entry)
 {
 }
 
-ConstTrustLineWrapper::NonIssuerImpl::
-operator bool() const
+ConstTrustLineWrapper::NonIssuerImpl::operator bool() const
 {
     return (bool)mEntry;
 }
@@ -534,8 +529,7 @@ ConstTrustLineWrapper::NonIssuerImpl::getMaxAmountReceive(
 }
 
 // Implementation of ConstTrustLineWrapper::IssuerImpl ------------------------
-ConstTrustLineWrapper::IssuerImpl::
-operator bool() const
+ConstTrustLineWrapper::IssuerImpl::operator bool() const
 {
     return true;
 }

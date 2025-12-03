@@ -335,8 +335,7 @@ BucketListDepth::operator=(uint32_t numLevels)
     return *this;
 }
 
-BucketListDepth::
-operator uint32_t() const
+BucketListDepth::operator uint32_t() const
 {
     return mNumLevels;
 }

@@ -59,8 +59,7 @@ PosixSpawnFileActions::addOpen(int fildes, std::string const& fileName,
     }
 }
 
-PosixSpawnFileActions::
-operator posix_spawn_file_actions_t*()
+PosixSpawnFileActions::operator posix_spawn_file_actions_t*()
 {
     return mInitialized ? &mFileActions : nullptr;
 }

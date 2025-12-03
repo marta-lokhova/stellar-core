@@ -106,8 +106,7 @@ LedgerTxnEntry::operator=(LedgerTxnEntry&& other)
     return *this;
 }
 
-LedgerTxnEntry::
-operator bool() const
+LedgerTxnEntry::operator bool() const
 {
     if (!mImpl.expired())
     {
@@ -318,8 +317,7 @@ ConstLedgerTxnEntry::operator=(ConstLedgerTxnEntry&& other)
     return *this;
 }
 
-ConstLedgerTxnEntry::
-operator bool() const
+ConstLedgerTxnEntry::operator bool() const
 {
     if (!mImpl.expired())
     {

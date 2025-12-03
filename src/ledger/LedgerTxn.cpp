@@ -375,8 +375,7 @@ EntryIterator::operator++()
     return *this;
 }
 
-EntryIterator::
-operator bool() const
+EntryIterator::operator bool() const
 {
     return !getImpl()->atEnd();
 }

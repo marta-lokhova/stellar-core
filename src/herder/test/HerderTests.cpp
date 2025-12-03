@@ -6905,83 +6905,72 @@ TEST_CASE("push-based block broadcasting metrics", "[herder][tx-set-broadcast]")
 
     Hash networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
     Simulation::pointer simulation = Topologies::core(
-        3, 0.5, Simulation::OVER_LOOPBACK, networkID,
-        [&](int i) { return getTestConfig(i, Config::TESTDB_DEFAULT); });
+        21, 0.67, Simulation::OVER_LOOPBACK, networkID, [&](int i) {
+            auto cfg = getTestConfig(i, Config::TESTDB_DEFAULT);
+            cfg.TARGET_PEER_CONNECTIONS = 20;
+            return cfg;
+        });
 
     simulation->startAllNodes();
-    auto A = simulation->getNodes()[0];
-    auto B = simulation->getNodes()[1];
-    auto C = simulation->getNodes()[2];
 
-    auto& aOverlayMetrics = A->getOverlayManager().getOverlayMetrics();
-    auto& bOverlayMetrics = B->getOverlayManager().getOverlayMetrics();
-    auto& cOverlayMetrics = C->getOverlayManager().getOverlayMetrics();
+    auto nodes = simulation->getNodes();
+    auto numNodes = nodes.size();
 
-    // Record initial metric values
-    auto aPushBroadcastStart = aOverlayMetrics.mTxSetPushBroadcast.count();
-    auto aReceivedStart = aOverlayMetrics.mTxSetPushReceived.count();
-    auto aPullRequestedStart = aOverlayMetrics.mTxSetPullRequested.count();
+    // Record initial metric values for all nodes
+    std::vector<int64_t> pushBroadcastStart(numNodes);
+    std::vector<int64_t> pushReceivedStart(numNodes);
+    std::vector<int64_t> pullRequestedStart(numNodes);
 
-    auto bPushBroadcastStart = bOverlayMetrics.mTxSetPushBroadcast.count();
-    auto bReceivedStart = bOverlayMetrics.mTxSetPushReceived.count();
-    auto bPullRequestedStart = bOverlayMetrics.mTxSetPullRequested.count();
-
-    auto cPushBroadcastStart = cOverlayMetrics.mTxSetPushBroadcast.count();
-    auto cReceivedStart = cOverlayMetrics.mTxSetPushReceived.count();
-    auto cPullRequestedStart = cOverlayMetrics.mTxSetPullRequested.count();
+    for (size_t i = 0; i < numNodes; ++i)
+    {
+        auto& overlayMetrics =
+            nodes[i]->getOverlayManager().getOverlayMetrics();
+        pushBroadcastStart[i] = overlayMetrics.mTxSetPushBroadcast.count();
+        pushReceivedStart[i] = overlayMetrics.mTxSetPushReceived.count();
+        pullRequestedStart[i] = overlayMetrics.mTxSetPullRequested.count();
+    }
 
     // Run consensus for a few ledgers to accumulate metrics
-    simulation->crankForAtLeast(std::chrono::seconds(30), false);
+    simulation->crankUntil(
+        [&]() { return simulation->haveAllExternalized(10, 1); },
+        std::chrono::seconds(120), false);
 
-    // Get final metric values
-    auto aPushBroadcastEnd = aOverlayMetrics.mTxSetPushBroadcast.count();
-    auto aReceivedEnd = aOverlayMetrics.mTxSetPushReceived.count();
-    auto aPullRequestedEnd = aOverlayMetrics.mTxSetPullRequested.count();
-    auto aPullFulfilledEnd = aOverlayMetrics.mTxSetPullFulfilled.count();
+    // Get final metric values and compute deltas for all nodes
+    std::vector<int64_t> pushBroadcastDelta(numNodes);
+    std::vector<int64_t> pushReceivedDelta(numNodes);
+    std::vector<int64_t> pullRequestedDelta(numNodes);
 
-    auto bPushBroadcastEnd = bOverlayMetrics.mTxSetPushBroadcast.count();
-    auto bReceivedEnd = bOverlayMetrics.mTxSetPushReceived.count();
-    auto bPullRequestedEnd = bOverlayMetrics.mTxSetPullRequested.count();
-    auto bPullFulfilledEnd = bOverlayMetrics.mTxSetPullFulfilled.count();
+    int64_t totalPushBroadcasts = 0;
+    int64_t totalPushReceived = 0;
+    int64_t totalPullRequested = 0;
 
-    auto cPushBroadcastEnd = cOverlayMetrics.mTxSetPushBroadcast.count();
-    auto cReceivedEnd = cOverlayMetrics.mTxSetPushReceived.count();
-    auto cPullRequestedEnd = cOverlayMetrics.mTxSetPullRequested.count();
-    auto cPullFulfilledEnd = cOverlayMetrics.mTxSetPullFulfilled.count();
+    for (size_t i = 0; i < numNodes; ++i)
+    {
+        auto& overlayMetrics =
+            nodes[i]->getOverlayManager().getOverlayMetrics();
 
-    auto aPushBroadcastDelta = aPushBroadcastEnd - aPushBroadcastStart;
-    auto aReceivedDelta = aReceivedEnd - aReceivedStart;
-    auto aPullRequestedDelta = aPullRequestedEnd - aPullRequestedStart;
+        int64_t pushBroadcastEnd = overlayMetrics.mTxSetPushBroadcast.count();
+        int64_t pushReceivedEnd = overlayMetrics.mTxSetPushReceived.count();
+        int64_t pullRequestedEnd = overlayMetrics.mTxSetPullRequested.count();
 
-    auto bPushBroadcastDelta = bPushBroadcastEnd - bPushBroadcastStart;
-    auto bReceivedDelta = bReceivedEnd - bReceivedStart;
-    auto bPullRequestedDelta = bPullRequestedEnd - bPullRequestedStart;
+        pushBroadcastDelta[i] = pushBroadcastEnd - pushBroadcastStart[i];
+        pushReceivedDelta[i] = pushReceivedEnd - pushReceivedStart[i];
+        pullRequestedDelta[i] = pullRequestedEnd - pullRequestedStart[i];
 
-    auto cPushBroadcastDelta = cPushBroadcastEnd - cPushBroadcastStart;
-    auto cReceivedDelta = cReceivedEnd - cReceivedStart;
-    auto cPullRequestedDelta = cPullRequestedEnd - cPullRequestedStart;
+        // Verify each node's metrics are non-decreasing
+        REQUIRE(pushBroadcastEnd >= pushBroadcastStart[i]);
+        REQUIRE(pushReceivedEnd >= pushReceivedStart[i]);
 
-    // Verify push-based approach is working:
-    // Count total metrics across all nodes
-    auto totalPushBroadcasts =
-        aPushBroadcastDelta + bPushBroadcastDelta + cPushBroadcastDelta;
-    auto totalPushReceived = aReceivedDelta + bReceivedDelta + cReceivedDelta;
-    auto totalPullRequested =
-        aPullRequestedDelta + bPullRequestedDelta + cPullRequestedDelta;
+        totalPushBroadcasts += pushBroadcastDelta[i];
+        totalPushReceived += pushReceivedDelta[i];
+        totalPullRequested += pullRequestedDelta[i];
+    }
 
     // With push-based broadcasting, we expect:
     // - Some broadcast activity (at least one node proposing/nominating)
     // - Reception of TxSets from other nodes via push
     // - Significantly more push-based receptions than pull-based requests
     //   (blocks arrive proactively, minimizing need for pull)
-
-    // Verify push-based metrics are being recorded
-    REQUIRE(aPushBroadcastEnd >= aPushBroadcastStart);
-    REQUIRE(aReceivedEnd >= aReceivedStart);
-    REQUIRE(bPushBroadcastEnd >= bPushBroadcastStart);
-    REQUIRE(bReceivedEnd >= bReceivedStart);
-    REQUIRE(cPushBroadcastEnd >= cPushBroadcastStart);
-    REQUIRE(cReceivedEnd >= cReceivedStart);
 
     REQUIRE(totalPullRequested == 0);
 }

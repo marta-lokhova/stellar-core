@@ -223,6 +223,7 @@ NominationProtocol::updateRoundLeaders()
     SCPQuorumSet myQSet = mSlot.getLocalNode()->getQuorumSet();
 
     auto localID = mSlot.getLocalNode()->getNodeID();
+    // TODO: comment
     normalizeQSet(myQSet, &localID); // excludes self
 
     size_t maxLeaderCount = 1; // includes self
@@ -309,11 +310,13 @@ NominationProtocol::hashValue(Value const& value)
         mSlot.getSlotIndex(), mPreviousValue, mRoundNumber, value);
 }
 
+// Still unclear why we request a tx set , even when we rotate leaders! (TODO)
 uint64
 NominationProtocol::getNodePriority(NodeID const& nodeID,
                                     SCPQuorumSet const& qset)
 {
     ZoneScoped;
+
     uint64 res;
     uint64 w = mSlot.getSCPDriver().getNodeWeight(
         nodeID, qset, nodeID == mSlot.getLocalNode()->getNodeID());
@@ -490,6 +493,7 @@ NominationProtocol::processEnvelope(SCPEnvelopeWrapperPtr envelope)
 
         if (modified)
         {
+            // TODO: this is causing pull based?
             emitNomination();
         }
 
@@ -555,6 +559,12 @@ NominationProtocol::nominate(ValueWrapperPtr value, Value const& previousValue,
 
     mRoundNumber++;
     updateRoundLeaders();
+    CLOG_INFO(SCP, "PRINT leaders");
+    for (auto const& leader : mRoundLeaders)
+    {
+        CLOG_INFO(SCP, "   LEADER {}",
+                  mSlot.getSCPDriver().toShortString(leader));
+    }
 
     std::chrono::milliseconds timeout = mSlot.getSCPDriver().computeTimeout(
         mRoundNumber, /*isNomination=*/true);
@@ -579,6 +589,8 @@ NominationProtocol::nominate(ValueWrapperPtr value, Value const& previousValue,
 
     std::optional<Hash> txSetHashOpt;
 
+    bool self = false;
+
     // if we're leader, add our value if we haven't added any votes yet
     if (mRoundLeaders.find(mSlot.getLocalNode()->getNodeID()) !=
             mRoundLeaders.end() &&
@@ -587,6 +599,10 @@ NominationProtocol::nominate(ValueWrapperPtr value, Value const& previousValue,
         auto ins = mVotes.insert(value);
         if (ins.second)
         {
+            CLOG_INFO(SCP, "WE {} are the leader",
+                      mSlot.getSCPDriver().toShortString(
+                          mSlot.getLocalNode()->getNodeID()));
+            self = true;
             updated = true;
             txSetHashOpt = txSetHash;
             mSlot.getSCPDriver().nominatingValue(mSlot.getSlotIndex(),
@@ -603,12 +619,20 @@ NominationProtocol::nominate(ValueWrapperPtr value, Value const& previousValue,
 
     if (updated)
     {
-        emitNomination(txSetHashOpt);
-        CLOG_INFO(SCP,
-                  "NominationProtocol::emitNomination: emitted "
-                  "nomination for fully validated slot {}: {}",
-                  mSlot.getSlotIndex(),
-                  mSlot.getSCP().getValueString(value->getValue()));
+        if (self)
+        {
+
+            emitNomination(txSetHashOpt);
+            CLOG_INFO(SCP,
+                      "NominationProtocol::emitNomination: emitted "
+                      "nomination for fully validated slot {}: {}",
+                      mSlot.getSlotIndex(),
+                      mSlot.getSCP().getValueString(value->getValue()));
+        }
+        else
+        {
+            emitNomination();
+        }
     }
     else
     {
