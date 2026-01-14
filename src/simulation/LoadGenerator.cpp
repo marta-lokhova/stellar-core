@@ -1429,9 +1429,7 @@ LoadGenerator::execute(TransactionFrameBasePtr txf, LoadGenMode mode,
                              : "";
         CLOG_INFO(LoadGen, "tx rejected '{}': ===> {}, {}",
                   TX_STATUS_STRING[static_cast<int>(addResult.code)],
-                  txf->isSoroban() ? "soroban"
-                                   : xdrToCerealString(txf->getEnvelope(),
-                                                       "TransactionEnvelope"),
+                  xdrToCerealString(txf->getEnvelope(), "TransactionEnvelope"),
                   resultStr);
         if (addResult.code == TransactionQueue::AddResultCode::ADD_STATUS_ERROR)
         {
