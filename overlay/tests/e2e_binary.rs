@@ -85,26 +85,28 @@ fn spawn_overlay(socket_path: &str, peer_port: u16) -> Child {
     Command::new(binary)
         .arg("--listen")
         .arg(socket_path)
-        .env("RUST_LOG", "info")
+        .arg("--peer-port")
+        .arg(peer_port.to_string())
+        .env("RUST_LOG", "debug")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("Failed to spawn overlay process")
 }
 
-/// Wait for socket to be ready
-fn wait_for_socket(path: &str, timeout_ms: u64) -> bool {
+/// Wait for socket to be ready and return the connected stream
+fn wait_for_socket(path: &str, timeout_ms: u64) -> Option<UnixStream> {
     let start = std::time::Instant::now();
     while start.elapsed().as_millis() < timeout_ms as u128 {
         if std::path::Path::new(path).exists() {
             // Try connecting
-            if UnixStream::connect(path).is_ok() {
-                return true;
+            if let Ok(stream) = UnixStream::connect(path) {
+                return Some(stream);
             }
         }
         thread::sleep(Duration::from_millis(50));
     }
-    false
+    None
 }
 
 #[cfg(test)]
@@ -122,18 +124,15 @@ mod tests {
         // Spawn overlay
         let mut child = spawn_overlay(&socket_path, 11700);
         
-        // Wait for socket
-        assert!(wait_for_socket(&socket_path, 5000), "Socket should be ready");
-        
-        // Connect
-        let mut stream = UnixStream::connect(&socket_path).expect("Should connect");
+        // Wait for socket and connect (binary only accepts one connection)
+        let mut stream = wait_for_socket(&socket_path, 5000).expect("Socket should be ready");
         stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         
         // Send shutdown
         ipc::send_message(&mut stream, ipc::SHUTDOWN, &[]).expect("Should send shutdown");
         
         // Wait for process to exit
-        let status = child.wait().expect("Should wait");
+        let _status = child.wait().expect("Should wait");
         // Process exits with 0 on shutdown
         
         // Cleanup
@@ -150,10 +149,7 @@ mod tests {
         
         // Spawn overlay
         let mut child = spawn_overlay(&socket_path, 11701);
-        assert!(wait_for_socket(&socket_path, 5000), "Socket should be ready");
-        
-        // Connect
-        let mut stream = UnixStream::connect(&socket_path).expect("Should connect");
+        let mut stream = wait_for_socket(&socket_path, 5000).expect("Socket should be ready");
         stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         
         // Send SCP broadcast (overlay should accept it even with no peers)
@@ -184,12 +180,8 @@ mod tests {
         let mut child_a = spawn_overlay(&socket_a, 11710);
         let mut child_b = spawn_overlay(&socket_b, 11711);
         
-        assert!(wait_for_socket(&socket_a, 5000), "Socket A should be ready");
-        assert!(wait_for_socket(&socket_b, 5000), "Socket B should be ready");
-        
-        // Connect to both
-        let mut stream_a = UnixStream::connect(&socket_a).expect("Should connect to A");
-        let mut stream_b = UnixStream::connect(&socket_b).expect("Should connect to B");
+        let mut stream_a = wait_for_socket(&socket_a, 5000).expect("Socket A should be ready");
+        let mut stream_b = wait_for_socket(&socket_b, 5000).expect("Socket B should be ready");
         stream_a.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         stream_b.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         stream_b.set_nonblocking(true).unwrap(); // Non-blocking for recv check

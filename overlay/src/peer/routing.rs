@@ -8,9 +8,9 @@
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
-use crate::ipc::{Message, MessageType, CoreSender};
+use crate::ipc::CoreSender;
 use crate::scp::ScpRelayHandle;
-use super::connection::{PeerEvent, PeerMessage, PeerId};
+use super::connection::{PeerEvent, PeerMessage};
 
 /// Message types we expect from peers (simplified for now).
 /// In reality, these would be parsed from XDR StellarMessage.
@@ -250,7 +250,7 @@ mod tests {
     
     #[tokio::test]
     async fn test_router_scp_message_routing() {
-        use crate::scp::{ScpRelay, ScpCommand};
+        use crate::scp::ScpCommand;
         use tokio::sync::mpsc::unbounded_channel;
         
         // Set up SCP relay

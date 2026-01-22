@@ -261,6 +261,10 @@ impl App {
                     
                     info!("Building TX set with {} transactions", txs.len());
                     
+                    // Sort TXs by hash (required by C++ validation)
+                    let mut txs = txs;
+                    txs.sort_by(|a, b| a.0.cmp(&b.0));
+                    
                     // Extract TX hashes and data separately
                     let tx_hashes: Vec<[u8; 32]> = txs.iter().map(|(h, _)| *h).collect();
                     let tx_data: Vec<Vec<u8>> = txs.into_iter().map(|(_, d)| d).collect();

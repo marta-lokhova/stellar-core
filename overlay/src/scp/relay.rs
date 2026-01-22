@@ -3,6 +3,8 @@
 //! Handles forwarding SCP envelopes between Core and network peers.
 //! This is the latency-critical path - never blocks, never drops.
 
+#![allow(dead_code)]
+
 use blake2::{Blake2b, Digest};
 use blake2::digest::consts::U32;
 use std::collections::HashMap;

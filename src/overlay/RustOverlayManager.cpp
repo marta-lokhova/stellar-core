@@ -409,6 +409,8 @@ RustOverlayManager::broadcastTransaction(TransactionEnvelope const& tx,
     {
         CLOG_DEBUG(Overlay, "Forwarding TX to Rust overlay: fee={}, numOps={}",
                    fee, numOps);
+        // Delegate to submitTransaction directly - broadcastMessage would
+        // re-extract fee/numOps which we already have
         mOverlayIPC->submitTransaction(tx, fee, numOps);
     }
 }

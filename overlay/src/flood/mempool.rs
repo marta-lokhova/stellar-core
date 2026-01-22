@@ -245,7 +245,8 @@ impl Mempool {
 
 /// Compute transaction hash from raw bytes.
 pub fn compute_tx_hash(data: &[u8]) -> TxHash {
-    let mut hasher = Blake2b::<U32>::new();
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
     hasher.update(data);
     let result = hasher.finalize();
     let mut hash = [0u8; 32];
@@ -293,7 +294,7 @@ mod tests {
     fn test_dedup() {
         let mut mempool = Mempool::new(100, Duration::from_secs(300));
         let tx = make_tx(1000, 1, 1, 1);
-        let hash = tx.hash;
+        let _hash = tx.hash;
         
         assert!(mempool.insert(tx.clone()));
         assert!(!mempool.insert(tx)); // duplicate

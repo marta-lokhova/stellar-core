@@ -2,6 +2,8 @@
 //!
 //! Handles TCP connections to peers, spawning read/write tasks for each.
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
@@ -338,7 +340,7 @@ mod tests {
     #[tokio::test]
     async fn test_peer_connect_disconnect() {
         // Start peer manager
-        let (cmd_tx, cmd_rx) = mpsc::channel(10);
+        let (_cmd_tx, cmd_rx) = mpsc::channel(10);
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         
         let manager = PeerManager::new(cmd_rx, event_tx);
@@ -378,7 +380,7 @@ mod tests {
     #[tokio::test]
     async fn test_peer_send_receive() {
         // Start peer manager
-        let (cmd_tx, cmd_rx) = mpsc::channel(10);
+        let (_cmd_tx, cmd_rx) = mpsc::channel(10);
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         
         let manager = PeerManager::new(cmd_rx, event_tx);
@@ -484,7 +486,7 @@ mod tests {
     #[tokio::test]
     async fn test_peer_disconnect_event() {
         // Start peer manager
-        let (cmd_tx, cmd_rx) = mpsc::channel(10);
+        let (_cmd_tx, cmd_rx) = mpsc::channel(10);
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         
         let manager = PeerManager::new(cmd_rx, event_tx);

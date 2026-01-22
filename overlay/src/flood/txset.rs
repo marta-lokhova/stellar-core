@@ -228,6 +228,7 @@ mod tests {
             hash: [1u8; 32],
             xdr: vec![1, 2, 3],
             ledger_seq: 100,
+            tx_hashes: vec![],
         };
         
         cache.insert(tx_set.clone());
@@ -245,11 +246,13 @@ mod tests {
             hash: [1u8; 32],
             xdr: vec![],
             ledger_seq: 100,
+            tx_hashes: vec![],
         });
         cache.insert(CachedTxSet {
             hash: [2u8; 32],
             xdr: vec![],
             ledger_seq: 200,
+            tx_hashes: vec![],
         });
         
         cache.evict_before(150);

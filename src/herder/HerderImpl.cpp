@@ -1497,25 +1497,71 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     ApplicableTxSetFrameConstPtr applicableProposedSet;
     Hash txSetHash;
     
-    // Get TX set from overlay (RustOverlayManager provides this)
+    // Try to get TX set from overlay (RustOverlayManager provides this)
     auto overlayTxSet = mApp.getOverlayManager().getTxSetForNomination(
         lcl.header.ledgerSeq + 1, lcl.hash);
-    releaseAssert(overlayTxSet);
-
-    // Got TX set from overlay - use it directly
-    proposedSet = overlayTxSet->first;
-    txSetHash = overlayTxSet->second;
     
-    // Prepare for apply to validate and get applicable frame
-    applicableProposedSet = proposedSet->prepareForApply(mApp, lcl.header);
-    if (!applicableProposedSet)
+    if (overlayTxSet)
     {
-        CLOG_WARNING(Herder, "TX set from overlay failed validation");
-        return;
+        // Got TX set from overlay - use it directly
+        proposedSet = overlayTxSet->first;
+        txSetHash = overlayTxSet->second;
+        
+        // Prepare for apply to validate and get applicable frame
+        applicableProposedSet = proposedSet->prepareForApply(mApp, lcl.header);
+        if (!applicableProposedSet)
+        {
+            CLOG_WARNING(Herder, "TX set from overlay failed validation");
+            return;
+        }
+        
+        CLOG_INFO(Herder, "Using TX set from overlay: hash={}",
+                    binToHex(txSetHash).substr(0, 8));
     }
-    
-    CLOG_INFO(Herder, "Using TX set from overlay: hash={}",
-                binToHex(txSetHash).substr(0, 8));
+    else
+    {
+        // Fallback: build TX set locally from transaction queue
+        // (standalone mode or OverlayManagerImpl)
+        PerPhaseTransactionList txPhases;
+        txPhases.emplace_back(mTransactionQueue.getTransactions(lcl.header));
+        
+        if (protocolVersionStartsFrom(lcl.header.ledgerVersion,
+                                      SOROBAN_PROTOCOL_VERSION))
+        {
+            releaseAssert(mSorobanTransactionQueue);
+            txPhases.emplace_back(
+                mSorobanTransactionQueue->getTransactions(lcl.header));
+        }
+        
+        PerPhaseTransactionList invalidTxPhases;
+        invalidTxPhases.resize(txPhases.size());
+        
+        std::tie(proposedSet, applicableProposedSet) =
+            makeTxSetFromTransactions(txPhases, mApp, lowerBoundCloseTimeOffset,
+                                      upperBoundCloseTimeOffset, invalidTxPhases);
+        
+        if (!applicableProposedSet)
+        {
+            releaseAssert(!mApp.getConfig().FORCE_SCP);
+            return;
+        }
+        
+        // Ban invalid transactions
+        if (protocolVersionStartsFrom(lcl.header.ledgerVersion,
+                                      SOROBAN_PROTOCOL_VERSION))
+        {
+            releaseAssert(mSorobanTransactionQueue);
+            mSorobanTransactionQueue->ban(
+                invalidTxPhases[static_cast<size_t>(TxSetPhase::SOROBAN)]);
+        }
+        mTransactionQueue.ban(
+            invalidTxPhases[static_cast<size_t>(TxSetPhase::CLASSIC)]);
+        
+        txSetHash = proposedSet->getContentsHash();
+        
+        CLOG_INFO(Herder, "Built TX set locally: hash={}",
+                    binToHex(txSetHash).substr(0, 8));
+    }
 
     // New proposed tx set must be valid, so we explicitly populate tx set
     // validity cache so SCP can reuse the result.

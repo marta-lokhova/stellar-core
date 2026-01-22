@@ -8,10 +8,7 @@ pub mod framing;
 pub mod routing;
 mod store;
 
-pub use auth::{NoiseKeypair, NoiseSession, handshake_initiator, handshake_responder};
-pub use connection::{PeerManager, PeerManagerHandle, PeerCommand, PeerEvent, PeerMessage, PeerId};
-pub use framing::{read_message, write_message, MAX_MESSAGE_SIZE};
-pub use routing::{MessageRouter, PeerMessageType, classify_message};
-pub use store::{PeerStore, PeerInfo};
+pub use auth::NoiseKeypair;
+pub use connection::{PeerManagerHandle, PeerId};
 
 // TODO: Connection maintenance loop

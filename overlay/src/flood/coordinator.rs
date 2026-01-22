@@ -5,7 +5,9 @@
 //! - Advert hash to remaining peers (bandwidth efficient)
 //! - Respond to demands with full TX
 
-use std::collections::{HashMap, HashSet, VecDeque};
+#![allow(dead_code)]
+
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use rand::seq::SliceRandom;
 use tokio::sync::mpsc;
@@ -258,7 +260,7 @@ impl FloodCoordinator {
     /// Handle demands from a peer.
     async fn handle_demands(&mut self, hashes: Vec<TxHash>, from_peer: PeerId) {
         for hash in hashes {
-            if let Some(tx) = self.mempool.get(&hash) {
+            if let Some(_tx) = self.mempool.get(&hash) {
                 // Send full TX to peer
                 trace!("Sending demanded TX {:?} to peer {}", &hash[..4], from_peer);
                 // TODO: Actually send TX message
@@ -401,7 +403,7 @@ mod tests {
     
     #[tokio::test]
     async fn test_flood_coordinator_new_tx() {
-        let (cmd_tx, cmd_rx) = mpsc::channel(100);
+        let (_cmd_tx, cmd_rx) = mpsc::channel(100);
         let (peer_cmd_tx, _peer_cmd_rx) = mpsc::channel(100);
         let peer_handle = PeerManagerHandle::new(peer_cmd_tx);
         
@@ -436,7 +438,7 @@ mod tests {
     
     #[tokio::test]
     async fn test_flood_coordinator_adverts() {
-        let (cmd_tx, cmd_rx) = mpsc::channel(100);
+        let (_cmd_tx, cmd_rx) = mpsc::channel(100);
         let (peer_cmd_tx, _peer_cmd_rx) = mpsc::channel(100);
         let peer_handle = PeerManagerHandle::new(peer_cmd_tx);
         
@@ -458,7 +460,7 @@ mod tests {
     
     #[tokio::test]
     async fn test_flood_coordinator_get_top_txs() {
-        let (cmd_tx, cmd_rx) = mpsc::channel(100);
+        let (_cmd_tx, cmd_rx) = mpsc::channel(100);
         let (peer_cmd_tx, _peer_cmd_rx) = mpsc::channel(100);
         let peer_handle = PeerManagerHandle::new(peer_cmd_tx);
         

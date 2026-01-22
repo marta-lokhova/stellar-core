@@ -3,17 +3,14 @@
 //! These tests verify that multiple overlays can properly communicate,
 //! including authentication, SCP message relay, and TX flooding.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 use tokio::time::timeout;
 
-use stellar_overlay::integrated::{Overlay, OverlayHandle, OverlayEvent, CoreCommand};
+use stellar_overlay::integrated::{Overlay, OverlayHandle, OverlayEvent};
 use stellar_overlay::peer::NoiseKeypair;
-use stellar_overlay::flood::compute_tx_hash;
 
 /// Helper to start an overlay and return handles.
 async fn start_overlay(name: &str) -> (OverlayHandle, mpsc::UnboundedReceiver<OverlayEvent>, SocketAddr, [u8; 32]) {
@@ -87,7 +84,7 @@ mod tests {
     #[tokio::test]
     async fn test_two_overlays_connect_with_noise() {
         // Start Overlay A
-        let (handle_a, mut events_a, addr_a, key_a) = start_overlay("A").await;
+        let (_handle_a, mut events_a, addr_a, key_a) = start_overlay("A").await;
         
         // Start Overlay B
         let (handle_b, mut events_b, _addr_b, key_b) = start_overlay("B").await;
@@ -208,12 +205,12 @@ mod tests {
         // Give time for mempool insertion
         tokio::time::sleep(Duration::from_millis(100)).await;
         
-        // Get top 2 TXs
+        // Get top 2 TXs - returns (hash, data) tuples
         let top_txs = handle_a.get_top_txs(2).await;
         
         assert_eq!(top_txs.len(), 2, "Should return 2 TXs");
-        assert_eq!(top_txs[0], b"tx_high_fee", "First TX should be highest fee");
-        assert_eq!(top_txs[1], b"tx_mid_fee", "Second TX should be second highest fee");
+        assert_eq!(top_txs[0].1, b"tx_high_fee", "First TX should be highest fee");
+        assert_eq!(top_txs[1].1, b"tx_mid_fee", "Second TX should be second highest fee");
         
         println!("✓ TX fee ordering works (500 > 200 > 100)");
     }
@@ -223,7 +220,7 @@ mod tests {
     async fn test_tx_flooding_push_k() {
         // Start 3 overlays
         let (handle_a, mut events_a, addr_a, _) = start_overlay("A").await;
-        let (handle_b, mut events_b, addr_b, _) = start_overlay("B").await;
+        let (handle_b, mut events_b, _addr_b, _) = start_overlay("B").await;
         let (handle_c, mut events_c, _addr_c, _) = start_overlay("C").await;
         
         // Connect: B->A, C->A
@@ -244,13 +241,13 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(300)).await;
         
         // Both B and C should have the TX in their mempools
-        // We verify by asking them for top TXs
+        // We verify by asking them for top TXs - returns (hash, data) tuples
         let top_b = handle_b.get_top_txs(10).await;
         let top_c = handle_c.get_top_txs(10).await;
         
         // At least one of them should have the TX (push-k with k=2 means both get it)
-        let b_has_tx = top_b.iter().any(|tx| tx == &tx_data);
-        let c_has_tx = top_c.iter().any(|tx| tx == &tx_data);
+        let b_has_tx = top_b.iter().any(|(_, data)| data == &tx_data);
+        let c_has_tx = top_c.iter().any(|(_, data)| data == &tx_data);
         
         assert!(b_has_tx || c_has_tx, "At least one peer should have the TX");
         
@@ -286,7 +283,7 @@ mod tests {
         
         // A's mempool should have only 1 copy
         let top_a = handle_a.get_top_txs(10).await;
-        let count_a = top_a.iter().filter(|tx| *tx == &tx_data).count();
+        let count_a = top_a.iter().filter(|(_, data)| data == &tx_data).count();
         
         assert_eq!(count_a, 1, "A's mempool should have exactly 1 copy of the TX");
         

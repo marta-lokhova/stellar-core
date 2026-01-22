@@ -225,7 +225,7 @@ async fn recv_handshake_msg<S: AsyncReadExt + Unpin>(stream: &mut S) -> io::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{duplex, DuplexStream};
+    use tokio::io::duplex;
     use tokio::net::{TcpListener, TcpStream};
     
     #[test]

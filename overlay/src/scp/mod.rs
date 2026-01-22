@@ -2,4 +2,4 @@
 
 mod relay;
 
-pub use relay::{ScpRelay, ScpRelayHandle, ScpCommand, ScpEnvelope, ScpHash, PeerId};
+pub use relay::{ScpRelayHandle, ScpCommand};
