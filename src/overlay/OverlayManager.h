@@ -6,6 +6,7 @@
 
 #include "crypto/BLAKE2.h"
 #include "overlay/Peer.h"
+#include <optional>
 
 /**
  * OverlayManager maintains a virtual broadcast network, consisting of a set of
@@ -50,7 +51,10 @@ class PeerAuth;
 class PeerBareAddress;
 class PeerManager;
 class SurveyManager;
+class TxSetXDRFrame;
 struct StellarMessage;
+
+using TxSetXDRFrameConstPtr = std::shared_ptr<TxSetXDRFrame const>;
 
 class OverlayManager
 {
@@ -104,6 +108,15 @@ class OverlayManager
     // Process incoming transaction demand; this might trigger sending back a
     // transaction
     virtual void recvTxDemand(FloodDemand const& dmd, Peer::pointer peer) = 0;
+
+    // Broadcast a transaction to peers (for RustOverlayManager, sends via IPC)
+    // Default implementation does nothing (OverlayManagerImpl uses FloodGate)
+    virtual void
+    broadcastTransaction(TransactionEnvelope const& tx, int64_t fee,
+                         uint32_t numOps)
+    {
+        // Default: no-op (OverlayManagerImpl handles via FloodGate)
+    }
 
     // Return a list of random peers from the set of authenticated peers.
     virtual std::vector<Peer::pointer> getRandomAuthenticatedPeers() = 0;
@@ -215,5 +228,26 @@ class OverlayManager
     // Get a snapshot of ledger state for use by the overlay thread only. Caller
     // is responsible for updating the snapshot as needed.
     virtual SearchableSnapshotConstPtr& getOverlayThreadSnapshot() = 0;
+    
+    // Request a TX set from the overlay for nomination.
+    // For RustOverlayManager: asks overlay to build TX set from its mempool.
+    // For OverlayManagerImpl: returns nullopt (use local TransactionQueue).
+    // 
+    // Returns pair of (TxSetXDRFrameConstPtr, Hash) if overlay provides TX set,
+    // or nullopt if caller should build TX set locally.
+    virtual std::optional<std::pair<TxSetXDRFrameConstPtr, Hash>> 
+    getTxSetForNomination(uint32_t ledgerSeq, Hash const& prevLedgerHash)
+    {
+        // Default: use local transaction queue (OverlayManagerImpl behavior)
+        return std::nullopt;
+    }
+    
+    // Notify overlay that a TX set was externalized.
+    // For RustOverlayManager: clears those TXs from its mempool.
+    // Default: no-op.
+    virtual void notifyTxSetExternalized(Hash const& txSetHash)
+    {
+        // Default: no-op (OverlayManagerImpl doesn't need this)
+    }
 };
 }

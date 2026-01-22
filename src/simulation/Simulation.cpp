@@ -125,6 +125,7 @@ Simulation::addNode(SecretKey nodeKey, QuorumSetSpec qSet, Config const* cfg2,
     if (mMode == OVER_TCP)
     {
         cfg->RUN_STANDALONE = false;
+        cfg->USE_RUST_OVERLAY = true;  // Enable Rust overlay for TCP mode
     }
 
     auto clock =
@@ -360,8 +361,12 @@ void
 Simulation::stopOverlayTick()
 {
     auto cancel = [](Application::pointer app) {
-        auto& ov = static_cast<OverlayManagerImpl&>(app->getOverlayManager());
-        ov.mTimer.cancel();
+        // Only cancel timer for OverlayManagerImpl - RustOverlayManager doesn't have one
+        auto* impl = dynamic_cast<OverlayManagerImpl*>(&app->getOverlayManager());
+        if (impl)
+        {
+            impl->mTimer.cancel();
+        }
     };
     cancel(mIdleApp);
     for (auto& n : mNodes)

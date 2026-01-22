@@ -1,0 +1,44 @@
+[package]
+name = "stellar-overlay"
+version = "0.1.0"
+edition = "2021"
+authors = ["Stellar Development Foundation"]
+description = "Process-isolated overlay for stellar-core"
+license = "Apache-2.0"
+
+[[bin]]
+name = "stellar-overlay"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.36", features = ["full", "signal"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Crypto (for Noise protocol - Phase 4)
+snow = "0.9"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Hashing
+blake2 = "0.10"
+digest = "0.10"
+sha2 = "0.10"
+
+# Random
+rand = "0.8"
+
+# XDR for Stellar types (will use stellar-xdr crate)
+# stellar-xdr = { version = "21", features = ["std"] }
+
+[dev-dependencies]
+tempfile = "3.10"
+
+[features]
+default = []

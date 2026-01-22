@@ -3,6 +3,7 @@
 // of this distribution or at http://www.apache.org/licenses/LICENSE-2.0
 
 #include "overlay/OverlayManagerImpl.h"
+#include "overlay/RustOverlayManager.h"
 #include "crypto/Hex.h"
 #include "crypto/SecretKey.h"
 #include "crypto/ShortHash.h"
@@ -298,6 +299,13 @@ OverlayManagerImpl::PeersList::shutdown()
 std::unique_ptr<OverlayManager>
 OverlayManager::create(Application& app)
 {
+    auto const& cfg = app.getConfig();
+    
+    // Use Rust overlay only when explicitly enabled
+    if (cfg.USE_RUST_OVERLAY && !cfg.RUN_STANDALONE)
+    {
+        return std::make_unique<RustOverlayManager>(app);
+    }
     return std::make_unique<OverlayManagerImpl>(app);
 }
 

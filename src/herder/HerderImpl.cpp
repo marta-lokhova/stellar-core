@@ -52,6 +52,7 @@
 #include <algorithm>
 #include <ctime>
 #include <fmt/format.h>
+#include <unistd.h>
 
 using namespace std;
 namespace stellar
@@ -110,10 +111,14 @@ HerderImpl::HerderImpl(Application& app)
 
     mPendingEnvelopes.addSCPQuorumSet(ln->getQuorumSetHash(),
                                       ln->getQuorumSet());
+    
+    // Note: Rust overlay is now managed by RustOverlayManager (via OverlayManager::create)
+    // SCP broadcasts go through getOverlayManager().broadcastMessage()
 }
 
 HerderImpl::~HerderImpl()
 {
+    // OverlayIPC is now managed by RustOverlayManager
 }
 
 Herder::State
@@ -271,6 +276,7 @@ HerderImpl::newSlotExternalized(bool synchronous, StellarValue const& value)
 void
 HerderImpl::shutdown()
 {
+    // OverlayManager shutdown handles Rust overlay cleanup
     mTrackingTimer.cancel();
     mOutOfSyncTimer.cancel();
     mTriggerTimer.cancel();
@@ -304,6 +310,9 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
                      "validated by validator",
                      slotIndex, hexAbbrev(value.txSetHash));
     }
+
+    // Notify overlay to clear TXs from mempool (for RustOverlayManager)
+    mApp.getOverlayManager().notifyTxSetExternalized(value.txSetHash);
 
     TxSetXDRFrameConstPtr externalizedSet =
         mPendingEnvelopes.getTxSet(value.txSetHash);
@@ -547,14 +556,16 @@ HerderImpl::broadcast(SCPEnvelope const& e)
     ZoneScoped;
     if (!mApp.getConfig().MANUAL_CLOSE)
     {
-        auto m = std::make_shared<StellarMessage>();
-        m->type(SCP_MESSAGE);
-        m->envelope() = e;
-
         CLOG_DEBUG(Herder, "broadcast  s:{} i:{}", e.statement.pledges.type(),
                    e.statement.slotIndex);
 
         mSCPMetrics.mEnvelopeEmit.Mark();
+        
+        // Route through overlay (RustOverlayManager handles IPC to Rust overlay,
+        // OverlayManagerImpl handles built-in overlay in standalone mode)
+        auto m = std::make_shared<StellarMessage>();
+        m->type(SCP_MESSAGE);
+        m->envelope() = e;
         mApp.getOverlayManager().broadcastMessage(m);
     }
 }
@@ -655,6 +666,12 @@ HerderImpl::recvTransaction(TransactionFrameBasePtr tx, bool submittedFromSelf
         CLOG_TRACE(Herder, "recv transaction {} for {}",
                    hexAbbrev(tx->getFullHash()),
                    KeyUtils::toShortString(tx->getSourceID()));
+        
+        // Forward to overlay for flooding
+        // RustOverlayManager will send to Rust overlay via IPC
+        auto const& env = tx->getEnvelope();
+        mApp.getOverlayManager().broadcastTransaction(env, tx->getFullFee(),
+                                                      tx->getNumOperations());
     }
     return result;
 }
@@ -1421,17 +1438,7 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     // Since we are not currently applying, it is safe to use read-only LCL, as
     // it's guaranteed to be up-to-date
     auto lcl = mLedgerManager.getLastClosedLedgerHeader();
-    PerPhaseTransactionList txPhases;
-    txPhases.emplace_back(mTransactionQueue.getTransactions(lcl.header));
-
-    if (protocolVersionStartsFrom(lcl.header.ledgerVersion,
-                                  SOROBAN_PROTOCOL_VERSION))
-    {
-        releaseAssert(mSorobanTransactionQueue);
-        txPhases.emplace_back(
-            mSorobanTransactionQueue->getTransactions(lcl.header));
-    }
-
+    
     // We pick as next close time the current time unless it's before the last
     // close time. We don't know how much time it will take to reach consensus
     // so this is the most appropriate value to use as closeTime.
@@ -1486,30 +1493,34 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     upperBoundCloseTimeOffset = nextCloseTime - lcl.header.scpValue.closeTime;
     lowerBoundCloseTimeOffset = upperBoundCloseTimeOffset;
 
-    PerPhaseTransactionList invalidTxPhases;
-    invalidTxPhases.resize(txPhases.size());
+    TxSetXDRFrameConstPtr proposedSet;
+    ApplicableTxSetFrameConstPtr applicableProposedSet;
+    Hash txSetHash;
+    
+    // Get TX set from overlay (RustOverlayManager provides this)
+    auto overlayTxSet = mApp.getOverlayManager().getTxSetForNomination(
+        lcl.header.ledgerSeq + 1, lcl.hash);
+    releaseAssert(overlayTxSet);
 
-    auto [proposedSet, applicableProposedSet] =
-        makeTxSetFromTransactions(txPhases, mApp, lowerBoundCloseTimeOffset,
-                                  upperBoundCloseTimeOffset, invalidTxPhases);
+    // Got TX set from overlay - use it directly
+    proposedSet = overlayTxSet->first;
+    txSetHash = overlayTxSet->second;
+    
+    // Prepare for apply to validate and get applicable frame
+    applicableProposedSet = proposedSet->prepareForApply(mApp, lcl.header);
+    if (!applicableProposedSet)
+    {
+        CLOG_WARNING(Herder, "TX set from overlay failed validation");
+        return;
+    }
+    
+    CLOG_INFO(Herder, "Using TX set from overlay: hash={}",
+                binToHex(txSetHash).substr(0, 8));
 
     // New proposed tx set must be valid, so we explicitly populate tx set
     // validity cache so SCP can reuse the result.
     mHerderSCPDriver.cacheValidTxSet(*applicableProposedSet, lcl,
                                      upperBoundCloseTimeOffset);
-
-    if (protocolVersionStartsFrom(lcl.header.ledgerVersion,
-                                  SOROBAN_PROTOCOL_VERSION))
-    {
-        releaseAssert(mSorobanTransactionQueue);
-        mSorobanTransactionQueue->ban(
-            invalidTxPhases[static_cast<size_t>(TxSetPhase::SOROBAN)]);
-    }
-
-    mTransactionQueue.ban(
-        invalidTxPhases[static_cast<size_t>(TxSetPhase::CLASSIC)]);
-
-    auto txSetHash = proposedSet->getContentsHash();
 
     // Inform the item fetcher so queries from other peers about his txSet
     // can be answered. Note this can trigger SCP callbacks, externalize, etc
@@ -2354,6 +2365,9 @@ HerderImpl::start()
     restoreUpgrades();
     startTxSetGCTimer();
     startCheckForDeadNodesInterval();
+    
+    // RustOverlayManager is started automatically in OverlayManager::start()
+    // which is called by ApplicationImpl::start() before Herder::start()
 }
 
 void

@@ -236,6 +236,10 @@ Config::Config() : NODE_SEED(SecretKey::random())
     BUCKET_DIR_PATH = "buckets";
     PATH_TO_PROTOCOL_23_CORRUPTION_FILE = "";
 
+    // Rust overlay defaults
+    OVERLAY_BINARY_PATH = "target/release/stellar-overlay";
+    OVERLAY_SOCKET_PATH = ""; // Generated automatically if empty
+
     LOG_COLOR = false;
 
     TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION = LEDGER_PROTOCOL_VERSION;
@@ -1255,6 +1259,12 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                 {"LOG_COLOR", [&]() { LOG_COLOR = readBool(item); }},
                 {"BUCKET_DIR_PATH",
                  [&]() { BUCKET_DIR_PATH = readString(item); }},
+                {"USE_RUST_OVERLAY",
+                 [&]() { USE_RUST_OVERLAY = readBool(item); }},
+                {"OVERLAY_BINARY_PATH",
+                 [&]() { OVERLAY_BINARY_PATH = readString(item); }},
+                {"OVERLAY_SOCKET_PATH",
+                 [&]() { OVERLAY_SOCKET_PATH = readString(item); }},
                 {"FILTERED_SOROBAN_KEYS_PATH",
                  [&]() {
                      LOG_WARNING(DEFAULT_LOG,
