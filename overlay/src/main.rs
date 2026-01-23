@@ -238,8 +238,8 @@ impl App {
                     let (reply_tx, mut reply_rx) = mpsc::channel(1);
                     
                     // TODO: Make max_ops configurable from network config
-                    // For now use 1000 as a reasonable default
-                    let max_ops = 1000usize;
+                    // Use 10000 as max (should be passed from Core's config)
+                    let max_ops = 10000usize;
                     
                     let _ = overlay_handle.commands.send(CoreCommand::GetTopTxs {
                         count: max_ops,
@@ -261,7 +261,7 @@ impl App {
                     
                     info!("Building TX set with {} transactions", txs.len());
                     
-                    // Sort TXs by hash (required by C++ validation)
+                    // Sort TXs by hash for consensus determinism (matches C++ TxSetUtils::sortTxsInHashOrder)
                     let mut txs = txs;
                     txs.sort_by(|a, b| a.0.cmp(&b.0));
                     
@@ -280,11 +280,17 @@ impl App {
                         let mut cache = tx_set_cache.write().await;
                         cache.insert(CachedTxSet {
                             hash,
-                            xdr,
+                            xdr: xdr.clone(),
                             ledger_seq,
                             tx_hashes,
                         });
                     }
+                    
+                    // Also cache in the overlay so it can serve GET_TX_SET requests from peers
+                    let _ = overlay_handle.commands.send(CoreCommand::CacheTxSet {
+                        hash,
+                        xdr: xdr.clone(),
+                    });
                     
                     // Send hash back to Core
                     if let Err(e) = core_sender.send_nomination_hash(hash) {
@@ -294,7 +300,7 @@ impl App {
             }
             
             MessageType::RequestTxSet => {
-                // Request TX set by hash
+                // Request TX set by hash - check local cache first, then fetch from peers
                 if msg.payload.len() < 32 {
                     warn!("RequestTxSet payload too short");
                     return;
@@ -305,16 +311,60 @@ impl App {
                 
                 let tx_set_cache = Arc::clone(&self.tx_set_cache);
                 let core_sender = self.core_ipc.sender.clone();
+                let overlay_handle = self.overlay_handle.clone();
                 
                 tokio::spawn(async move {
-                    let cache = tx_set_cache.read().await;
-                    if let Some(cached) = cache.get(&hash) {
-                        info!("Sending TX set for hash {:?} ({} bytes)", &hash[..4], cached.xdr.len());
-                        if let Err(e) = core_sender.send_tx_set_available(hash, cached.xdr.clone()) {
-                            error!("Failed to send TX set: {}", e);
+                    // First check local cache
+                    {
+                        let cache = tx_set_cache.read().await;
+                        if let Some(cached) = cache.get(&hash) {
+                            info!("Sending TX set for hash {:?} ({} bytes) from local cache", &hash[..4], cached.xdr.len());
+                            if let Err(e) = core_sender.send_tx_set_available(hash, cached.xdr.clone()) {
+                                error!("Failed to send TX set: {}", e);
+                            }
+                            return;
                         }
-                    } else {
-                        warn!("TX set not found for hash {:?}", &hash[..4]);
+                    }
+                    
+                    // Not in local cache - request from peers
+                    info!("TX set {:?} not in local cache, requesting from peers", &hash[..4]);
+                    
+                    let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(1);
+                    let _ = overlay_handle.commands.send(CoreCommand::FetchTxSet { 
+                        hash, 
+                        reply: reply_tx 
+                    });
+                    
+                    // Wait for response with timeout
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(5),
+                        reply_rx.recv()
+                    ).await {
+                        Ok(Some(Some(xdr))) => {
+                            info!("Got TX set {:?} from peer ({} bytes)", &hash[..4], xdr.len());
+                            // Cache it
+                            {
+                                let mut cache = tx_set_cache.write().await;
+                                cache.insert(CachedTxSet {
+                                    hash,
+                                    xdr: xdr.clone(),
+                                    ledger_seq: 0,
+                                    tx_hashes: vec![],
+                                });
+                            }
+                            if let Err(e) = core_sender.send_tx_set_available(hash, xdr) {
+                                error!("Failed to send TX set: {}", e);
+                            }
+                        }
+                        Ok(Some(None)) => {
+                            warn!("TX set {:?} not found on any peer", &hash[..4]);
+                        }
+                        Ok(None) => {
+                            warn!("Channel closed while fetching TX set {:?}", &hash[..4]);
+                        }
+                        Err(_) => {
+                            warn!("Timeout fetching TX set {:?} from peers", &hash[..4]);
+                        }
                     }
                 });
             }

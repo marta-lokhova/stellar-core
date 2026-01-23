@@ -131,9 +131,16 @@ RustOverlayManager::broadcastMessage(std::shared_ptr<StellarMessage const> msg,
     }
     else if (msg->type() == TRANSACTION)
     {
-        // TODO: Implement TX broadcast via IPC
-        CLOG_WARNING(Overlay, "TX broadcast via RustOverlay not yet implemented");
-        return false;
+        auto const& env = msg->transaction();
+        // Extract fee and numOps from envelope
+        int64_t fee = env.type() == ENVELOPE_TYPE_TX_V0 
+                      ? env.v0().tx.fee 
+                      : env.v1().tx.fee;
+        uint32_t numOps = env.type() == ENVELOPE_TYPE_TX_V0
+                          ? static_cast<uint32_t>(env.v0().tx.operations.size())
+                          : static_cast<uint32_t>(env.v1().tx.operations.size());
+        mOverlayIPC->submitTransaction(env, fee, numOps);
+        return true;
     }
     
     // Other message types not supported

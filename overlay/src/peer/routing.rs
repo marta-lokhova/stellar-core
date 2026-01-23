@@ -28,6 +28,10 @@ pub enum PeerMessageType {
     Peers,
     /// Authentication/hello (Phase 4)
     Auth,
+    /// GET_TX_SET request
+    GetTxSet,
+    /// TX_SET response
+    TxSet,
     /// Unknown/other
     Unknown,
 }
@@ -51,8 +55,8 @@ pub fn classify_message(data: &[u8]) -> PeerMessageType {
         2 => PeerMessageType::Auth,           // DONT_HAVE
         3 => PeerMessageType::Peers,          // GET_PEERS
         4 => PeerMessageType::Peers,          // PEERS
-        5 => PeerMessageType::Transaction,    // GET_TX_SET
-        6 => PeerMessageType::Transaction,    // TX_SET
+        5 => PeerMessageType::GetTxSet,       // GET_TX_SET
+        6 => PeerMessageType::TxSet,          // TX_SET
         7 => PeerMessageType::Transaction,    // TRANSACTION
         8 => PeerMessageType::Transaction,    // GET_SCP_QUORUM_SET
         9 => PeerMessageType::Scp,            // SCP_QUORUM_SET
@@ -125,8 +129,8 @@ impl MessageRouter {
         trace!("Routing {:?} from peer {}", msg_type, msg.peer_id);
         
         match msg_type {
-            PeerMessageType::Scp => {
-                // Forward to SCP relay
+            PeerMessageType::Scp | PeerMessageType::GetTxSet | PeerMessageType::TxSet => {
+                // Forward to SCP relay (TX sets are latency-critical like SCP)
                 if let Err(_) = self.scp_relay.received(msg.peer_id, msg.data) {
                     warn!("Failed to send SCP message to relay");
                 }

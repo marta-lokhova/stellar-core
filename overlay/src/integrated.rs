@@ -74,6 +74,18 @@ pub enum CoreCommand {
     RemoveTxsFromMempool {
         tx_hashes: Vec<[u8; 32]>,
     },
+    
+    /// Fetch a TX set from peers by hash
+    FetchTxSet {
+        hash: [u8; 32],
+        reply: mpsc::Sender<Option<Vec<u8>>>,
+    },
+    
+    /// Cache a locally-built TX set so we can serve it to peers
+    CacheTxSet {
+        hash: [u8; 32],
+        xdr: Vec<u8>,
+    },
 }
 
 /// Events from Overlay to Core
@@ -160,6 +172,12 @@ pub struct Overlay {
     
     /// Pending connections waiting for their pair (by remote public key)
     pending_connections: Arc<RwLock<HashMap<[u8; 32], PendingConnection>>>,
+    
+    /// Pending TX set fetch requests: hash -> channel to send result
+    pending_tx_set_fetches: Arc<RwLock<HashMap<[u8; 32], mpsc::Sender<Option<Vec<u8>>>>>>,
+    
+    /// Local TX set cache (hash -> XDR)
+    local_tx_sets: Arc<RwLock<HashMap<[u8; 32], Vec<u8>>>>,
 }
 
 impl Overlay {
@@ -180,10 +198,12 @@ impl Overlay {
             peers: Arc::new(RwLock::new(HashMap::new())),
             next_peer_id: AtomicU64::new(1),
             scp_broadcast,
-            mempool: Arc::new(RwLock::new(Mempool::new(50000, Duration::from_secs(300)))),
+            mempool: Arc::new(RwLock::new(Mempool::new(100000, Duration::from_secs(300)))),
             seen_scp_hashes: Arc::new(RwLock::new(std::collections::HashSet::new())),
             pending_adverts: Arc::new(RwLock::new(HashMap::new())),
             pending_connections: Arc::new(RwLock::new(HashMap::new())),
+            pending_tx_set_fetches: Arc::new(RwLock::new(HashMap::new())),
+            local_tx_sets: Arc::new(RwLock::new(HashMap::new())),
         }
     }
     
@@ -198,7 +218,7 @@ impl Overlay {
         let peers = Arc::clone(&self.peers);
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(Duration::from_millis(100)).await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
                 flush_adverts(&pending_adverts, &peers).await;
             }
         });
@@ -418,8 +438,8 @@ impl Overlay {
         // Assign peer ID
         let peer_id = self.next_peer_id.fetch_add(1, Ordering::SeqCst);
         
-        // Create channel for sending to this peer (TX messages)
-        let (tx_tx, rx) = mpsc::channel(1000);
+        // Create channel for sending to this peer (TX messages - large buffer for burst)
+        let (tx_tx, rx) = mpsc::channel(50000);
         
         // Store peer
         {
@@ -509,8 +529,8 @@ impl Overlay {
         // Assign peer ID
         let peer_id = self.next_peer_id.fetch_add(1, Ordering::SeqCst);
         
-        // Create TX channel for this peer (bounded, backpressure OK)
-        let (tx_tx, tx_rx) = mpsc::channel(1000);
+        // Create TX channel for this peer (large buffer to handle burst TX flooding)
+        let (tx_tx, tx_rx) = mpsc::channel(50000);
         
         // Store peer state
         {
@@ -538,14 +558,19 @@ impl Overlay {
         let seen_scp = Arc::clone(&self.seen_scp_hashes);
         let scp_broadcast_tx = self.scp_broadcast.clone();
         let pending_adverts = Arc::clone(&self.pending_adverts);
+        let local_tx_sets = Arc::clone(&self.local_tx_sets);
+        let pending_tx_set_fetches = Arc::clone(&self.pending_tx_set_fetches);
         
         // ═══ Spawn SCP tasks (completely isolated from TX) ═══
         
         // SCP_READER: reads from SCP socket, decrypts, dedup, forwards to Core, relays
+        // Also handles GET_TX_SET and TX_SET for TX set fetching
         let scp_session_r = Arc::clone(&scp_session);
         let core_events_scp = core_events.clone();
         let scp_broadcast_relay = scp_broadcast_tx.clone();
         let seen_scp_r = Arc::clone(&seen_scp);
+        let local_tx_sets_r = Arc::clone(&local_tx_sets);
+        let pending_tx_set_fetches_r = Arc::clone(&pending_tx_set_fetches);
         tokio::spawn(async move {
             scp_reader_task(
                 peer_id,
@@ -554,6 +579,8 @@ impl Overlay {
                 core_events_scp,
                 scp_broadcast_relay,
                 seen_scp_r,
+                local_tx_sets_r,
+                pending_tx_set_fetches_r,
             ).await;
         });
         
@@ -666,44 +693,14 @@ impl Overlay {
                     mempool.insert(entry);
                 }
                 
-                // Get peer list for push-k
+                // Pull mode: queue adverts for ALL peers (batched via flush_adverts)
                 let peer_ids: Vec<PeerId> = {
                     self.peers.read().await.keys().copied().collect()
                 };
                 
-                if peer_ids.is_empty() {
-                    return;
-                }
-                
-                // Push to k=2 random peers (for testing with small networks)
-                let k = 2.min(peer_ids.len());
-                use rand::seq::SliceRandom;
-                use rand::SeedableRng;
-                let mut rng = rand::rngs::StdRng::from_entropy();
-                let mut shuffled = peer_ids.clone();
-                shuffled.shuffle(&mut rng);
-                
-                let push_peers = &shuffled[..k];
-                let advert_peers: Vec<PeerId> = shuffled[k..].to_vec();
-                
-                // Create TX message (type 7 = TRANSACTION)
-                let mut tx_msg = vec![0u8; 4 + data.len()];
-                tx_msg[3] = 7; // TRANSACTION discriminant
-                tx_msg[4..].copy_from_slice(&data);
-                
-                // Push to selected peers
-                let peers = self.peers.read().await;
-                for &pid in push_peers {
-                    if let Some(peer) = peers.get(&pid) {
-                        let _ = peer.tx_tx.send(tx_msg.clone()).await;
-                        trace!("Pushed TX {:?} to peer {}", &hash[..4], pid);
-                    }
-                }
-                
-                // Queue adverts for remaining peers
-                if !advert_peers.is_empty() {
+                if !peer_ids.is_empty() {
                     let mut pending = self.pending_adverts.write().await;
-                    pending.entry(hash).or_default().extend(advert_peers);
+                    pending.entry(hash).or_default().extend(peer_ids);
                 }
             }
             
@@ -758,6 +755,56 @@ impl Overlay {
                 }
                 info!("Removed {} TXs from mempool after externalize", count);
             }
+            
+            CoreCommand::FetchTxSet { hash, reply } => {
+                // Fetch TX set from peers via SCP broadcast
+                // TODO: This broadcasts to ALL peers which is inefficient - each peer
+                // may respond with the full ~2MB TX set. Should pick ONE peer and retry
+                // on timeout. Requires per-peer SCP channel (not just broadcast).
+                info!("FetchTxSet requested for hash {:?}", &hash[..4]);
+                
+                // Check if we have any peers
+                let peer_count = self.peers.read().await.len();
+                if peer_count == 0 {
+                    warn!("No peers to fetch TX set {:?} from", &hash[..4]);
+                    let _ = reply.send(None).await;
+                    return;
+                }
+                
+                // Register pending fetch so SCP reader can fulfill it
+                {
+                    let mut pending = self.pending_tx_set_fetches.write().await;
+                    pending.insert(hash, reply);
+                }
+                
+                // Build GET_TX_SET message: type 5 (GET_TX_SET) + 32-byte hash
+                let mut msg = vec![0u8; 36];
+                msg[0..4].copy_from_slice(&5u32.to_be_bytes()); // GET_TX_SET type = 5
+                msg[4..36].copy_from_slice(&hash);
+                
+                info!("Broadcasting GET_TX_SET for {:?} to {} peers", &hash[..4], peer_count);
+                
+                // Broadcast on SCP channel (latency critical)
+                let _ = self.scp_broadcast.send(msg);
+                
+                // Spawn timeout task to clean up if no response
+                let pending_fetches = Arc::clone(&self.pending_tx_set_fetches);
+                let hash_copy = hash;
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    let mut pending = pending_fetches.write().await;
+                    if let Some(reply) = pending.remove(&hash_copy) {
+                        warn!("Timeout fetching TX set {:?}", &hash_copy[..4]);
+                        let _ = reply.send(None).await;
+                    }
+                });
+            }
+            
+            CoreCommand::CacheTxSet { hash, xdr } => {
+                info!("Caching TX set {:?} ({} bytes)", &hash[..4], xdr.len());
+                let mut cache = self.local_tx_sets.write().await;
+                cache.insert(hash, xdr);
+            }
         }
     }
     
@@ -772,7 +819,7 @@ impl Overlay {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /// SCP_READER task: reads from SCP socket, decrypts, dedup, forwards to Core, relays.
-/// This task is COMPLETELY ISOLATED from TX path.
+/// Also handles GET_TX_SET (type 5) and TX_SET (type 6) for TX set fetching.
 async fn scp_reader_task(
     peer_id: PeerId,
     mut tcp_read: OwnedReadHalf,
@@ -780,6 +827,8 @@ async fn scp_reader_task(
     core_events: mpsc::UnboundedSender<OverlayEvent>,
     scp_broadcast: broadcast::Sender<Vec<u8>>,
     seen_hashes: Arc<RwLock<std::collections::HashSet<[u8; 32]>>>,
+    local_tx_sets: Arc<RwLock<HashMap<[u8; 32], Vec<u8>>>>,
+    pending_tx_set_fetches: Arc<RwLock<HashMap<[u8; 32], mpsc::Sender<Option<Vec<u8>>>>>>,
 ) {
     debug!("SCP_READER started for peer {}", peer_id);
     
@@ -807,7 +856,67 @@ async fn scp_reader_task(
             }
         };
         
-        // 3. Dedup check - only SCP tasks touch seen_hashes
+        // 3. Check message type
+        if plaintext.len() < 4 {
+            warn!("SCP message too short from peer {}", peer_id);
+            continue;
+        }
+        let msg_type = u32::from_be_bytes([plaintext[0], plaintext[1], plaintext[2], plaintext[3]]);
+        
+        // Handle GET_TX_SET (type 5) - peer is requesting a TX set from us
+        if msg_type == 5 {
+            if plaintext.len() < 36 {
+                warn!("GET_TX_SET message too short from peer {}", peer_id);
+                continue;
+            }
+            let mut hash = [0u8; 32];
+            hash.copy_from_slice(&plaintext[4..36]);
+            info!("Received GET_TX_SET for {:?} from peer {}", &hash[..4], peer_id);
+            
+            // Look up in local cache and respond via broadcast
+            let cache = local_tx_sets.read().await;
+            if let Some(xdr) = cache.get(&hash) {
+                info!("Serving TX set {:?} ({} bytes) to peer {}", &hash[..4], xdr.len(), peer_id);
+                // Build TX_SET response: type 6 (TX_SET) + hash + XDR
+                let mut response = Vec::with_capacity(36 + xdr.len());
+                response.extend_from_slice(&6u32.to_be_bytes()); // TX_SET type = 6
+                response.extend_from_slice(&hash);
+                response.extend_from_slice(xdr);
+                // Broadcast response (TODO: inefficient, should send to requester only)
+                let _ = scp_broadcast.send(response);
+            } else {
+                debug!("TX set {:?} not in local cache", &hash[..4]);
+            }
+            continue;
+        }
+        
+        // Handle TX_SET (type 6) - response to our GET_TX_SET request
+        if msg_type == 6 {
+            if plaintext.len() < 36 {
+                warn!("TX_SET message too short from peer {}", peer_id);
+                continue;
+            }
+            let mut hash = [0u8; 32];
+            hash.copy_from_slice(&plaintext[4..36]);
+            let xdr = plaintext[36..].to_vec();
+            info!("Received TX_SET {:?} ({} bytes) from peer {}", &hash[..4], xdr.len(), peer_id);
+            
+            // Cache it locally
+            {
+                let mut cache = local_tx_sets.write().await;
+                cache.insert(hash, xdr.clone());
+            }
+            
+            // Fulfill any pending fetch request
+            let mut pending = pending_tx_set_fetches.write().await;
+            if let Some(reply) = pending.remove(&hash) {
+                info!("Fulfilling pending fetch for TX set {:?}", &hash[..4]);
+                let _ = reply.send(Some(xdr)).await;
+            }
+            continue;
+        }
+        
+        // 4. Dedup check for SCP envelopes
         let hash = compute_tx_hash(&plaintext);
         let is_new = {
             let mut seen = seen_hashes.write().await;
@@ -815,7 +924,7 @@ async fn scp_reader_task(
         };
         
         if is_new {
-            // 4. Forward to Core - UnboundedSender, NEVER blocks
+            // 5. Forward to Core - UnboundedSender, NEVER blocks
             // Strip StellarMessage header (4-byte discriminant) to get raw SCPEnvelope
             let scp_envelope = if plaintext.len() > 4 {
                 plaintext[4..].to_vec()
@@ -828,7 +937,7 @@ async fn scp_reader_task(
                 from_peer: peer_id,
             });
             
-            // 5. Relay to other peers - broadcast, NEVER blocks sender
+            // 6. Relay to other peers - broadcast, NEVER blocks sender
             let _ = scp_broadcast.send(plaintext);
         }
     }
@@ -891,18 +1000,13 @@ async fn tx_reader_task(
     response_tx: mpsc::Sender<Vec<u8>>,
 ) {
     debug!("TX_READER started for peer {}", peer_id);
-    println!("  [TX_READER {}] started", peer_id);
     
     loop {
         // 1. Read from TCP (dedicated TX socket)
         let ciphertext = match read_framed(&mut tcp_read).await {
-            Ok(c) => {
-                println!("  [TX_READER {}] received {} bytes", peer_id, c.len());
-                c
-            }
+            Ok(c) => c,
             Err(e) => {
                 if e.kind() != std::io::ErrorKind::UnexpectedEof {
-                    println!("  [TX_READER {}] read error: {}", peer_id, e);
                     debug!("TX read error from peer {}: {}", peer_id, e);
                 }
                 break;
@@ -913,12 +1017,8 @@ async fn tx_reader_task(
         let plaintext = {
             let mut sess = session.lock().await;
             match sess.decrypt(&ciphertext) {
-                Ok(p) => {
-                    println!("  [TX_READER {}] decrypted {} bytes", peer_id, p.len());
-                    p
-                }
+                Ok(p) => p,
                 Err(e) => {
-                    println!("  [TX_READER {}] decrypt error: {}", peer_id, e);
                     warn!("TX decrypt error from peer {}: {}", peer_id, e);
                     break;
                 }
@@ -927,7 +1027,6 @@ async fn tx_reader_task(
         
         // 3. Route by message type
         let msg_type = classify_message(&plaintext);
-        println!("  [TX_READER {}] message type: {:?}", peer_id, msg_type);
         match msg_type {
             PeerMessageType::Transaction => {
                 handle_tx_message(peer_id, &plaintext, &mempool, &peers, &pending_adverts).await;
@@ -939,13 +1038,13 @@ async fn tx_reader_task(
                 handle_demand_message(peer_id, &plaintext, &mempool, &response_tx).await;
             }
             _ => {
-                warn!("Unexpected message type {:?} on TX connection from peer {}", msg_type, peer_id);
+                // GET_TX_SET and TX_SET are handled on SCP channel, not TX channel
+                debug!("Unexpected message type {:?} on TX connection from peer {}", msg_type, peer_id);
             }
         }
     }
     
     debug!("TX_READER ended for peer {}", peer_id);
-    println!("  [TX_READER {}] ended", peer_id);
 }
 
 /// TX_WRITER task: receives from channel, encrypts, writes to TX socket.
@@ -956,19 +1055,12 @@ async fn tx_writer_task(
     mut tx_rx: mpsc::Receiver<Vec<u8>>,
 ) {
     debug!("TX_WRITER started for peer {}", peer_id);
-    println!("  [TX_WRITER {}] started", peer_id);
     
     loop {
         // 1. Wait for message from channel
         let msg = match tx_rx.recv().await {
-            Some(m) => {
-                println!("  [TX_WRITER {}] received {} byte message", peer_id, m.len());
-                m
-            }
-            None => {
-                println!("  [TX_WRITER {}] channel closed", peer_id);
-                break;
-            }
+            Some(m) => m,
+            None => break,
         };
         
         // 2. Encrypt (may take longer for large TXs, that's OK)
@@ -977,7 +1069,6 @@ async fn tx_writer_task(
             match sess.encrypt(&msg) {
                 Ok(c) => c,
                 Err(e) => {
-                    println!("  [TX_WRITER {}] encrypt error: {}", peer_id, e);
                     debug!("TX encrypt error for peer {}: {}", peer_id, e);
                     break;
                 }
@@ -986,15 +1077,12 @@ async fn tx_writer_task(
         
         // 3. Write to TCP (dedicated TX socket, may block for large messages)
         if let Err(e) = write_framed(&mut tcp_write, &ciphertext).await {
-            println!("  [TX_WRITER {}] write error: {}", peer_id, e);
             debug!("TX write error to peer {}: {}", peer_id, e);
             break;
         }
-        println!("  [TX_WRITER {}] sent {} bytes", peer_id, ciphertext.len());
     }
     
     debug!("TX_WRITER ended for peer {}", peer_id);
-    println!("  [TX_WRITER {}] ended", peer_id);
 }
 
 /// Handle incoming TRANSACTION message: add to mempool and re-flood.
@@ -1046,6 +1134,7 @@ async fn handle_advert_message(
     response_tx: &mpsc::Sender<Vec<u8>>,
 ) {
     let hashes = parse_flood_advert(data);
+    println!("  [handle_advert] parsed {} hashes", hashes.len());
     
     let mut need = Vec::new();
     {
@@ -1056,12 +1145,15 @@ async fn handle_advert_message(
             }
         }
     }
+    println!("  [handle_advert] need {} TXs", need.len());
     
     if !need.is_empty() {
         let demand = build_flood_demand(&need);
-        // try_send - never blocks, drops if channel full
-        let _ = response_tx.try_send(demand);
-        trace!("Sent DEMAND for {} TXs to peer {}", need.len(), from_peer);
+        println!("  [handle_advert] sending DEMAND ({} bytes)", demand.len());
+        match response_tx.try_send(demand) {
+            Ok(_) => println!("  [handle_advert] DEMAND sent successfully"),
+            Err(e) => println!("  [handle_advert] DEMAND send failed: {}", e),
+        }
     }
 }
 
@@ -1319,11 +1411,13 @@ async fn flush_adverts(
     let peers = peers.read().await;
     for (pid, hashes) in by_peer {
         if let Some(peer) = peers.get(&pid) {
-            // Create advert message (type 17 = FLOOD_ADVERT)
-            let mut msg = vec![0u8; 4 + hashes.len() * 32];
-            msg[3] = 17;
+            // Create advert message: 4-byte type (17) + 4-byte count + N*32-byte hashes
+            let mut msg = vec![0u8; 8 + hashes.len() * 32];
+            msg[3] = 17; // FLOOD_ADVERT type
+            let count = hashes.len() as u32;
+            msg[4..8].copy_from_slice(&count.to_be_bytes());
             for (i, hash) in hashes.iter().enumerate() {
-                let offset = 4 + i * 32;
+                let offset = 8 + i * 32;
                 msg[offset..offset + 32].copy_from_slice(hash);
             }
             let _ = peer.tx_tx.send(msg).await;
@@ -2174,6 +2268,18 @@ mod tests {
         let (addr_tx, addr_rx) = tokio::sync::oneshot::channel();
         let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
         
+        // Spawn advert flusher for overlay1 (needed for pull-based TX propagation)
+        let pending_adverts1 = Arc::clone(&overlay1.pending_adverts);
+        tokio::spawn({
+            let peers = Arc::clone(&overlay1_peers);
+            async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    flush_adverts(&pending_adverts1, &peers).await;
+                }
+            }
+        });
+        
         let handle1 = tokio::spawn(async move {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let actual_addr = listener.local_addr().unwrap();
@@ -2191,6 +2297,16 @@ mod tests {
         });
         
         let overlay1_addr = addr_rx.await.unwrap();
+        
+        // Spawn advert flusher for overlay2 (the sender)
+        let pending_adverts2 = Arc::clone(&overlay2.pending_adverts);
+        let overlay2_peers = Arc::clone(&overlay2.peers);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                flush_adverts(&pending_adverts2, &overlay2_peers).await;
+            }
+        });
         
         // Overlay2 connects with dual TCP
         overlay2.connect_to_peer(overlay1_addr).await;
@@ -2276,9 +2392,35 @@ mod tests {
         
         let overlay1 = Overlay::new(keypair1, "127.0.0.1:0".parse().unwrap(), cmd_rx1, event_tx1);
         let mempool1 = Arc::clone(&overlay1.mempool);
+        let overlay1_peers = Arc::clone(&overlay1.peers);
+        let pending_adverts1 = Arc::clone(&overlay1.pending_adverts);
         
         let overlay2 = Overlay::new(keypair2, "127.0.0.1:0".parse().unwrap(), cmd_rx2, event_tx2);
         let mempool2 = Arc::clone(&overlay2.mempool);
+        let overlay2_peers = Arc::clone(&overlay2.peers);
+        let pending_adverts2 = Arc::clone(&overlay2.pending_adverts);
+        
+        // Spawn advert flushers for both overlays (needed for pull-based TX propagation)
+        tokio::spawn({
+            let pending = Arc::clone(&pending_adverts1);
+            let peers = Arc::clone(&overlay1_peers);
+            async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    flush_adverts(&pending, &peers).await;
+                }
+            }
+        });
+        tokio::spawn({
+            let pending = Arc::clone(&pending_adverts2);
+            let peers = Arc::clone(&overlay2_peers);
+            async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    flush_adverts(&pending, &peers).await;
+                }
+            }
+        });
         
         // Start overlay1
         let (addr_tx, addr_rx) = tokio::sync::oneshot::channel();
@@ -2366,6 +2508,226 @@ mod tests {
     #[tokio::test]
     async fn test_push_k_propagation() {
         // TODO: Implement when propagate_tx is done
+    }
+    
+    // ══════════════════════════════════════════════════════════════════════════
+    // TX SET FETCHING TESTS
+    // ══════════════════════════════════════════════════════════════════════════
+    
+    /// Test CacheTxSet command stores TX set in local cache.
+    #[tokio::test]
+    async fn test_cache_tx_set_stores_locally() {
+        let keypair = NoiseKeypair::generate();
+        let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel::<CoreCommand>();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel::<OverlayEvent>();
+        
+        let overlay = Overlay::new(
+            keypair,
+            "127.0.0.1:0".parse().unwrap(),
+            cmd_rx,
+            event_tx,
+        );
+        
+        // Create a test TX set
+        let hash = [42u8; 32];
+        let xdr = b"test tx set xdr data".to_vec();
+        
+        // Cache it
+        overlay.handle_core_command(CoreCommand::CacheTxSet {
+            hash,
+            xdr: xdr.clone(),
+        }).await;
+        
+        // Verify it's in the cache
+        let cache = overlay.local_tx_sets.read().await;
+        assert!(cache.contains_key(&hash), "TX set should be cached");
+        assert_eq!(cache.get(&hash).unwrap(), &xdr, "Cached XDR should match");
+    }
+    
+    /// Test GET_TX_SET on SCP channel returns cached TX set.
+    #[tokio::test]
+    async fn test_get_tx_set_returns_cached() {
+        let keypair1 = NoiseKeypair::generate();
+        let keypair2 = NoiseKeypair::generate();
+        
+        let (_cmd_tx1, cmd_rx1) = mpsc::unbounded_channel::<CoreCommand>();
+        let (event_tx1, _event_rx1) = mpsc::unbounded_channel::<OverlayEvent>();
+        let (_cmd_tx2, cmd_rx2) = mpsc::unbounded_channel::<CoreCommand>();
+        let (event_tx2, _event_rx2) = mpsc::unbounded_channel::<OverlayEvent>();
+        
+        // Overlay1 has the TX set cached
+        let overlay1 = Overlay::new(keypair1, "127.0.0.1:0".parse().unwrap(), cmd_rx1, event_tx1);
+        let overlay1_local_tx_sets = Arc::clone(&overlay1.local_tx_sets);
+        
+        // Overlay2 will request it
+        let overlay2 = Overlay::new(keypair2, "127.0.0.1:0".parse().unwrap(), cmd_rx2, event_tx2);
+        let overlay2_local_tx_sets = Arc::clone(&overlay2.local_tx_sets);
+        let overlay2_pending_fetches = Arc::clone(&overlay2.pending_tx_set_fetches);
+        
+        // Cache a TX set in overlay1
+        let hash = [99u8; 32];
+        let xdr = b"the actual tx set xdr content here".to_vec();
+        {
+            let mut cache = overlay1_local_tx_sets.write().await;
+            cache.insert(hash, xdr.clone());
+        }
+        
+        // Connect the overlays
+        let (addr_tx, addr_rx) = tokio::sync::oneshot::channel();
+        let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
+        
+        let handle1 = tokio::spawn(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            addr_tx.send(listener.local_addr().unwrap()).unwrap();
+            for _ in 0..2 {
+                let (stream, addr) = listener.accept().await.unwrap();
+                overlay1.handle_incoming_connection(stream, addr).await;
+            }
+            let _ = stop_rx.recv().await;
+            overlay1
+        });
+        
+        let addr = addr_rx.await.unwrap();
+        overlay2.connect_to_peer(addr).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        
+        // Overlay2 requests the TX set via FetchTxSet
+        let (reply_tx, mut reply_rx) = mpsc::channel(1);
+        overlay2.handle_core_command(CoreCommand::FetchTxSet {
+            hash,
+            reply: reply_tx,
+        }).await;
+        
+        // Wait for response (with timeout)
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            reply_rx.recv()
+        ).await;
+        
+        let _ = stop_tx.send(()).await;
+        handle1.abort();
+        
+        // Verify we got the TX set
+        match result {
+            Ok(Some(Some(received_xdr))) => {
+                assert_eq!(received_xdr, xdr, "Received TX set XDR should match original");
+            }
+            Ok(Some(None)) => {
+                panic!("FetchTxSet returned None - TX set not found");
+            }
+            Ok(None) => {
+                panic!("Reply channel closed unexpectedly");
+            }
+            Err(_) => {
+                panic!("Timeout waiting for TX set response");
+            }
+        }
+        
+        // Verify it's now cached in overlay2
+        let cache2 = overlay2_local_tx_sets.read().await;
+        assert!(cache2.contains_key(&hash), "TX set should be cached in requester after fetch");
+    }
+    
+    /// Test FetchTxSet times out when no peer has the TX set.
+    #[tokio::test]
+    async fn test_fetch_tx_set_timeout_when_not_found() {
+        let keypair1 = NoiseKeypair::generate();
+        let keypair2 = NoiseKeypair::generate();
+        
+        let (_cmd_tx1, cmd_rx1) = mpsc::unbounded_channel::<CoreCommand>();
+        let (event_tx1, _event_rx1) = mpsc::unbounded_channel::<OverlayEvent>();
+        let (_cmd_tx2, cmd_rx2) = mpsc::unbounded_channel::<CoreCommand>();
+        let (event_tx2, _event_rx2) = mpsc::unbounded_channel::<OverlayEvent>();
+        
+        // Neither overlay has the TX set
+        let overlay1 = Overlay::new(keypair1, "127.0.0.1:0".parse().unwrap(), cmd_rx1, event_tx1);
+        let overlay2 = Overlay::new(keypair2, "127.0.0.1:0".parse().unwrap(), cmd_rx2, event_tx2);
+        
+        // Connect the overlays
+        let (addr_tx, addr_rx) = tokio::sync::oneshot::channel();
+        let (stop_tx, mut stop_rx) = mpsc::channel::<()>(1);
+        
+        let handle1 = tokio::spawn(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            addr_tx.send(listener.local_addr().unwrap()).unwrap();
+            for _ in 0..2 {
+                let (stream, addr) = listener.accept().await.unwrap();
+                overlay1.handle_incoming_connection(stream, addr).await;
+            }
+            let _ = stop_rx.recv().await;
+            overlay1
+        });
+        
+        let addr = addr_rx.await.unwrap();
+        overlay2.connect_to_peer(addr).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        
+        // Request a TX set that doesn't exist
+        let hash = [123u8; 32];
+        let (reply_tx, mut reply_rx) = mpsc::channel(1);
+        overlay2.handle_core_command(CoreCommand::FetchTxSet {
+            hash,
+            reply: reply_tx,
+        }).await;
+        
+        // Should timeout (500ms) and return None
+        let start = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            reply_rx.recv()
+        ).await;
+        let elapsed = start.elapsed();
+        
+        let _ = stop_tx.send(()).await;
+        handle1.abort();
+        
+        // Verify we got None (not found)
+        match result {
+            Ok(Some(None)) => {
+                // Expected - TX set not found
+                assert!(elapsed >= Duration::from_millis(400), 
+                    "Should wait ~500ms before timeout, got {:?}", elapsed);
+                assert!(elapsed < Duration::from_millis(1000),
+                    "Should not wait too long, got {:?}", elapsed);
+            }
+            Ok(Some(Some(_))) => {
+                panic!("Should not find TX set that doesn't exist");
+            }
+            _ => {
+                panic!("Unexpected result: {:?}", result);
+            }
+        }
+    }
+    
+    /// Test FetchTxSet returns immediately when no peers connected.
+    #[tokio::test]
+    async fn test_fetch_tx_set_no_peers_returns_none() {
+        let keypair = NoiseKeypair::generate();
+        let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel::<CoreCommand>();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel::<OverlayEvent>();
+        
+        let overlay = Overlay::new(keypair, "127.0.0.1:0".parse().unwrap(), cmd_rx, event_tx);
+        
+        // No peers connected
+        assert!(overlay.peers.read().await.is_empty());
+        
+        // Request a TX set
+        let hash = [77u8; 32];
+        let (reply_tx, mut reply_rx) = mpsc::channel(1);
+        
+        let start = Instant::now();
+        overlay.handle_core_command(CoreCommand::FetchTxSet {
+            hash,
+            reply: reply_tx,
+        }).await;
+        
+        let result = reply_rx.recv().await;
+        let elapsed = start.elapsed();
+        
+        // Should return None immediately (no peers to ask)
+        assert!(matches!(result, Some(None)), "Should return None when no peers");
+        assert!(elapsed < Duration::from_millis(100), 
+            "Should return immediately, took {:?}", elapsed);
     }
     
     // ══════════════════════════════════════════════════════════════════════════
