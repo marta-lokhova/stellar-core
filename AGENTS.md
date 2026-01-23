@@ -165,3 +165,89 @@ When a test fails, don't jump to hypotheses. First understand:
 **The user had to correct me multiple times because I assumed instead of asked.**
 
 Rule: If you're making a design decision, ASK. If the design doc doesn't cover it, ASK.
+
+---
+
+## Incremental Development: Stop, Compile, Test, Repeat
+
+**Don't write large chunks of code without verification.**
+
+After every small change:
+1. **Compile** - catch syntax/type errors immediately
+2. **Run existing tests** - make sure you didn't break anything
+3. **Write a new test** - verify the new behavior works
+
+**From TX set session:**
+- I wrote GET_TX_SET/TX_SET handling, FetchTxSet command, CacheTxSet command all at once
+- Then had multiple compilation errors to fix
+- Then tests failed because I forgot to spawn advert flush tasks
+- User had to remind me: "TDD remember??"
+
+**Better approach:**
+```
+1. Add GET_TX_SET message type → compile → tests pass
+2. Add handler for GET_TX_SET → compile → write test for it → tests pass
+3. Add TX_SET message type → compile → tests pass
+4. Add handler for TX_SET → compile → write test for it → tests pass
+5. Add FetchTxSet command → compile → write test for timeout → tests pass
+6. Integration test → tests pass
+```
+
+Each step is small, verified, and has a test. Bugs are caught immediately, not after 200 lines of changes.
+
+---
+
+## Build and Test Commands
+
+**Rust overlay (in `overlay/` directory):**
+```bash
+# Build
+cargo build
+
+# Run all tests
+cargo test
+
+# Run specific test
+cargo test test_name
+
+# Run tests with output
+cargo test -- --nocapture
+```
+
+**C++ stellar-core (in repo root):**
+```bash
+# Build (after configure)
+make -j$(nproc)
+
+# Run all tests
+make check
+
+# Run specific test suite
+./src/stellar-core test [testname]
+
+# Run stress tests (includes Rust overlay integration)
+./src/stellar-core test "Rust overlay*"
+```
+
+**Typical workflow during development:**
+```bash
+# 1. After Rust changes
+cd overlay && cargo build && cargo test && cd ..
+
+# 2. After C++ changes  
+make -j$(nproc)
+
+# 3. Integration test (both sides)
+./src/stellar-core test "Rust overlay SCP latency under TX load"
+```
+
+**Quick validation loop:**
+```bash
+# Rust: compile check only (faster than full build)
+cd overlay && cargo check
+
+# C++: build just the binary
+make -j$(nproc) stellar-core
+```
+
+Always run `cargo test` after Rust changes and `make check` after C++ changes before moving on.

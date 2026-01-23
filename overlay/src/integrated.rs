@@ -2791,4 +2791,67 @@ mod tests {
         let parsed = parse_flood_demand(&demand);
         assert_eq!(parsed, hashes);
     }
+    
+    // ══════════════════════════════════════════════════════════════════════════
+    // MULTI-PEER (4+ NODES) TESTS
+    // ══════════════════════════════════════════════════════════════════════════
+    
+    /// Test that SCP broadcast channel sends messages to subscribers.
+    /// This verifies the broadcast channel infrastructure works correctly.
+    #[tokio::test]
+    async fn test_scp_broadcast_channel_fanout() {
+        // Create an overlay  
+        let keypair = NoiseKeypair::generate();
+        let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel::<CoreCommand>();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel::<OverlayEvent>();
+        
+        let overlay = Overlay::new(keypair, "127.0.0.1:0".parse().unwrap(), cmd_rx, event_tx);
+        
+        // Create multiple subscribers to the broadcast channel
+        let mut rx1 = overlay.scp_broadcast.subscribe();
+        let mut rx2 = overlay.scp_broadcast.subscribe();
+        let mut rx3 = overlay.scp_broadcast.subscribe();
+        
+        // Send an SCP message via the broadcast channel
+        let scp_msg = vec![0, 0, 0, 10, 1, 2, 3, 4, 5, 6, 7, 8]; // type=10 (SCP)
+        overlay.scp_broadcast.send(scp_msg.clone()).unwrap();
+        
+        // All subscribers should receive the message
+        let recv1 = rx1.recv().await.unwrap();
+        let recv2 = rx2.recv().await.unwrap();
+        let recv3 = rx3.recv().await.unwrap();
+        
+        assert_eq!(recv1, scp_msg);
+        assert_eq!(recv2, scp_msg);
+        assert_eq!(recv3, scp_msg);
+        
+        // Verify receiver count
+        assert_eq!(overlay.scp_broadcast.receiver_count(), 3);
+    }
+    
+    /// Test that SCP broadcast handles late subscribers correctly.
+    /// New subscribers should receive only messages sent after subscribing.
+    #[tokio::test]
+    async fn test_scp_broadcast_late_subscriber() {
+        let keypair = NoiseKeypair::generate();
+        let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel::<CoreCommand>();
+        let (event_tx, _event_rx) = mpsc::unbounded_channel::<OverlayEvent>();
+        
+        let overlay = Overlay::new(keypair, "127.0.0.1:0".parse().unwrap(), cmd_rx, event_tx);
+        
+        // Send first message with no subscribers
+        let msg1 = vec![1, 2, 3];
+        let _ = overlay.scp_broadcast.send(msg1.clone()); // May fail with no receivers
+        
+        // Subscribe after first message
+        let mut rx = overlay.scp_broadcast.subscribe();
+        
+        // Send second message
+        let msg2 = vec![4, 5, 6];
+        overlay.scp_broadcast.send(msg2.clone()).unwrap();
+        
+        // Late subscriber should only receive msg2
+        let recv = rx.recv().await.unwrap();
+        assert_eq!(recv, msg2);
+    }
 }
