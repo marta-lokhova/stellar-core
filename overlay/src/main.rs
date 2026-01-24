@@ -1,19 +1,19 @@
 //! Stellar Overlay Process
 //!
 //! A process-isolated overlay for stellar-core that handles:
-//! - SCP message relay (latency-critical)
-//! - Transaction flooding (push-k/pull hybrid)
+//! - SCP message relay (latency-critical, via dedicated QUIC stream)
+//! - Transaction flooding (via dedicated QUIC stream)
 //! - Peer management
 //!
+//! Uses QUIC transport for true stream independence - SCP never blocked by TX.
 //! Communicates with Core via Unix domain socket IPC.
 
 mod config;
 mod ipc;
-mod scp;
 mod flood;
-mod peer;
 mod http;
 pub mod integrated;
+pub mod libp2p_overlay;
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -24,9 +24,13 @@ use tracing::{debug, error, info, warn};
 
 use config::Config;
 use ipc::{CoreIpc, Message, MessageType};
-use integrated::{Overlay, OverlayHandle, OverlayEvent, CoreCommand};
+use integrated::{Overlay, OverlayHandle, CoreCommand};
 use flood::{TxSetCache, CachedTxSet, Hash256, build_tx_set_xdr, hash_tx_set};
-use peer::NoiseKeypair;
+use libp2p_overlay::{
+    create_overlay, OverlayHandle as LibP2pOverlayHandle, 
+    OverlayEvent as LibP2pOverlayEvent, StellarOverlay,
+};
+use libp2p::identity::Keypair as Libp2pKeypair;
 
 /// Command-line arguments
 struct Args {
@@ -99,13 +103,16 @@ struct App {
     config: Config,
     core_ipc: CoreIpc,
     overlay_handle: OverlayHandle,
-    overlay_events: mpsc::UnboundedReceiver<OverlayEvent>,
     /// Cache for built TX sets
     tx_set_cache: Arc<RwLock<TxSetCache>>,
     /// TX set hashes already pushed to Core (reset on ledger close)
     pushed_tx_sets: Arc<RwLock<HashSet<Hash256>>>,
     /// Current ledger sequence
     current_ledger_seq: Arc<RwLock<u32>>,
+    /// libp2p overlay handle (QUIC-based SCP + TX)
+    libp2p_handle: LibP2pOverlayHandle,
+    /// libp2p overlay events
+    libp2p_events: mpsc::UnboundedReceiver<LibP2pOverlayEvent>,
 }
 
 impl App {
@@ -117,35 +124,44 @@ impl App {
             CoreIpc::connect(&config.core_socket).await?
         };
         
-        // Generate keypair for Noise authentication
-        let keypair = NoiseKeypair::generate();
-        
-        // Parse listen address
-        let listen_addr: SocketAddr = format!("0.0.0.0:{}", config.peer_port).parse()?;
-        
-        // Create channels for overlay communication
+        // Create channels for mempool manager communication
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
         
-        // Create the full overlay with TCP peer support
-        let overlay = Overlay::new(keypair, listen_addr, cmd_rx, event_tx);
+        // Create mempool manager (no network - libp2p handles all P2P)
+        let mempool_manager = Overlay::new(cmd_rx);
         let overlay_handle = OverlayHandle::new(cmd_tx);
         
-        // Spawn overlay task
+        // Spawn mempool manager task
         tokio::spawn(async move {
-            if let Err(e) = overlay.run().await {
-                error!("Overlay error: {}", e);
+            if let Err(e) = mempool_manager.run().await {
+                error!("Mempool manager error: {}", e);
             }
         });
+        
+        // Create libp2p QUIC overlay for SCP + TX + TxSet (unified, independent streams)
+        let libp2p_keypair = Libp2pKeypair::generate_ed25519();
+        let (libp2p_handle, libp2p_event_rx, libp2p_overlay) = create_overlay(libp2p_keypair)
+            .map_err(|e| format!("Failed to create libp2p overlay: {}", e))?;
+        
+        // Use peer_port + 1000 for libp2p QUIC to avoid collision with legacy TCP
+        let libp2p_port = config.peer_port + 1000;
+        
+        // Spawn libp2p overlay task
+        tokio::spawn(async move {
+            libp2p_overlay.run(libp2p_port).await;
+        });
+        
+        info!("Started libp2p QUIC overlay on port {} (SCP + TX + TxSet streams)", libp2p_port);
         
         Ok(Self {
             config,
             core_ipc,
             overlay_handle,
-            overlay_events: event_rx,
             tx_set_cache: Arc::new(RwLock::new(TxSetCache::new(100))),
             pushed_tx_sets: Arc::new(RwLock::new(HashSet::new())),
             current_ledger_seq: Arc::new(RwLock::new(0)),
+            libp2p_handle,
+            libp2p_events: libp2p_event_rx,
         })
     }
     
@@ -158,7 +174,7 @@ impl App {
                 // Receive message from Core
                 msg = self.core_ipc.receiver.recv() => {
                     match msg {
-                        Some(msg) => self.handle_core_message(msg),
+                        Some(msg) => self.handle_core_message(msg).await,
                         None => {
                             info!("Core IPC connection closed");
                             break;
@@ -166,38 +182,74 @@ impl App {
                     }
                 }
                 
-                // Receive events from overlay (peer connections, SCP messages)
-                Some(event) = self.overlay_events.recv() => {
-                    self.handle_overlay_event(event);
+                // Receive events from libp2p QUIC overlay (SCP + TX + TxSet)
+                Some(event) = self.libp2p_events.recv() => {
+                    self.handle_libp2p_event(event).await;
                 }
             }
         }
         
+        // Shutdown libp2p
+        self.libp2p_handle.shutdown().await;
+        
         info!("Overlay shutting down");
     }
     
-    /// Handle an event from the overlay
-    fn handle_overlay_event(&mut self, event: OverlayEvent) {
+    /// Handle an event from the libp2p QUIC overlay (SCP + TX)
+    async fn handle_libp2p_event(&mut self, event: LibP2pOverlayEvent) {
         match event {
-            OverlayEvent::ScpReceived { envelope, from_peer } => {
-                // Forward SCP envelope to Core
-                debug!("Forwarding SCP envelope ({} bytes) from peer {} to Core", 
-                      envelope.len(), from_peer);
-                if let Err(e) = self.core_ipc.sender.send_scp_received(envelope, from_peer) {
+            LibP2pOverlayEvent::ScpReceived { envelope, from } => {
+                debug!("Received SCP via QUIC from {}: {} bytes", from, envelope.len());
+                // Forward to Core
+                if let Err(e) = self.core_ipc.sender.send_scp_received(envelope, 0) {
                     error!("Failed to send SCP to Core: {}", e);
                 }
             }
-            OverlayEvent::PeerConnected { peer_id, addr, public_key } => {
-                info!("Peer connected: {} ({}) key={:?}", peer_id, addr, &public_key[..4]);
+            LibP2pOverlayEvent::TxReceived { tx, from } => {
+                debug!("Received TX via QUIC from {}: {} bytes", from, tx.len());
+                // Add to mempool
+                self.overlay_handle.submit_tx(tx, 0, 1);
             }
-            OverlayEvent::PeerDisconnected { peer_id } => {
-                info!("Peer disconnected: {}", peer_id);
+            LibP2pOverlayEvent::TxSetReceived { hash, data, from } => {
+                debug!("Received TxSet via QUIC from {}: {} bytes", from, data.len());
+                // Cache and notify Core
+                let mut cache = self.tx_set_cache.write().await;
+                cache.insert(CachedTxSet {
+                    hash,
+                    xdr: data.clone(),
+                    ledger_seq: 0,
+                    tx_hashes: vec![],
+                });
+                if let Err(e) = self.core_ipc.sender.send_tx_set_available(hash, data) {
+                    error!("Failed to send TxSet to Core: {}", e);
+                }
+            }
+            LibP2pOverlayEvent::TxSetRequested { hash, from } => {
+                info!("Peer {} requesting TxSet {:02x?}...", from, &hash[..4]);
+                // Look up in local cache and respond
+                let cache = self.tx_set_cache.read().await;
+                if let Some(cached) = cache.get(&hash) {
+                    info!("Serving TxSet {:02x?}... ({} bytes) to {}", &hash[..4], cached.xdr.len(), from);
+                    let handle = self.libp2p_handle.clone();
+                    let data = cached.xdr.clone();
+                    tokio::spawn(async move {
+                        handle.send_txset(hash, data, from).await;
+                    });
+                } else {
+                    debug!("TxSet {:02x?}... not in local cache, cannot serve to {}", &hash[..4], from);
+                }
+            }
+            LibP2pOverlayEvent::PeerConnected(peer_id) => {
+                info!("libp2p QUIC peer connected: {}", peer_id);
+            }
+            LibP2pOverlayEvent::PeerDisconnected(peer_id) => {
+                info!("libp2p QUIC peer disconnected: {}", peer_id);
             }
         }
     }
     
     /// Handle a message from Core
-    fn handle_core_message(&mut self, msg: Message) {
+    async fn handle_core_message(&mut self, msg: Message) {
         match msg.msg_type {
             MessageType::Shutdown => {
                 info!("Shutdown requested by Core");
@@ -206,9 +258,13 @@ impl App {
             }
             
             MessageType::BroadcastScp => {
-                // Forward SCP broadcast to overlay for peer relay
+                // Forward SCP broadcast via libp2p QUIC (dedicated stream, no blocking)
                 debug!("Received BroadcastScp from Core ({} bytes)", msg.payload.len());
-                self.overlay_handle.broadcast_scp(msg.payload);
+                let handle = self.libp2p_handle.clone();
+                let payload = msg.payload;
+                tokio::spawn(async move {
+                    handle.broadcast_scp(payload).await;
+                });
             }
             
             MessageType::RequestNominationHash => {
@@ -235,26 +291,15 @@ impl App {
                 // Build TX set asynchronously
                 tokio::spawn(async move {
                     // Request top transactions from overlay
-                    let (reply_tx, mut reply_rx) = mpsc::channel(1);
-                    
-                    // TODO: Make max_ops configurable from network config
-                    // Use 10000 as max (should be passed from Core's config)
                     let max_ops = 10000usize;
                     
-                    let _ = overlay_handle.commands.send(CoreCommand::GetTopTxs {
-                        count: max_ops,
-                        reply: reply_tx,
-                    });
-                    
-                    // Wait for reply (with timeout)
-                    // Returns (tx_hash, tx_data) pairs
                     let txs = match tokio::time::timeout(
                         std::time::Duration::from_millis(100),
-                        reply_rx.recv()
+                        overlay_handle.get_top_txs(max_ops)
                     ).await {
-                        Ok(Some(txs)) => txs,
-                        _ => {
-                            warn!("Timeout or error getting transactions from mempool");
+                        Ok(txs) => txs,
+                        Err(_) => {
+                            warn!("Timeout getting transactions from mempool");
                             vec![]
                         }
                     };
@@ -287,10 +332,7 @@ impl App {
                     }
                     
                     // Also cache in the overlay so it can serve GET_TX_SET requests from peers
-                    let _ = overlay_handle.commands.send(CoreCommand::CacheTxSet {
-                        hash,
-                        xdr: xdr.clone(),
-                    });
+                    overlay_handle.cache_tx_set(hash, xdr.clone());
                     
                     // Send hash back to Core
                     if let Err(e) = core_sender.send_nomination_hash(hash) {
@@ -300,7 +342,7 @@ impl App {
             }
             
             MessageType::RequestTxSet => {
-                // Request TX set by hash - check local cache first, then fetch from peers
+                // Request TX set by hash - check local cache first, then fetch from peers via libp2p
                 if msg.payload.len() < 32 {
                     warn!("RequestTxSet payload too short");
                     return;
@@ -311,7 +353,7 @@ impl App {
                 
                 let tx_set_cache = Arc::clone(&self.tx_set_cache);
                 let core_sender = self.core_ipc.sender.clone();
-                let overlay_handle = self.overlay_handle.clone();
+                let libp2p_handle = self.libp2p_handle.clone();
                 
                 tokio::spawn(async move {
                     // First check local cache
@@ -326,46 +368,10 @@ impl App {
                         }
                     }
                     
-                    // Not in local cache - request from peers
-                    info!("TX set {:?} not in local cache, requesting from peers", &hash[..4]);
-                    
-                    let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(1);
-                    let _ = overlay_handle.commands.send(CoreCommand::FetchTxSet { 
-                        hash, 
-                        reply: reply_tx 
-                    });
-                    
-                    // Wait for response with timeout
-                    match tokio::time::timeout(
-                        std::time::Duration::from_secs(5),
-                        reply_rx.recv()
-                    ).await {
-                        Ok(Some(Some(xdr))) => {
-                            info!("Got TX set {:?} from peer ({} bytes)", &hash[..4], xdr.len());
-                            // Cache it
-                            {
-                                let mut cache = tx_set_cache.write().await;
-                                cache.insert(CachedTxSet {
-                                    hash,
-                                    xdr: xdr.clone(),
-                                    ledger_seq: 0,
-                                    tx_hashes: vec![],
-                                });
-                            }
-                            if let Err(e) = core_sender.send_tx_set_available(hash, xdr) {
-                                error!("Failed to send TX set: {}", e);
-                            }
-                        }
-                        Ok(Some(None)) => {
-                            warn!("TX set {:?} not found on any peer", &hash[..4]);
-                        }
-                        Ok(None) => {
-                            warn!("Channel closed while fetching TX set {:?}", &hash[..4]);
-                        }
-                        Err(_) => {
-                            warn!("Timeout fetching TX set {:?} from peers", &hash[..4]);
-                        }
-                    }
+                    // Not in local cache - request from peers via libp2p
+                    // The response will arrive as TxSetReceived event and be forwarded to Core
+                    info!("TX set {:?} not in local cache, requesting from peers via libp2p", &hash[..4]);
+                    libp2p_handle.fetch_txset(hash).await;
                 });
             }
             
@@ -382,11 +388,13 @@ impl App {
                 
                 debug!("Submitting TX: fee={}, numOps={}, size={}", fee, num_ops, tx_data.len());
                 
-                // Forward to overlay for mempool insertion and flooding
-                let _ = self.overlay_handle.commands.send(CoreCommand::SubmitTx {
-                    data: tx_data,
-                    fee: fee as u64,
-                    num_ops,
+                // Add to mempool
+                self.overlay_handle.submit_tx(tx_data.clone(), fee as u64, num_ops);
+                
+                // Broadcast TX via libp2p QUIC (dedicated stream)
+                let handle = self.libp2p_handle.clone();
+                tokio::spawn(async move {
+                    handle.broadcast_tx(tx_data).await;
                 });
             }
             
@@ -427,7 +435,7 @@ impl App {
                     
                     // Look up the TX set in cache and get TX hashes, then remove from mempool
                     let cache = Arc::clone(&self.tx_set_cache);
-                    let commands = self.overlay_handle.commands.clone();
+                    let overlay_handle = self.overlay_handle.clone();
                     
                     tokio::spawn(async move {
                         let tx_hashes = {
@@ -438,9 +446,7 @@ impl App {
                         // Remove TXs from mempool
                         if let Some(hashes) = tx_hashes {
                             if !hashes.is_empty() {
-                                let _ = commands.send(CoreCommand::RemoveTxsFromMempool {
-                                    tx_hashes: hashes,
-                                });
+                                overlay_handle.remove_txs(hashes);
                             }
                         } else {
                             debug!("TX set {:?} not found in cache (may be from another node)", &hash[..4]);
@@ -459,33 +465,56 @@ impl App {
                 if let Ok(json_str) = std::str::from_utf8(&msg.payload) {
                     info!("Received peer config: {}", json_str);
                     if let Ok(config) = serde_json::from_str::<serde_json::Value>(json_str) {
-                        let known = config["known_peers"].as_array()
-                            .map(|v| v.iter().filter_map(|s| s.as_str().map(String::from)).collect::<Vec<_>>())
+                        let known: Vec<String> = config["known_peers"].as_array()
+                            .map(|v| v.iter().filter_map(|s| s.as_str().map(String::from)).collect())
                             .unwrap_or_default();
-                        let preferred = config["preferred_peers"].as_array()
-                            .map(|v| v.iter().filter_map(|s| s.as_str().map(String::from)).collect::<Vec<_>>())
+                        let preferred: Vec<String> = config["preferred_peers"].as_array()
+                            .map(|v| v.iter().filter_map(|s| s.as_str().map(String::from)).collect())
                             .unwrap_or_default();
                         let listen_port = config["listen_port"].as_u64().unwrap_or(11625) as u16;
                         
                         info!("Parsed peer config: known={:?}, preferred={:?}, port={}", 
                               known, preferred, listen_port);
                         
-                        // Send peer config to overlay for connection
-                        let _ = self.overlay_handle.commands.send(CoreCommand::SetPeerConfig {
-                            known_peers: known,
-                            preferred_peers: preferred,
-                            listen_port,
-                        });
+                        // Connect libp2p QUIC to all known/preferred peers
+                        let all_peers: Vec<_> = known.into_iter().chain(preferred.into_iter()).collect();
+                        for addr_str in all_peers {
+                            if let Ok(addr) = addr_str.parse::<SocketAddr>() {
+                                // QUIC uses UDP, port + 1000
+                                let libp2p_port = addr.port() + 1000;
+                                let libp2p_addr: libp2p::Multiaddr = format!(
+                                    "/ip4/{}/udp/{}/quic-v1", 
+                                    addr.ip(), 
+                                    libp2p_port
+                                ).parse().unwrap();
+                                
+                                let handle = self.libp2p_handle.clone();
+                                tokio::spawn(async move {
+                                    handle.dial(libp2p_addr).await;
+                                });
+                            }
+                        }
                     }
                 }
             }
             
             MessageType::ConnectToPeer => {
-                // Connect to a specific peer
+                // Connect to a specific peer via libp2p QUIC
                 if let Ok(addr_str) = std::str::from_utf8(&msg.payload) {
                     info!("Requested to connect to peer: {}", addr_str);
                     if let Ok(addr) = addr_str.parse::<SocketAddr>() {
-                        self.overlay_handle.connect_to(addr);
+                        // Connect libp2p QUIC (UDP, port + 1000)
+                        let libp2p_port = addr.port() + 1000;
+                        let libp2p_addr: libp2p::Multiaddr = format!(
+                            "/ip4/{}/udp/{}/quic-v1", 
+                            addr.ip(), 
+                            libp2p_port
+                        ).parse().unwrap();
+                        
+                        let handle = self.libp2p_handle.clone();
+                        tokio::spawn(async move {
+                            handle.dial(libp2p_addr).await;
+                        });
                     } else {
                         warn!("Invalid peer address: {}", addr_str);
                     }

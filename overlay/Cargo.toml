@@ -14,13 +14,22 @@ path = "src/main.rs"
 # Async runtime
 tokio = { version = "1.36", features = ["full", "signal"] }
 
+# LRU cache for dedup
+lru = "0.12"
+
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
 
-# Crypto (for Noise protocol - Phase 4)
+# Crypto (for Noise protocol - SCP layer)
 snow = "0.9"
+
+# libp2p for networking
+# Using QUIC transport for true stream independence (no TCP head-of-line blocking)
+libp2p = { version = "0.54", features = ["gossipsub", "noise", "tcp", "tokio", "macros", "yamux", "kad", "identify", "quic"] }
+libp2p-stream = "0.2.0-alpha"
+futures = "0.3"
 
 # Logging
 tracing = "0.1"

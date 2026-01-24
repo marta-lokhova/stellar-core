@@ -126,8 +126,8 @@ Simulation::addNode(SecretKey nodeKey, QuorumSetSpec qSet, Config const* cfg2,
     {
         cfg->RUN_STANDALONE = false;
         cfg->USE_RUST_OVERLAY = true;  // Enable Rust overlay for TCP mode
-        // Binary path for tests running from repo root directory
-        cfg->OVERLAY_BINARY_PATH = "target/release/stellar-overlay";
+        // Binary path for tests running from src/ directory
+        cfg->OVERLAY_BINARY_PATH = "../target/release/stellar-overlay";
     }
 
     auto clock =

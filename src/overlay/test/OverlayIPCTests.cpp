@@ -976,7 +976,7 @@ TEST_CASE("Rust overlay TX included in ledger", "[overlay-ipc][.]")
  * - scp.timing.externalized (time from prepare to externalize)
  * - ledger.ledger.close (total ledger close time)
  */
-TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc-stress][.][!mayfail]")
+TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc-stress]")
 {
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())

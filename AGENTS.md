@@ -193,7 +193,7 @@ After every small change:
 6. Integration test → tests pass
 ```
 
-Each step is small, verified, and has a test. Bugs are caught immediately, not after 200 lines of changes.
+Each step is small, verified, and has a test. Bugs are caught immediately, not after 200 lines of changes. Do NOT swallow errors - prefer crashing/asserting over silently proceeding.
 
 ---
 

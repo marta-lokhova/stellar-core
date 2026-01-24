@@ -1,8 +1,7 @@
-//! TX flooding module (Phase 5).
+//! TX flooding module.
 //!
-//! Implements hybrid push-k/pull transaction propagation.
+//! Provides mempool management and TX set building.
 
-mod coordinator;
 mod mempool;
 mod txset;
 

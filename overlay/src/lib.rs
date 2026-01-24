@@ -4,7 +4,6 @@
 
 pub mod config;
 pub mod ipc;
-pub mod scp;
 pub mod flood;
-pub mod peer;
 pub mod integrated;
+pub mod libp2p_overlay;
