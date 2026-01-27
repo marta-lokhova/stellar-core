@@ -44,13 +44,15 @@ class RustOverlayManager
 
     void clearLedgersBelow(uint32_t ledgerSeq, uint32_t lclSeq);
 
-    // TX set management
-    std::optional<std::pair<TxSetXDRFrameConstPtr, Hash>>
-    getTxSetForNomination(uint32_t ledgerSeq, Hash const& prevLedgerHash);
-    void notifyTxSetExternalized(Hash const& txSetHash);
+    // TX set management - notify that TX set was externalized with its TX hashes
+    void notifyTxSetExternalized(Hash const& txSetHash,
+                                 std::vector<Hash> const& txHashes);
 
-    // Request TX set from peers (via Rust overlay)
+    // Request TX set from peers (via Rust overlay, async)
     void requestTxSet(Hash const& txSetHash);
+
+    // Cache a locally-built TX set in Rust overlay
+    void cacheTxSet(Hash const& txSetHash, std::vector<uint8_t> const& xdr);
 
     // Metrics and managers
     OverlayMetrics& getOverlayMetrics();

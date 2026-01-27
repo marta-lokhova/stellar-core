@@ -384,42 +384,27 @@ impl App {
                 });
             }
 
-            MessageType::RequestNominationHash => {
-                // Parse payload: [ledgerSeq:4][prevLedgerHash:32]
-                if msg.payload.len() < 36 {
-                    warn!(
-                        "RequestNominationHash payload too short: {} bytes",
-                        msg.payload.len()
-                    );
-                    if let Err(e) = self.core_ipc.sender.send_nomination_hash([0u8; 32]) {
-                        error!("Failed to send nomination hash: {}", e);
+            MessageType::GetTopTxs => {
+                // Parse payload: [count:4]
+                if msg.payload.len() < 4 {
+                    warn!("GetTopTxs payload too short: {} bytes", msg.payload.len());
+                    // Send empty response
+                    if let Err(e) = self.core_ipc.sender.send_top_txs_response(&[]) {
+                        error!("Failed to send empty top txs response: {}", e);
                     }
                     return;
                 }
 
-                let ledger_seq = u32::from_le_bytes(msg.payload[0..4].try_into().unwrap());
-                let mut prev_hash = [0u8; 32];
-                prev_hash.copy_from_slice(&msg.payload[4..36]);
+                let count = u32::from_le_bytes(msg.payload[0..4].try_into().unwrap()) as usize;
+                info!("Core requesting top {} transactions", count);
 
-                info!(
-                    "Building TX set for ledger {} (prevHash={:?})",
-                    ledger_seq,
-                    &prev_hash[..4]
-                );
-
-                // Get top transactions from mempool
-                let tx_set_cache = Arc::clone(&self.tx_set_cache);
                 let core_sender = self.core_ipc.sender.clone();
                 let overlay_handle = self.overlay_handle.clone();
 
-                // Build TX set asynchronously
                 tokio::spawn(async move {
-                    // Request top transactions from overlay
-                    let max_ops = 10000usize;
-
                     let txs = match tokio::time::timeout(
                         std::time::Duration::from_millis(100),
-                        overlay_handle.get_top_txs(max_ops),
+                        overlay_handle.get_top_txs(count),
                     )
                     .await
                     {
@@ -430,43 +415,13 @@ impl App {
                         }
                     };
 
-                    info!("Building TX set with {} transactions", txs.len());
+                    info!("Returning {} transactions to Core", txs.len());
 
-                    // Sort TXs by hash for consensus determinism (matches C++ TxSetUtils::sortTxsInHashOrder)
-                    let mut txs = txs;
-                    txs.sort_by(|a, b| a.0.cmp(&b.0));
+                    // Extract just the TX data (not hashes) for the response
+                    let tx_data: Vec<&[u8]> = txs.iter().map(|(_, d)| d.as_slice()).collect();
 
-                    // Extract TX hashes and data separately
-                    let tx_hashes: Vec<[u8; 32]> = txs.iter().map(|(h, _)| *h).collect();
-                    let tx_data: Vec<Vec<u8>> = txs.into_iter().map(|(_, d)| d).collect();
-
-                    // Build the TX set XDR
-                    let xdr = build_tx_set_xdr(&prev_hash, &tx_data);
-                    let hash = hash_tx_set(&xdr);
-
-                    info!(
-                        "Built TX set: hash={:?}, xdr_size={}",
-                        &hash[..4],
-                        xdr.len()
-                    );
-
-                    // Cache the TX set with TX hashes for later cleanup
-                    {
-                        let mut cache = tx_set_cache.write().await;
-                        cache.insert(CachedTxSet {
-                            hash,
-                            xdr: xdr.clone(),
-                            ledger_seq,
-                            tx_hashes,
-                        });
-                    }
-
-                    // Also cache in the overlay so it can serve GET_TX_SET requests from peers
-                    overlay_handle.cache_tx_set(hash, xdr.clone());
-
-                    // Send hash back to Core
-                    if let Err(e) = core_sender.send_nomination_hash(hash) {
-                        error!("Failed to send nomination hash: {}", e);
+                    if let Err(e) = core_sender.send_top_txs_response(&tx_data) {
+                        error!("Failed to send top txs response: {}", e);
                     }
                 });
             }
@@ -512,6 +467,33 @@ impl App {
                     );
                     pending_requests.write().await.insert(hash);
                     libp2p_handle.fetch_txset(hash).await;
+                });
+            }
+
+            MessageType::CacheTxSet => {
+                // Core built a TX set locally and wants us to cache it for peer requests
+                // Payload: [hash:32][txSetXDR...]
+                if msg.payload.len() < 33 {
+                    warn!("CacheTxSet payload too short");
+                    return;
+                }
+
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&msg.payload[0..32]);
+                let xdr = msg.payload[32..].to_vec();
+
+                info!(
+                    "TXSET_CACHE: Caching locally-built TX set {:02x?}... ({} bytes)",
+                    &hash[..4],
+                    xdr.len()
+                );
+
+                let mut cache = self.tx_set_cache.write().await;
+                cache.insert(CachedTxSet {
+                    hash,
+                    xdr,
+                    ledger_seq: 0,
+                    tx_hashes: vec![],
                 });
             }
 
@@ -576,33 +558,44 @@ impl App {
             }
 
             MessageType::TxSetExternalized => {
-                // Parse payload: [hash:32]
-                if msg.payload.len() >= 32 {
-                    let mut hash = [0u8; 32];
-                    hash.copy_from_slice(&msg.payload[0..32]);
-                    info!("TX set externalized: {:?}", &hash[..4]);
+                // Parse payload: [txSetHash:32][numTxHashes:4][txHash1:32][txHash2:32]...
+                if msg.payload.len() >= 36 {
+                    let mut tx_set_hash = [0u8; 32];
+                    tx_set_hash.copy_from_slice(&msg.payload[0..32]);
+                    let num_hashes =
+                        u32::from_le_bytes(msg.payload[32..36].try_into().unwrap()) as usize;
 
-                    // Look up the TX set in cache and get TX hashes, then remove from mempool
-                    let cache = Arc::clone(&self.tx_set_cache);
-                    let overlay_handle = self.overlay_handle.clone();
+                    info!(
+                        "TX set externalized: {:?} with {} TX hashes",
+                        &tx_set_hash[..4],
+                        num_hashes
+                    );
 
-                    tokio::spawn(async move {
-                        let tx_hashes = {
-                            let mut cache = cache.write().await;
-                            cache.remove(&hash)
-                        };
-
-                        // Remove TXs from mempool
-                        if let Some(hashes) = tx_hashes {
-                            if !hashes.is_empty() {
-                                overlay_handle.remove_txs(hashes);
-                            }
-                        } else {
-                            debug!(
-                                "TX set {:?} not found in cache (may be from another node)",
-                                &hash[..4]
-                            );
+                    // Parse TX hashes from payload
+                    let mut tx_hashes = Vec::with_capacity(num_hashes);
+                    for i in 0..num_hashes {
+                        let start = 36 + (i * 32);
+                        let end = start + 32;
+                        if end <= msg.payload.len() {
+                            let mut hash = [0u8; 32];
+                            hash.copy_from_slice(&msg.payload[start..end]);
+                            tx_hashes.push(hash);
                         }
+                    }
+
+                    // Remove TXs from mempool directly using the provided hashes
+                    if !tx_hashes.is_empty() {
+                        let overlay_handle = self.overlay_handle.clone();
+                        tokio::spawn(async move {
+                            overlay_handle.remove_txs(tx_hashes);
+                        });
+                    }
+
+                    // Also clean up TX set cache (in case we had cached it)
+                    let cache = Arc::clone(&self.tx_set_cache);
+                    tokio::spawn(async move {
+                        let mut cache = cache.write().await;
+                        cache.remove(&tx_set_hash);
                     });
                 }
             }

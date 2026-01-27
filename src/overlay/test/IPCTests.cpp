@@ -351,18 +351,22 @@ TEST_CASE("IPC cross-process communication", "[overlay][ipc-crossproc][.]")
         REQUIRE(response->payload == msg.payload);
     }
 
-    SECTION("RequestNominationHash returns mock hash")
+    SECTION("GetTopTxs returns mock transactions")
     {
         IPCMessage msg;
-        msg.type = IPCMessageType::REQUEST_NOMINATION_HASH;
-        msg.payload = {};
+        msg.type = IPCMessageType::GET_TOP_TXS;
+        // Payload: [count:4]
+        uint32_t count = 100;
+        msg.payload.resize(4);
+        memcpy(msg.payload.data(), &count, 4);
 
         REQUIRE(channel->send(msg));
 
         auto response = channel->receive();
         REQUIRE(response.has_value());
-        REQUIRE(response->type == IPCMessageType::NOMINATION_HASH);
-        REQUIRE(response->payload.size() == 32); // 32-byte hash
+        REQUIRE(response->type == IPCMessageType::TOP_TXS_RESPONSE);
+        // Response: [count:4][len1:4][tx1:len1]... - at least 4 bytes for count
+        REQUIRE(response->payload.size() >= 4);
     }
 
     // Send shutdown

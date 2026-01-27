@@ -41,6 +41,10 @@ class OverlayIPC
     using ScpStateRequestCallback =
         std::function<std::vector<SCPEnvelope>(uint32_t ledgerSeq)>;
 
+    /// Callback when TX set received from peers (async fetch response)
+    using TxSetReceivedCallback =
+        std::function<void(Hash const& hash, GeneralizedTransactionSet const& txSet)>;
+
     /**
      * Create an OverlayIPC instance.
      *
@@ -87,32 +91,10 @@ class OverlayIPC
      * The overlay should clear the corresponding TXs from its mempool.
      *
      * @param txSetHash The hash of the externalized TX set
+     * @param txHashes The hashes of all TXs in the externalized TX set
      */
-    void notifyTxSetExternalized(Hash const& txSetHash);
-
-    /**
-     * Request a nomination hash from the overlay.
-     *
-     * This asks the overlay to build a TX set from mempool and return its hash.
-     * The TX set can later be requested via getTxSet().
-     *
-     * @param ledgerSeq The ledger sequence we're building a TX set for
-     * @param prevLedgerHash The previous ledger hash
-     * @param timeoutMs Timeout in milliseconds
-     * @return The TX set hash, or empty hash on timeout/error
-     */
-    Hash requestNominationHash(uint32_t ledgerSeq, Hash const& prevLedgerHash,
-                               int timeoutMs = 1000);
-
-    /**
-     * Request a TX set by hash from the overlay.
-     *
-     * @param hash The TX set hash
-     * @param timeoutMs Timeout in milliseconds
-     * @return The TX set XDR, or empty on timeout/error
-     */
-    std::optional<GeneralizedTransactionSet> getTxSet(Hash const& hash,
-                                                      int timeoutMs = 1000);
+    void notifyTxSetExternalized(Hash const& txSetHash,
+                                 std::vector<Hash> const& txHashes);
 
     /**
      * Request top N transactions by fee for nomination.
@@ -122,8 +104,8 @@ class OverlayIPC
      *
      * @param count Number of transactions to request
      * @param timeoutMs Timeout in milliseconds
-     * @return Vector of transaction XDR (may be less than count if mempool is
-     * small)
+     * @return Vector of transaction envelopes (may be less than count if mempool
+     * is small)
      */
     std::vector<TransactionEnvelope> getTopTransactions(size_t count,
                                                         int timeoutMs = 1000);
@@ -160,18 +142,33 @@ class OverlayIPC
     /**
      * Request a TX set by hash from peers (asynchronous).
      *
-     * The Rust overlay will broadcast the request to peers and notify
-     * when the TX set is available via TxSetAvailable callback.
+     * The Rust overlay will fetch from peers and notify via the
+     * TxSetReceivedCallback when available.
      *
      * @param hash The TX set hash to request
      */
     void requestTxSet(Hash const& hash);
+
+    /**
+     * Cache a locally-built TX set in the Rust overlay.
+     *
+     * After Core builds a TX set from mempool transactions, it must
+     * send the set to Rust so that Rust can serve it to other peers
+     * who request it via TX set fetching.
+     *
+     * @param hash The TX set hash
+     * @param xdr The serialized TX set XDR
+     */
+    void cacheTxSet(Hash const& hash, std::vector<uint8_t> const& xdr);
 
     /// Set callback for received SCP envelopes
     void setOnSCPReceived(SCPReceivedCallback cb);
 
     /// Set callback for SCP state requests from peers
     void setOnScpStateRequest(ScpStateRequestCallback cb);
+
+    /// Set callback for TX set received from peers (async fetch)
+    void setOnTxSetReceived(TxSetReceivedCallback cb);
 
     /// Check if connected to overlay
     bool isConnected() const;
@@ -208,6 +205,7 @@ class OverlayIPC
 
     SCPReceivedCallback mOnSCPReceived;
     ScpStateRequestCallback mOnScpStateRequest;
+    TxSetReceivedCallback mOnTxSetReceived;
 
     // For synchronous request/response
     std::mutex mRequestMutex;

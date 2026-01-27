@@ -60,6 +60,17 @@ RustOverlayManager::start()
         return mApp.getHerder().getSCPStateForPeer(ledgerSeq);
     });
 
+    mOverlayIPC->setOnTxSetReceived(
+        [this](Hash const& hash, GeneralizedTransactionSet const& txSet) {
+            // Called from IPC reader thread - post to main thread
+            auto frame = TxSetXDRFrame::makeFromWire(txSet);
+            mApp.postOnMainThread(
+                [this, hash, frame]() {
+                    mApp.getHerder().recvTxSet(hash, frame);
+                },
+                "RustOverlayManager: TxSetReceived");
+        });
+
     if (!mOverlayIPC->start())
     {
         CLOG_ERROR(Overlay, "Failed to start Rust overlay process");
@@ -144,41 +155,13 @@ RustOverlayManager::clearLedgersBelow(uint32_t ledgerSeq, uint32_t lclSeq)
     }
 }
 
-std::optional<std::pair<TxSetXDRFrameConstPtr, Hash>>
-RustOverlayManager::getTxSetForNomination(uint32_t ledgerSeq,
-                                          Hash const& prevLedgerHash)
-{
-    if (!mOverlayIPC || mShuttingDown)
-    {
-        return std::nullopt;
-    }
-
-    Hash txSetHash =
-        mOverlayIPC->requestNominationHash(ledgerSeq, prevLedgerHash);
-
-    Hash emptyHash;
-    std::memset(emptyHash.data(), 0, emptyHash.size());
-    if (txSetHash == emptyHash)
-    {
-        return std::nullopt;
-    }
-
-    auto txSetOpt = mOverlayIPC->getTxSet(txSetHash);
-    if (!txSetOpt)
-    {
-        return std::nullopt;
-    }
-
-    auto txSetFrame = TxSetXDRFrame::makeFromWire(*txSetOpt);
-    return std::make_pair(txSetFrame, txSetHash);
-}
-
 void
-RustOverlayManager::notifyTxSetExternalized(Hash const& txSetHash)
+RustOverlayManager::notifyTxSetExternalized(Hash const& txSetHash,
+                                            std::vector<Hash> const& txHashes)
 {
     if (mOverlayIPC && !mShuttingDown)
     {
-        mOverlayIPC->notifyTxSetExternalized(txSetHash);
+        mOverlayIPC->notifyTxSetExternalized(txSetHash, txHashes);
     }
 }
 
@@ -188,6 +171,16 @@ RustOverlayManager::requestTxSet(Hash const& txSetHash)
     if (mOverlayIPC && !mShuttingDown)
     {
         mOverlayIPC->requestTxSet(txSetHash);
+    }
+}
+
+void
+RustOverlayManager::cacheTxSet(Hash const& txSetHash,
+                               std::vector<uint8_t> const& xdr)
+{
+    if (mOverlayIPC && !mShuttingDown)
+    {
+        mOverlayIPC->cacheTxSet(txSetHash, xdr);
     }
 }
 

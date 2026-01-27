@@ -233,31 +233,17 @@ bool
 PendingEnvelopes::recvTxSet(Hash const& hash, TxSetXDRFrameConstPtr txset)
 {
     ZoneScoped;
-    CLOG_TRACE(Herder, "Got TxSet {}", hexAbbrev(hash));
+    CLOG_INFO(Herder, "Got TxSet {}", hexAbbrev(hash));
 
     // Only accept if we were actually fetching this
     if (mPendingTxSetFetches.find(hash) == mPendingTxSetFetches.end())
     {
+        CLOG_WARNING(Herder, "TxSet {} not in pending fetches - rejecting",
+                     hexAbbrev(hash));
         return false;
     }
 
-    // Find the slot index for this txset from fetching envelopes
-    uint64 slotIndex = 0;
-    for (auto const& slotEnvs : mEnvelopes)
-    {
-        for (auto const& fetchEnv : slotEnvs.second.mFetchingEnvelopes)
-        {
-            for (auto const& h : getValidatedTxSetHashes(fetchEnv.first))
-            {
-                if (h == hash)
-                {
-                    slotIndex = std::max(slotIndex, slotEnvs.first);
-                }
-            }
-        }
-    }
-
-    addTxSet(hash, slotIndex, txset);
+    addTxSet(hash, 0, txset);
     return true;
 }
 

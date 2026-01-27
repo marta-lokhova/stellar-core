@@ -181,7 +181,7 @@ OverlayIPC::readerLoop()
 void
 OverlayIPC::handleMessage(IPCMessage const& msg)
 {
-    CLOG_TRACE(Overlay, "IPC handleMessage: type={}, payload_size={}",
+    CLOG_INFO(Overlay, "IPC handleMessage: type={}, payload_size={}",
                static_cast<uint32_t>(msg.type), msg.payload.size());
     switch (msg.type)
     {
@@ -212,13 +212,54 @@ OverlayIPC::handleMessage(IPCMessage const& msg)
         break;
     }
 
-    case IPCMessageType::NOMINATION_HASH:
-    case IPCMessageType::TX_SET_AVAILABLE:
+    case IPCMessageType::TOP_TXS_RESPONSE:
     {
-        // Response to a request - wake up waiting thread
+        // Response to getTopTransactions - wake up waiting thread
         std::lock_guard<std::mutex> lock(mRequestMutex);
         mPendingResponse = msg;
         mRequestCv.notify_one();
+        break;
+    }
+
+    case IPCMessageType::TX_SET_AVAILABLE:
+    {
+        // TX set received from peers (async fetch response)
+        // Payload: [hash:32][xdr...]
+        if (msg.payload.size() < 32)
+        {
+            CLOG_WARNING(Overlay, "TX_SET_AVAILABLE payload too short");
+            break;
+        }
+
+        Hash hash;
+        std::memcpy(hash.data(), msg.payload.data(), 32);
+
+        if (mOnTxSetReceived && msg.payload.size() > 32)
+        {
+            try
+            {
+                GeneralizedTransactionSet txSet;
+                std::vector<uint8_t> xdrData(msg.payload.begin() + 32,
+                                             msg.payload.end());
+                xdr::xdr_from_opaque(xdrData, txSet);
+                CLOG_INFO(Overlay, "Received TX set {} ({} bytes) from overlay",
+                           hexAbbrev(hash), xdrData.size());
+                mOnTxSetReceived(hash, txSet);
+            }
+            catch (std::exception const& e)
+            {
+                CLOG_WARNING(Overlay, "Failed to parse TX set {}: {}",
+                             hexAbbrev(hash), e.what());
+            }
+        }
+        else if (!mOnTxSetReceived)
+        {
+            CLOG_WARNING(Overlay, "TX_SET_AVAILABLE but no callback registered");
+        }
+        else
+        {
+            CLOG_WARNING(Overlay, "TX_SET_AVAILABLE payload too short for XDR");
+        }
         break;
     }
 
@@ -281,7 +322,8 @@ OverlayIPC::notifyLedgerClosed(uint32_t ledgerSeq, Hash const& ledgerHash)
 }
 
 void
-OverlayIPC::notifyTxSetExternalized(Hash const& txSetHash)
+OverlayIPC::notifyTxSetExternalized(Hash const& txSetHash,
+                                    std::vector<Hash> const& txHashes)
 {
     if (!mChannel || !mChannel->isConnected())
     {
@@ -291,124 +333,24 @@ OverlayIPC::notifyTxSetExternalized(Hash const& txSetHash)
     IPCMessage msg;
     msg.type = IPCMessageType::TX_SET_EXTERNALIZED;
 
-    // Payload: [txSetHash:32]
-    msg.payload.resize(32);
+    // Payload: [txSetHash:32][numTxHashes:4][txHash1:32][txHash2:32]...
+    size_t payloadSize = 32 + 4 + (txHashes.size() * 32);
+    msg.payload.resize(payloadSize);
+
+    // TX set hash
     std::memcpy(msg.payload.data(), txSetHash.data(), 32);
 
+    // Number of TX hashes
+    uint32_t numHashes = static_cast<uint32_t>(txHashes.size());
+    std::memcpy(msg.payload.data() + 32, &numHashes, 4);
+
+    // TX hashes
+    for (size_t i = 0; i < txHashes.size(); ++i)
+    {
+        std::memcpy(msg.payload.data() + 36 + (i * 32), txHashes[i].data(), 32);
+    }
+
     mChannel->send(msg);
-}
-
-Hash
-OverlayIPC::requestNominationHash(uint32_t ledgerSeq,
-                                  Hash const& prevLedgerHash, int timeoutMs)
-{
-    Hash result;
-    std::memset(result.data(), 0, result.size());
-
-    if (!mChannel || !mChannel->isConnected())
-    {
-        return result;
-    }
-
-    // Send request with payload: [ledgerSeq:4][prevLedgerHash:32]
-    IPCMessage req;
-    req.type = IPCMessageType::REQUEST_NOMINATION_HASH;
-    req.payload.resize(4 + 32);
-    std::memcpy(req.payload.data(), &ledgerSeq, 4);
-    std::memcpy(req.payload.data() + 4, prevLedgerHash.data(), 32);
-
-    if (!mChannel->send(req))
-    {
-        return result;
-    }
-
-    // Wait for response
-    std::unique_lock<std::mutex> lock(mRequestMutex);
-    mPendingResponse.reset();
-
-    bool gotResponse =
-        mRequestCv.wait_for(lock, std::chrono::milliseconds(timeoutMs),
-                            [this] { return mPendingResponse.has_value(); });
-
-    if (!gotResponse)
-    {
-        CLOG_WARNING(Overlay, "Timeout waiting for nomination hash");
-        return result;
-    }
-
-    auto& response = *mPendingResponse;
-    if (response.type != IPCMessageType::NOMINATION_HASH ||
-        response.payload.size() != 32)
-    {
-        CLOG_WARNING(
-            Overlay, "Invalid nomination hash response: type={}, size={}",
-            static_cast<uint32_t>(response.type), response.payload.size());
-        return result;
-    }
-
-    std::memcpy(result.data(), response.payload.data(), 32);
-    CLOG_DEBUG(Overlay, "Got nomination hash from overlay");
-    return result;
-}
-
-std::optional<GeneralizedTransactionSet>
-OverlayIPC::getTxSet(Hash const& hash, int timeoutMs)
-{
-    if (!mChannel || !mChannel->isConnected())
-    {
-        return std::nullopt;
-    }
-
-    // Send request with payload: [hash:32]
-    IPCMessage req;
-    req.type = IPCMessageType::REQUEST_TX_SET;
-    req.payload.resize(32);
-    std::memcpy(req.payload.data(), hash.data(), 32);
-
-    if (!mChannel->send(req))
-    {
-        return std::nullopt;
-    }
-
-    // Wait for response
-    std::unique_lock<std::mutex> lock(mRequestMutex);
-    mPendingResponse.reset();
-
-    bool gotResponse =
-        mRequestCv.wait_for(lock, std::chrono::milliseconds(timeoutMs),
-                            [this] { return mPendingResponse.has_value(); });
-
-    if (!gotResponse)
-    {
-        CLOG_WARNING(Overlay, "Timeout waiting for TX set");
-        return std::nullopt;
-    }
-
-    auto& response = *mPendingResponse;
-    if (response.type != IPCMessageType::TX_SET_AVAILABLE ||
-        response.payload.size() < 32)
-    {
-        CLOG_WARNING(Overlay, "Invalid TX set response");
-        return std::nullopt;
-    }
-
-    // Payload: [hash:32][xdr...]
-    // Skip the hash, parse XDR
-    try
-    {
-        GeneralizedTransactionSet txSet;
-        std::vector<uint8_t> xdrData(response.payload.begin() + 32,
-                                     response.payload.end());
-        xdr::xdr_from_opaque(xdrData, txSet);
-        CLOG_DEBUG(Overlay, "Got TX set from overlay ({} bytes XDR)",
-                   xdrData.size());
-        return txSet;
-    }
-    catch (std::exception const& e)
-    {
-        CLOG_WARNING(Overlay, "Failed to parse TX set: {}", e.what());
-        return std::nullopt;
-    }
 }
 
 std::vector<TransactionEnvelope>
@@ -423,7 +365,7 @@ OverlayIPC::getTopTransactions(size_t count, int timeoutMs)
 
     // Send request
     IPCMessage req;
-    req.type = IPCMessageType::REQUEST_NOMINATION_HASH;
+    req.type = IPCMessageType::GET_TOP_TXS;
     uint32_t countU32 = static_cast<uint32_t>(count);
     req.payload.resize(4);
     std::memcpy(req.payload.data(), &countU32, 4);
@@ -443,11 +385,16 @@ OverlayIPC::getTopTransactions(size_t count, int timeoutMs)
 
     if (!gotResponse)
     {
-        CLOG_WARNING(Overlay, "Timeout waiting for nomination transactions");
+        CLOG_WARNING(Overlay, "Timeout waiting for top transactions");
         return result;
     }
 
     auto& response = *mPendingResponse;
+    if (response.type != IPCMessageType::TOP_TXS_RESPONSE)
+    {
+        CLOG_WARNING(Overlay, "Unexpected response type for getTopTransactions");
+        return result;
+    }
 
     // Parse response: list of XDR-encoded TransactionEnvelopes
     // Format: [count:4][len1:4][tx1:len1][len2:4][tx2:len2]...
@@ -539,6 +486,25 @@ OverlayIPC::requestTxSet(Hash const& hash)
 }
 
 void
+OverlayIPC::cacheTxSet(Hash const& hash, std::vector<uint8_t> const& xdr)
+{
+    if (!mChannel || !mChannel->isConnected())
+    {
+        return;
+    }
+
+    IPCMessage msg;
+    msg.type = IPCMessageType::CACHE_TX_SET;
+    msg.payload.resize(32 + xdr.size());
+    std::memcpy(msg.payload.data(), hash.data(), 32);
+    std::memcpy(msg.payload.data() + 32, xdr.data(), xdr.size());
+
+    CLOG_DEBUG(Overlay, "Caching TX set {} ({} bytes)", hexAbbrev(hash),
+               xdr.size());
+    mChannel->send(msg);
+}
+
+void
 OverlayIPC::setPeerConfig(std::vector<std::string> const& knownPeers,
                           std::vector<std::string> const& preferredPeers,
                           uint16_t listenPort)
@@ -601,6 +567,12 @@ void
 OverlayIPC::setOnScpStateRequest(ScpStateRequestCallback cb)
 {
     mOnScpStateRequest = std::move(cb);
+}
+
+void
+OverlayIPC::setOnTxSetReceived(TxSetReceivedCallback cb)
+{
+    mOnTxSetReceived = std::move(cb);
 }
 
 void

@@ -312,11 +312,28 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
                      slotIndex, hexAbbrev(value.txSetHash));
     }
 
-    // Notify overlay to clear TXs from mempool (for RustOverlayManager)
-    mApp.getOverlayManager().notifyTxSetExternalized(value.txSetHash);
-
     TxSetXDRFrameConstPtr externalizedSet =
         mPendingEnvelopes.getTxSet(value.txSetHash);
+
+    // Notify overlay to clear TXs from mempool (for RustOverlayManager)
+    // Extract TX hashes from the externalized set so Rust can remove them
+    std::vector<Hash> txHashes;
+    if (externalizedSet)
+    {
+        auto applicableTxSet =
+            externalizedSet->prepareForApply(mApp, mLedgerManager.getLastClosedLedgerHeader().header);
+        if (applicableTxSet)
+        {
+            for (auto const& phase : applicableTxSet->getPhases())
+            {
+                for (auto const& tx : phase)
+                {
+                    txHashes.push_back(tx->getFullHash());
+                }
+            }
+        }
+    }
+    mApp.getOverlayManager().notifyTxSetExternalized(value.txSetHash, txHashes);
 
     // save the SCP messages in the database
     if (mApp.getConfig().MODE_STORES_HISTORY_MISC)
@@ -1430,72 +1447,47 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     ApplicableTxSetFrameConstPtr applicableProposedSet;
     Hash txSetHash;
 
-    // Try to get TX set from overlay (RustOverlayManager provides this)
-    auto overlayTxSet = mApp.getOverlayManager().getTxSetForNomination(
-        lcl.header.ledgerSeq + 1, lcl.hash);
+    // Build TX set locally from transaction queue
+    PerPhaseTransactionList txPhases;
+    txPhases.emplace_back(mTransactionQueue.getTransactions(lcl.header));
 
-    if (overlayTxSet)
+    if (protocolVersionStartsFrom(lcl.header.ledgerVersion,
+                                  SOROBAN_PROTOCOL_VERSION))
     {
-        // Got TX set from overlay - use it directly
-        proposedSet = overlayTxSet->first;
-        txSetHash = overlayTxSet->second;
-
-        // Prepare for apply to validate and get applicable frame
-        applicableProposedSet = proposedSet->prepareForApply(mApp, lcl.header);
-        if (!applicableProposedSet)
-        {
-            CLOG_WARNING(Herder, "TX set from overlay failed validation");
-            return;
-        }
-
-        CLOG_INFO(Herder, "Using TX set from overlay: hash={}",
-                  binToHex(txSetHash).substr(0, 8));
+        releaseAssert(mSorobanTransactionQueue);
+        txPhases.emplace_back(
+            mSorobanTransactionQueue->getTransactions(lcl.header));
     }
-    else
+
+    PerPhaseTransactionList invalidTxPhases;
+    invalidTxPhases.resize(txPhases.size());
+
+    std::tie(proposedSet, applicableProposedSet) =
+        makeTxSetFromTransactions(txPhases, mApp, lowerBoundCloseTimeOffset,
+                                  upperBoundCloseTimeOffset,
+                                  invalidTxPhases);
+
+    if (!applicableProposedSet)
     {
-        // Fallback: build TX set locally from transaction queue
-        // (standalone mode or OverlayManagerImpl)
-        PerPhaseTransactionList txPhases;
-        txPhases.emplace_back(mTransactionQueue.getTransactions(lcl.header));
-
-        if (protocolVersionStartsFrom(lcl.header.ledgerVersion,
-                                      SOROBAN_PROTOCOL_VERSION))
-        {
-            releaseAssert(mSorobanTransactionQueue);
-            txPhases.emplace_back(
-                mSorobanTransactionQueue->getTransactions(lcl.header));
-        }
-
-        PerPhaseTransactionList invalidTxPhases;
-        invalidTxPhases.resize(txPhases.size());
-
-        std::tie(proposedSet, applicableProposedSet) =
-            makeTxSetFromTransactions(txPhases, mApp, lowerBoundCloseTimeOffset,
-                                      upperBoundCloseTimeOffset,
-                                      invalidTxPhases);
-
-        if (!applicableProposedSet)
-        {
-            releaseAssert(!mApp.getConfig().FORCE_SCP);
-            return;
-        }
-
-        // Ban invalid transactions
-        if (protocolVersionStartsFrom(lcl.header.ledgerVersion,
-                                      SOROBAN_PROTOCOL_VERSION))
-        {
-            releaseAssert(mSorobanTransactionQueue);
-            mSorobanTransactionQueue->ban(
-                invalidTxPhases[static_cast<size_t>(TxSetPhase::SOROBAN)]);
-        }
-        mTransactionQueue.ban(
-            invalidTxPhases[static_cast<size_t>(TxSetPhase::CLASSIC)]);
-
-        txSetHash = proposedSet->getContentsHash();
-
-        CLOG_INFO(Herder, "Built TX set locally: hash={}",
-                  binToHex(txSetHash).substr(0, 8));
+        releaseAssert(!mApp.getConfig().FORCE_SCP);
+        return;
     }
+
+    // Ban invalid transactions
+    if (protocolVersionStartsFrom(lcl.header.ledgerVersion,
+                                  SOROBAN_PROTOCOL_VERSION))
+    {
+        releaseAssert(mSorobanTransactionQueue);
+        mSorobanTransactionQueue->ban(
+            invalidTxPhases[static_cast<size_t>(TxSetPhase::SOROBAN)]);
+    }
+    mTransactionQueue.ban(
+        invalidTxPhases[static_cast<size_t>(TxSetPhase::CLASSIC)]);
+
+    txSetHash = proposedSet->getContentsHash();
+
+    CLOG_INFO(Herder, "Built TX set: hash={}",
+              binToHex(txSetHash).substr(0, 8));
 
     // New proposed tx set must be valid, so we explicitly populate tx set
     // validity cache so SCP can reuse the result.
@@ -1507,6 +1499,16 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     // if we happen to build a txset that we were trying to download.
     mPendingEnvelopes.addTxSet(txSetHash, lcl.header.ledgerSeq + 1,
                                proposedSet);
+
+    // Cache the TX set in Rust overlay so it can serve it to other peers.
+    // When a peer receives an SCP message referencing this TX set hash,
+    // they'll request it via TX set fetching, and Rust needs the XDR.
+    {
+        GeneralizedTransactionSet xdrTxSet;
+        proposedSet->toXDR(xdrTxSet);
+        auto xdrBytes = xdr::xdr_to_opaque(xdrTxSet);
+        mApp.getOverlayManager().cacheTxSet(txSetHash, xdrBytes);
+    }
 
     lcl = mLedgerManager.getLastClosedLedgerHeader();
     // use the slot index from ledger manager here as our vote is based off

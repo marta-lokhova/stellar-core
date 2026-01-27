@@ -32,8 +32,9 @@ enum class IPCMessageType : uint32_t
     /// Broadcast this SCP envelope to all peers
     BROADCAST_SCP = 1,
 
-    /// Request a TX set hash for nomination
-    REQUEST_NOMINATION_HASH = 2,
+    /// Request top N transactions from mempool for nomination
+    /// Payload: [count:4]
+    GET_TOP_TXS = 2,
 
     /// Request current SCP state (peer asked via GET_SCP_STATE)
     REQUEST_SCP_STATE = 3,
@@ -43,7 +44,8 @@ enum class IPCMessageType : uint32_t
     /// Ledger closed, here's the new state
     LEDGER_CLOSED = 4,
 
-    /// We externalized this hash, drop related data
+    /// We externalized this TX set, drop related TXs from mempool
+    /// Payload: [txSetHash:32][numTxHashes:4][txHash1:32][txHash2:32]...
     TX_SET_EXTERNALIZED = 5,
 
     /// Response: here's the SCP state you requested
@@ -61,24 +63,30 @@ enum class IPCMessageType : uint32_t
     /// Payload: [fee:i64][numOps:u32][txEnvelope XDR...]
     SUBMIT_TX = 10,
 
-    /// Request a TX set by hash
+    /// Request a TX set by hash (async - response via TX_SET_AVAILABLE)
     /// Payload: [hash:32]
     REQUEST_TX_SET = 11,
+
+    /// Cache a locally-built TX set so Rust can serve it to peers
+    /// Payload: [hash:32][txSetXDR...]
+    CACHE_TX_SET = 12,
 
     // ═══ Overlay → Core (Critical Path) ═══
 
     /// Received SCP envelope from network
     SCP_RECEIVED = 100,
 
-    /// Response to nomination request
-    NOMINATION_HASH = 101,
+    /// Response to GET_TOP_TXS request
+    /// Payload: [count:4][len1:4][tx1:len1][len2:4][tx2:len2]...
+    TOP_TXS_RESPONSE = 101,
 
     /// Peer requested SCP state
     PEER_REQUESTS_SCP_STATE = 102,
 
     // ═══ Overlay → Core (Non-Critical) ═══
 
-    /// Here's a TX set you might need soon (optimistic push)
+    /// TX set fetched from peer (response to REQUEST_TX_SET)
+    /// Payload: [hash:32][txSetXDR...]
     TX_SET_AVAILABLE = 103,
 
     /// Here's a quorum set referenced in SCP

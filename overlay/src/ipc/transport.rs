@@ -71,9 +71,22 @@ impl CoreSender {
         self.send(Message::new(MessageType::ScpReceived, envelope))
     }
 
-    /// Convenience: send nomination hash response
-    pub fn send_nomination_hash(&self, hash: [u8; 32]) -> Result<(), IpcError> {
-        self.send(Message::new(MessageType::NominationHash, hash.to_vec()))
+    /// Convenience: send top transactions response
+    /// Payload: [count:4][len1:4][tx1:len1][len2:4][tx2:len2]...
+    pub fn send_top_txs_response(&self, txs: &[&[u8]]) -> Result<(), IpcError> {
+        let total_size: usize = 4 + txs.iter().map(|tx| 4 + tx.len()).sum::<usize>();
+        let mut payload = Vec::with_capacity(total_size);
+        
+        // Count
+        payload.extend_from_slice(&(txs.len() as u32).to_le_bytes());
+        
+        // Each TX: [len:4][data:len]
+        for tx in txs {
+            payload.extend_from_slice(&(tx.len() as u32).to_le_bytes());
+            payload.extend_from_slice(tx);
+        }
+        
+        self.send(Message::new(MessageType::TopTxsResponse, payload))
     }
 
     /// Convenience: send TX set available notification
@@ -579,19 +592,43 @@ mod tests {
     // ═══ Helper Method Tests ═══
 
     #[tokio::test]
-    async fn test_send_nomination_hash() {
+    async fn test_send_top_txs_response() {
         let (overlay_side, core_side) = StdUnixStream::pair().unwrap();
         let ipc = CoreIpc::from_stream(overlay_side).unwrap();
 
         let mut core = core_side;
 
-        let hash = [0xAA; 32];
-        ipc.sender.send_nomination_hash(hash).unwrap();
+        // Send empty response
+        ipc.sender.send_top_txs_response(&[]).unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let received = MessageCodec::read(&mut core).unwrap();
-        assert_eq!(received.msg_type, MessageType::NominationHash);
-        assert_eq!(received.payload, hash.to_vec());
+        assert_eq!(received.msg_type, MessageType::TopTxsResponse);
+        // Payload: [count:4] = 0
+        assert_eq!(received.payload.len(), 4);
+        let count = u32::from_le_bytes(received.payload[0..4].try_into().unwrap());
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_send_top_txs_response_with_txs() {
+        let (overlay_side, core_side) = StdUnixStream::pair().unwrap();
+        let ipc = CoreIpc::from_stream(overlay_side).unwrap();
+
+        let mut core = core_side;
+
+        let tx1 = vec![0xAA, 0xBB];
+        let tx2 = vec![0xCC, 0xDD, 0xEE];
+        ipc.sender.send_top_txs_response(&[&tx1, &tx2]).unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let received = MessageCodec::read(&mut core).unwrap();
+        assert_eq!(received.msg_type, MessageType::TopTxsResponse);
+        // Payload: [count:4][len1:4][tx1:2][len2:4][tx2:3] = 4 + 4 + 2 + 4 + 3 = 17
+        assert_eq!(received.payload.len(), 17);
+        let count = u32::from_le_bytes(received.payload[0..4].try_into().unwrap());
+        assert_eq!(count, 2);
     }
 }

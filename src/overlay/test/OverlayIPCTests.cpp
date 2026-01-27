@@ -346,7 +346,7 @@ TEST_CASE("Rust overlay SCP consensus", "[overlay-ipc][.]")
  * 2. Requests a nomination hash (which builds a TX set from empty mempool)
  * 3. Verifies a hash is returned
  */
-TEST_CASE("Rust overlay nomination hash", "[overlay-ipc][.]")
+TEST_CASE("Rust overlay get top transactions", "[overlay-ipc][.]")
 {
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
@@ -355,7 +355,7 @@ TEST_CASE("Rust overlay nomination hash", "[overlay-ipc][.]")
         return;
     }
 
-    TmpDir tmpDir("overlay_ipc_nomination_hash_test");
+    TmpDir tmpDir("overlay_ipc_get_top_txs_test");
     std::string socketPath = tmpDir.getName() + "/overlay.sock";
     uint16_t peerPort = 11625;
 
@@ -363,35 +363,23 @@ TEST_CASE("Rust overlay nomination hash", "[overlay-ipc][.]")
         std::make_unique<OverlayIPC>(socketPath, overlayBinary, peerPort);
     REQUIRE(ipc->start());
 
-    // Request nomination hash for ledger 2 with mock prev hash
-    Hash prevHash;
-    std::fill(prevHash.begin(), prevHash.end(), 0x42);
+    // Get top transactions from empty mempool
+    auto txs = ipc->getTopTransactions(100, 5000);
 
-    Hash nominationHash = ipc->requestNominationHash(2, prevHash, 5000);
+    // With empty mempool, should get empty vector
+    REQUIRE(txs.empty());
 
-    // With empty mempool, should still get a valid hash (for empty TX set)
-    // The hash should not be all zeros
-    Hash emptyHash;
-    std::fill(emptyHash.begin(), emptyHash.end(), 0);
-
-    REQUIRE(nominationHash != emptyHash);
-
-    LOG_INFO(
-        DEFAULT_LOG,
-        "Got nomination hash for empty TX set: {:02x}{:02x}{:02x}{:02x}...",
-        nominationHash[0], nominationHash[1], nominationHash[2],
-        nominationHash[3]);
+    LOG_INFO(DEFAULT_LOG, "Got {} transactions from empty mempool", txs.size());
 
     ipc->shutdown();
 }
 
 /**
- * Test TX submission and inclusion in TX set.
+ * Test TX submission and inclusion in mempool.
  *
  * This test:
  * 1. Submits a transaction to Rust overlay via IPC
- * 2. Requests a nomination hash
- * 3. Retrieves the TX set and verifies it contains the submitted TX
+ * 2. Retrieves top transactions and verifies the submitted TX is included
  */
 TEST_CASE("Rust overlay TX submission", "[overlay-ipc][.]")
 {
@@ -434,33 +422,8 @@ TEST_CASE("Rust overlay TX submission", "[overlay-ipc][.]")
     // Give Rust overlay time to process
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // Request nomination hash
-    Hash prevHash;
-    std::fill(prevHash.begin(), prevHash.end(), 0x42);
-
-    Hash nominationHash = ipc->requestNominationHash(2, prevHash, 5000);
-
-    // Hash should be non-zero
-    Hash emptyHash;
-    std::fill(emptyHash.begin(), emptyHash.end(), 0);
-    REQUIRE(nominationHash != emptyHash);
-
-    // Get the TX set
-    auto txSetOpt = ipc->getTxSet(nominationHash, 5000);
-    REQUIRE(txSetOpt.has_value());
-
-    // The TX set should have exactly 1 TX in the classic phase
-    auto& txSet = *txSetOpt;
-    REQUIRE(txSet.v() == 1);
-    auto& phases = txSet.v1TxSet().phases;
-    REQUIRE(phases.size() == 2); // CLASSIC + SOROBAN
-
-    // CLASSIC phase should have our TX
-    auto& classicPhase = phases[0];
-    REQUIRE(classicPhase.v() == 0);
-    auto& components = classicPhase.v0Components();
-    REQUIRE(components.size() == 1);
-    auto& txs = components[0].txsMaybeDiscountedFee().txs;
+    // Get top transactions - should contain our submitted TX
+    auto txs = ipc->getTopTransactions(100, 5000);
     REQUIRE(txs.size() == 1);
 
     // Verify it's the same TX we submitted
@@ -469,7 +432,7 @@ TEST_CASE("Rust overlay TX submission", "[overlay-ipc][.]")
     REQUIRE(retrievedTx.v1().tx.fee == 1000);
     REQUIRE(retrievedTx.v1().tx.seqNum == 12345);
 
-    LOG_INFO(DEFAULT_LOG, "TX submission test passed - TX included in TX set");
+    LOG_INFO(DEFAULT_LOG, "TX submission test passed - TX in mempool");
 
     ipc->shutdown();
 }
@@ -536,21 +499,10 @@ TEST_CASE("Rust overlay TX inclusion", "[overlay-ipc][.]")
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    Hash prevHash;
-    std::fill(prevHash.begin(), prevHash.end(), 0x42);
-    Hash nominationHash = ipc->requestNominationHash(2, prevHash, 5000);
-
-    auto txSetOpt = ipc->getTxSet(nominationHash, 5000);
-    REQUIRE(txSetOpt.has_value());
-
-    auto& txs = txSetOpt->v1TxSet()
-                    .phases[0]
-                    .v0Components()[0]
-                    .txsMaybeDiscountedFee()
-                    .txs;
+    auto txs = ipc->getTopTransactions(100, 5000);
     REQUIRE(txs.size() == 3);
 
-    // Verify all 3 TXs are included (order is by hash, not fee)
+    // Verify all 3 TXs are included
     std::set<uint32_t> fees;
     for (auto const& tx : txs)
     {
@@ -598,21 +550,10 @@ TEST_CASE("Rust overlay TX fee per op inclusion", "[overlay-ipc][.]")
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    Hash prevHash;
-    std::fill(prevHash.begin(), prevHash.end(), 0x42);
-    Hash nominationHash = ipc->requestNominationHash(2, prevHash, 5000);
-
-    auto txSetOpt = ipc->getTxSet(nominationHash, 5000);
-    REQUIRE(txSetOpt.has_value());
-
-    auto& txs = txSetOpt->v1TxSet()
-                    .phases[0]
-                    .v0Components()[0]
-                    .txsMaybeDiscountedFee()
-                    .txs;
+    auto txs = ipc->getTopTransactions(100, 5000);
     REQUIRE(txs.size() == 2);
 
-    // Both TXs should be included (order is by hash, not fee)
+    // Both TXs should be included
     std::set<uint32_t> fees;
     for (auto const& tx : txs)
     {
@@ -629,8 +570,7 @@ TEST_CASE("Rust overlay TX fee per op inclusion", "[overlay-ipc][.]")
  * Test mempool includes all transactions.
  *
  * Submit many TXs and verify they're all included since mempool isn't at
- * capacity. Note: TXs are sorted by hash in the TX set for consensus
- * determinism.
+ * capacity.
  */
 TEST_CASE("Rust overlay mempool eviction", "[overlay-ipc][.]")
 {
@@ -667,23 +607,12 @@ TEST_CASE("Rust overlay mempool eviction", "[overlay-ipc][.]")
 
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    Hash prevHash;
-    std::fill(prevHash.begin(), prevHash.end(), 0x42);
-    Hash nominationHash = ipc->requestNominationHash(2, prevHash, 5000);
-
-    auto txSetOpt = ipc->getTxSet(nominationHash, 5000);
-    REQUIRE(txSetOpt.has_value());
-
-    auto& txs = txSetOpt->v1TxSet()
-                    .phases[0]
-                    .v0Components()[0]
-                    .txsMaybeDiscountedFee()
-                    .txs;
+    auto txs = ipc->getTopTransactions(100, 5000);
 
     // All 53 TXs should be included (mempool not at capacity)
     REQUIRE(txs.size() == 53);
 
-    // Verify high-fee TXs are included (order is by hash, not fee)
+    // Verify high-fee TXs are included
     std::set<uint32_t> fees;
     for (auto const& tx : txs)
     {
@@ -728,20 +657,8 @@ TEST_CASE("Rust overlay TX deduplication", "[overlay-ipc][.]")
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    Hash prevHash;
-    std::fill(prevHash.begin(), prevHash.end(), 0x42);
-    Hash nominationHash = ipc->requestNominationHash(2, prevHash, 5000);
-
-    auto txSetOpt = ipc->getTxSet(nominationHash, 5000);
-    REQUIRE(txSetOpt.has_value());
-
-    auto& txs = txSetOpt->v1TxSet()
-                    .phases[0]
-                    .v0Components()[0]
-                    .txsMaybeDiscountedFee()
-                    .txs;
-
-    // Should only have 1 TX (not 2)
+    // Get top transactions - should only have 1 TX (deduped)
+    auto txs = ipc->getTopTransactions(100, 5000);
     REQUIRE(txs.size() == 1);
     REQUIRE(txs[0].v1().tx.fee == 1000);
 
@@ -778,38 +695,26 @@ TEST_CASE("Rust overlay mempool clear on externalize", "[overlay-ipc][.]")
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // Build TX set for ledger 2
-    Hash prevHash;
-    std::fill(prevHash.begin(), prevHash.end(), 0x42);
-    Hash nominationHash = ipc->requestNominationHash(2, prevHash, 5000);
+    // Get top transactions - should have 1 TX
+    auto txs = ipc->getTopTransactions(100, 5000);
+    REQUIRE(txs.size() == 1);
 
-    // Get TX set - should have 1 TX
-    auto txSetOpt = ipc->getTxSet(nominationHash, 5000);
-    REQUIRE(txSetOpt.has_value());
-    REQUIRE(txSetOpt->v1TxSet().phases[0].v0Components().size() == 1);
-    REQUIRE(txSetOpt->v1TxSet()
-                .phases[0]
-                .v0Components()[0]
-                .txsMaybeDiscountedFee()
-                .txs.size() == 1);
+    // Compute TX hash from the submitted TX
+    Hash txHash = xdrSha256(tx);
+    std::vector<Hash> txHashes = {txHash};
 
-    // Notify that this TX set was externalized
-    ipc->notifyTxSetExternalized(nominationHash);
+    Hash txSetHash;
+    std::fill(txSetHash.begin(), txSetHash.end(), 0x42);
 
-    // Give time for mempool cleanup
+    // Notify externalization with the TX hash
+    ipc->notifyTxSetExternalized(txSetHash, txHashes);
+
+    // Give time for processing
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // Request another nomination hash - should be empty since TX was cleared
-    Hash prevHash2;
-    std::fill(prevHash2.begin(), prevHash2.end(), 0x43);
-    Hash nominationHash2 = ipc->requestNominationHash(3, prevHash2, 5000);
-
-    // Get TX set - should be empty now
-    auto txSetOpt2 = ipc->getTxSet(nominationHash2, 5000);
-    REQUIRE(txSetOpt2.has_value());
-
-    // CLASSIC phase should have 0 components (empty)
-    REQUIRE(txSetOpt2->v1TxSet().phases[0].v0Components().size() == 0);
+    // TX should now be cleared from mempool
+    auto txs2 = ipc->getTopTransactions(100, 5000);
+    REQUIRE(txs2.empty());
 
     LOG_INFO(DEFAULT_LOG, "Mempool clear on externalize test passed");
     ipc->shutdown();
@@ -871,25 +776,10 @@ TEST_CASE("Rust overlay TX flooding between peers", "[overlay-ipc][.]")
     // Wait for TX to flood from A to B
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    // Request nomination hash from overlay B - should have the TX
-    Hash prevHash;
-    std::fill(prevHash.begin(), prevHash.end(), 0x42);
-    Hash nominationHashB = ipcB->requestNominationHash(2, prevHash, 5000);
+    // Get top transactions from overlay B - should have the flooded TX
+    auto txsB = ipcB->getTopTransactions(100, 5000);
 
-    // Get TX set from B
-    auto txSetOptB = ipcB->getTxSet(nominationHashB, 5000);
-    REQUIRE(txSetOptB.has_value());
-
-    // CLASSIC phase should have 1 component with 1 TX (the flooded TX)
-    auto& phasesB = txSetOptB->v1TxSet().phases;
-    REQUIRE(phasesB.size() == 2); // CLASSIC + SOROBAN
-
-    auto& classicPhaseB = phasesB[0];
-    REQUIRE(classicPhaseB.v() == 0);
-    auto& componentsB = classicPhaseB.v0Components();
-
-    REQUIRE(componentsB.size() == 1);
-    auto& txsB = componentsB[0].txsMaybeDiscountedFee().txs;
+    // Should have 1 TX (the flooded TX)
     REQUIRE(txsB.size() == 1);
 
     // Verify it's the same TX we submitted to A

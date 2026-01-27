@@ -17,8 +17,9 @@ pub enum MessageType {
     /// Broadcast this SCP envelope to all peers
     BroadcastScp = 1,
 
-    /// Request a TX set hash for nomination
-    RequestNominationHash = 2,
+    /// Request top N transactions from mempool for nomination
+    /// Payload: [count:4]
+    GetTopTxs = 2,
 
     /// Request current SCP state (peer asked via GET_SCP_STATE)
     RequestScpState = 3,
@@ -48,18 +49,24 @@ pub enum MessageType {
     /// Payload: [hash:32]
     RequestTxSet = 11,
 
+    /// Cache a locally-built TX set so Rust can serve it to peers
+    /// Payload: [hash:32][txSetXDR...]
+    CacheTxSet = 12,
+
     // ═══ Overlay → Core (Critical Path) ═══
     /// Received SCP envelope from network
     ScpReceived = 100,
 
-    /// Response to nomination request
-    NominationHash = 101,
+    /// Response to GET_TOP_TXS request
+    /// Payload: [count:4][len1:4][tx1:len1][len2:4][tx2:len2]...
+    TopTxsResponse = 101,
 
     /// Peer requested SCP state
     PeerRequestsScpState = 102,
 
     // ═══ Overlay → Core (Non-Critical) ═══
-    /// Here's a TX set you might need soon (optimistic push)
+    /// TX set fetched from peer (response to REQUEST_TX_SET)
+    /// Payload: [hash:32][txSetXDR...]
     TxSetAvailable = 103,
 
     /// Here's a quorum set referenced in SCP
@@ -84,7 +91,7 @@ impl TryFrom<u32> for MessageType {
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(MessageType::BroadcastScp),
-            2 => Ok(MessageType::RequestNominationHash),
+            2 => Ok(MessageType::GetTopTxs),
             3 => Ok(MessageType::RequestScpState),
             4 => Ok(MessageType::LedgerClosed),
             5 => Ok(MessageType::TxSetExternalized),
@@ -93,8 +100,9 @@ impl TryFrom<u32> for MessageType {
             8 => Ok(MessageType::SetPeerConfig),
             10 => Ok(MessageType::SubmitTx),
             11 => Ok(MessageType::RequestTxSet),
+            12 => Ok(MessageType::CacheTxSet),
             100 => Ok(MessageType::ScpReceived),
-            101 => Ok(MessageType::NominationHash),
+            101 => Ok(MessageType::TopTxsResponse),
             102 => Ok(MessageType::PeerRequestsScpState),
             103 => Ok(MessageType::TxSetAvailable),
             104 => Ok(MessageType::QuorumSetAvailable),
@@ -308,7 +316,7 @@ mod tests {
 
         let types = [
             MessageType::BroadcastScp,
-            MessageType::RequestNominationHash,
+            MessageType::GetTopTxs,
             MessageType::RequestScpState,
             MessageType::LedgerClosed,
             MessageType::TxSetExternalized,
@@ -318,7 +326,7 @@ mod tests {
             MessageType::SubmitTx,
             MessageType::RequestTxSet,
             MessageType::ScpReceived,
-            MessageType::NominationHash,
+            MessageType::TopTxsResponse,
             MessageType::PeerRequestsScpState,
             MessageType::TxSetAvailable,
             MessageType::QuorumSetAvailable,
@@ -360,7 +368,7 @@ mod tests {
         assert_eq!(MessageType::try_from(1).unwrap(), MessageType::BroadcastScp);
         assert_eq!(
             MessageType::try_from(2).unwrap(),
-            MessageType::RequestNominationHash
+            MessageType::GetTopTxs
         );
         assert_eq!(
             MessageType::try_from(3).unwrap(),
@@ -391,7 +399,7 @@ mod tests {
         );
         assert_eq!(
             MessageType::try_from(101).unwrap(),
-            MessageType::NominationHash
+            MessageType::TopTxsResponse
         );
         assert_eq!(
             MessageType::try_from(102).unwrap(),
