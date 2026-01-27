@@ -536,4 +536,94 @@ mod tests {
         assert_eq!(mempool.len(), 0);
         assert!(mempool.top_by_fee(10).is_empty());
     }
+
+    #[test]
+    fn test_zero_fee_tx() {
+        let mut mempool = Mempool::new(100, Duration::from_secs(300));
+
+        // TX with zero fee should be accepted (validation happens elsewhere)
+        let tx = make_tx(0, 1, 1, 1);
+        assert!(mempool.insert(tx));
+        assert_eq!(mempool.len(), 1);
+
+        // Zero fee TX should sort to end (lowest priority)
+        let tx_high_fee = make_tx(1000, 1, 2, 2);
+        let high_fee_hash = tx_high_fee.hash;
+        mempool.insert(tx_high_fee);
+
+        let top = mempool.top_by_fee(2);
+        assert_eq!(top.len(), 2);
+        // High fee should be first
+        assert_eq!(top[0], high_fee_hash, "High fee TX should be first");
+        // Verify by looking up the actual fee
+        assert_eq!(mempool.get(&top[0]).unwrap().fee, 1000);
+        assert_eq!(mempool.get(&top[1]).unwrap().fee, 0);
+    }
+
+    #[test]
+    fn test_same_account_different_seq() {
+        let mut mempool = Mempool::new(100, Duration::from_secs(300));
+
+        // Insert two TXs from same account with different sequences
+        let account = [42u8; 32];
+        let tx1 = TxEntry {
+            data: vec![1],
+            hash: [1u8; 32],
+            source_account: account,
+            sequence: 100,
+            fee: 500,
+            num_ops: 1,
+            received_at: Instant::now(),
+            from_peer: 0,
+        };
+        let tx2 = TxEntry {
+            data: vec![2],
+            hash: [2u8; 32],
+            source_account: account,
+            sequence: 101,
+            fee: 500,
+            num_ops: 1,
+            received_at: Instant::now(),
+            from_peer: 0,
+        };
+
+        assert!(mempool.insert(tx1));
+        assert!(mempool.insert(tx2));
+        assert_eq!(mempool.len(), 2);
+
+        // Both TXs should be retrievable by account
+        let account_txs = mempool.by_account(&account);
+        assert_eq!(account_txs.len(), 2);
+    }
+
+    #[test]
+    fn test_evict_returns_lowest_fee() {
+        let mut mempool = Mempool::new(3, Duration::from_secs(300));
+
+        // Insert 3 TXs with different fees
+        let low_fee_tx = make_tx(100, 1, 1, 1);
+        let low_fee_hash = low_fee_tx.hash;
+        mempool.insert(low_fee_tx);
+        mempool.insert(make_tx(300, 1, 2, 2)); // highest
+        mempool.insert(make_tx(200, 1, 3, 3)); // middle
+
+        assert_eq!(mempool.len(), 3);
+
+        // Insert 4th TX - should evict the lowest fee (100)
+        mempool.insert(make_tx(250, 1, 4, 4));
+        assert_eq!(mempool.len(), 3);
+
+        // Verify lowest fee TX was evicted
+        assert!(
+            !mempool.contains(&low_fee_hash),
+            "Lowest fee TX should have been evicted"
+        );
+
+        // Verify remaining TXs have expected fees
+        let top = mempool.top_by_fee(3);
+        let fees: Vec<u64> = top.iter().map(|h| mempool.get(h).unwrap().fee).collect();
+        assert!(fees.contains(&300), "Highest fee TX should remain");
+        assert!(fees.contains(&250), "New TX should be present");
+        assert!(fees.contains(&200), "Middle fee TX should remain");
+    }
 }

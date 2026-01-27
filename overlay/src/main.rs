@@ -508,8 +508,8 @@ impl App {
                 let num_ops = u32::from_le_bytes(msg.payload[8..12].try_into().unwrap());
                 let tx_data = msg.payload[12..].to_vec();
 
-                debug!(
-                    "Submitting TX: fee={}, numOps={}, size={}",
+                info!(
+                    "SUBMIT_TX: Core submitted TX: fee={}, numOps={}, size={}",
                     fee,
                     num_ops,
                     tx_data.len()

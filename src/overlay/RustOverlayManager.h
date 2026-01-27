@@ -54,6 +54,10 @@ class RustOverlayManager
     // Cache a locally-built TX set in Rust overlay
     void cacheTxSet(Hash const& txSetHash, std::vector<uint8_t> const& xdr);
 
+    // Get top transactions from Rust overlay's mempool for TX set building
+    std::vector<TransactionEnvelope> getTopTransactions(size_t count,
+                                                        int timeoutMs = 5000);
+
     // Metrics and managers
     OverlayMetrics& getOverlayMetrics();
 

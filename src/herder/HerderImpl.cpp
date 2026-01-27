@@ -33,6 +33,7 @@
 #include "scp/LocalNode.h"
 #include "scp/Slot.h"
 #include "transactions/MutableTransactionResult.h"
+#include "transactions/TransactionFrameBase.h"
 #include "transactions/TransactionUtils.h"
 #include "util/DebugMetaUtils.h"
 #include "util/Decoder.h"
@@ -1447,13 +1448,33 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     ApplicableTxSetFrameConstPtr applicableProposedSet;
     Hash txSetHash;
 
-    // Build TX set locally from transaction queue
+    // Build TX set from Rust overlay's mempool (not local TransactionQueue)
+    // The Rust overlay maintains the mempool via TX flooding
     PerPhaseTransactionList txPhases;
-    txPhases.emplace_back(mTransactionQueue.getTransactions(lcl.header));
+
+    // Get TXs from Rust overlay
+    auto& overlayMgr = mApp.getOverlayManager();
+    auto txEnvelopes = overlayMgr.getTopTransactions(
+        mApp.getLedgerManager().getLastMaxTxSetSizeOps(), 5000);
+
+    CLOG_INFO(Herder, "Got {} transactions from Rust overlay mempool",
+              txEnvelopes.size());
+
+    // Convert TransactionEnvelopes to TransactionFrameBasePtrs
+    TxFrameList classicTxs;
+    Hash const& networkID = mApp.getNetworkID();
+    for (auto const& env : txEnvelopes)
+    {
+        auto txFrame =
+            TransactionFrameBase::makeTransactionFromWire(networkID, env);
+        classicTxs.push_back(txFrame);
+    }
+    txPhases.emplace_back(std::move(classicTxs));
 
     if (protocolVersionStartsFrom(lcl.header.ledgerVersion,
                                   SOROBAN_PROTOCOL_VERSION))
     {
+        // For Soroban TXs, still use local queue for now (TODO: move to Rust)
         releaseAssert(mSorobanTransactionQueue);
         txPhases.emplace_back(
             mSorobanTransactionQueue->getTransactions(lcl.header));

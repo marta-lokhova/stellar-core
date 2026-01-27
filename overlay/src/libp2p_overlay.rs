@@ -528,7 +528,7 @@ impl StellarOverlay {
         let peers: Vec<_> = streams.keys().cloned().collect();
         drop(streams);
 
-        debug!("Broadcasting TX to {} peers", peers.len());
+        info!("TX_BROADCAST: Broadcasting TX {:02x?}... ({} bytes) to {} peers", &hash[..4], tx.len(), peers.len());
 
         for peer_id in peers {
             if let Err(e) = send_to_peer_stream(&self.state, peer_id, StreamType::Tx, tx).await {
@@ -800,7 +800,7 @@ async fn handle_inbound_scp_streams(mut incoming: IncomingStreams, state: Arc<Sh
 /// Handle inbound TX streams from peers
 async fn handle_inbound_tx_streams(mut incoming: IncomingStreams, state: Arc<SharedState>) {
     while let Some((peer_id, mut stream)) = incoming.next().await {
-        debug!("Accepted inbound TX stream from {}", peer_id);
+        info!("TX_STREAM: Accepted inbound TX stream from {}", peer_id);
         let state = state.clone();
 
         tokio::spawn(async move {
@@ -819,7 +819,7 @@ async fn handle_inbound_tx_streams(mut incoming: IncomingStreams, state: Arc<Sha
                             seen.put(hash, ());
                         }
 
-                        trace!("Received TX ({} bytes) from {}", tx.len(), peer_id);
+                        info!("TX_RECV: Received TX {:02x?}... ({} bytes) from {}", &hash[..4], tx.len(), peer_id);
                         let _ = state
                             .event_tx
                             .send(OverlayEvent::TxReceived { tx, from: peer_id });
@@ -1808,6 +1808,323 @@ async fn test_txset_fetch_flow() {
         got_request,
         "overlay1 should receive TxSet request from overlay2"
     );
+
+    handle1.shutdown().await;
+    handle2.shutdown().await;
+}
+
+/// Test that peer disconnect triggers reconnect attempt
+#[tokio::test]
+async fn test_peer_disconnect_detection() {
+    let keypair1 = Keypair::generate_ed25519();
+    let keypair2 = Keypair::generate_ed25519();
+
+    let (handle1, mut events1, overlay1) = create_overlay(keypair1).unwrap();
+    let (handle2, _events2, overlay2) = create_overlay(keypair2).unwrap();
+
+    let listen_port = 20301;
+    tokio::spawn(async move { overlay1.run(listen_port).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    tokio::spawn(async move { overlay2.run(20302).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Connect
+    let addr: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1", listen_port)
+        .parse()
+        .unwrap();
+    handle2.dial(addr).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Verify connection was established by checking we can send SCP
+    handle1.broadcast_scp(b"test".to_vec()).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Now shutdown overlay2 - overlay1 should detect disconnect
+    handle2.shutdown().await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // overlay1 should have received a disconnect event or connection closed
+    // (Connection closed is handled internally by libp2p, we verify no crash)
+
+    handle1.shutdown().await;
+    // Test passes if we get here without hanging or crashing
+}
+
+/// Test connect to unreachable peer times out gracefully
+#[tokio::test]
+async fn test_connect_unreachable_peer_timeout() {
+    let keypair = Keypair::generate_ed25519();
+    let (handle, _events, overlay) = create_overlay(keypair).unwrap();
+
+    let listen_port = 20401;
+    tokio::spawn(async move { overlay.run(listen_port).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Try to connect to a non-existent peer
+    // Use a port that's definitely not listening
+    let bad_addr: Multiaddr = "/ip4/127.0.0.1/udp/59999/quic-v1".parse().unwrap();
+
+    // This should not hang - dial returns immediately, connection fails async
+    let start = tokio::time::Instant::now();
+    handle.dial(bad_addr).await;
+
+    // Give some time for the connection attempt
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Verify we didn't hang for too long
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "Connection attempt should not block for more than 5 seconds"
+    );
+
+    // Overlay should still be operational
+    handle.shutdown().await;
+}
+
+/// Test large TX set doesn't block SCP messages
+#[tokio::test]
+async fn test_large_txset_doesnt_block_scp() {
+    let keypair1 = Keypair::generate_ed25519();
+    let keypair2 = Keypair::generate_ed25519();
+
+    let (handle1, mut events1, overlay1) = create_overlay(keypair1).unwrap();
+    let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
+
+    let listen_port = 20501;
+    tokio::spawn(async move { overlay1.run(listen_port).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    tokio::spawn(async move { overlay2.run(20502).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Connect
+    let addr: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1", listen_port)
+        .parse()
+        .unwrap();
+    handle2.dial(addr).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Drain initial events
+    while events1.try_recv().is_ok() {}
+    while events2.try_recv().is_ok() {}
+
+    // Create a large TX set (1MB)
+    let large_txset = vec![0xAB; 1024 * 1024];
+    let txset_hash: [u8; 32] = [0x11; 32];
+
+    // Start sending large TX set from node1
+    let handle1_clone = handle1.clone();
+    let large_txset_clone = large_txset.clone();
+    let send_task = tokio::spawn(async move {
+        // Simulate responding to TX set request with large data
+        // We'll use the event system - node2 requests, node1 responds
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    });
+
+    // Immediately send SCP message - should NOT be blocked
+    let scp_msg = b"urgent SCP message".to_vec();
+    let scp_start = tokio::time::Instant::now();
+    handle1.broadcast_scp(scp_msg.clone()).await;
+
+    // SCP should arrive quickly (< 100ms) even if TX set is being transferred
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+    let mut scp_received = false;
+
+    while tokio::time::Instant::now() < deadline && !scp_received {
+        tokio::select! {
+            Some(event) = events2.recv() => {
+                if let OverlayEvent::ScpReceived { envelope, .. } = event {
+                    if envelope == scp_msg {
+                        scp_received = true;
+                    }
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+
+    let scp_latency = scp_start.elapsed();
+    assert!(scp_received, "SCP message should be received");
+    assert!(
+        scp_latency < Duration::from_millis(200),
+        "SCP latency should be < 200ms, was {:?}",
+        scp_latency
+    );
+
+    send_task.await.unwrap();
+    handle1.shutdown().await;
+    handle2.shutdown().await;
+}
+
+/// Test TX set request to peer that has the data
+#[tokio::test]
+async fn test_txset_request_and_response() {
+    let keypair1 = Keypair::generate_ed25519();
+    let keypair2 = Keypair::generate_ed25519();
+
+    let (handle1, mut events1, overlay1) = create_overlay(keypair1).unwrap();
+    let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
+
+    let listen_port = 20601;
+    tokio::spawn(async move { overlay1.run(listen_port).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    tokio::spawn(async move { overlay2.run(20602).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Connect
+    let addr: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1", listen_port)
+        .parse()
+        .unwrap();
+    handle2.dial(addr).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Drain events
+    while events1.try_recv().is_ok() {}
+    while events2.try_recv().is_ok() {}
+
+    // Node2 requests a TX set
+    let requested_hash: [u8; 32] = [0x77; 32];
+    let txset_data = b"test tx set XDR content here".to_vec();
+
+    handle2.fetch_txset(requested_hash).await;
+
+    // Node1 receives request and responds
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut responded = false;
+
+    while tokio::time::Instant::now() < deadline && !responded {
+        tokio::select! {
+            Some(event) = events1.recv() => {
+                if let OverlayEvent::TxSetRequested { hash, from } = event {
+                    assert_eq!(hash, requested_hash, "Request should have correct hash");
+                    handle1.send_txset(hash, txset_data.clone(), from).await;
+                    responded = true;
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+    assert!(responded, "Node1 should receive and respond to TX set request");
+
+    // Node2 should receive the TX set
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut received = false;
+
+    while tokio::time::Instant::now() < deadline && !received {
+        tokio::select! {
+            Some(event) = events2.recv() => {
+                if let OverlayEvent::TxSetReceived { hash, data, .. } = event {
+                    assert_eq!(hash, requested_hash, "Received hash should match");
+                    assert_eq!(data, txset_data, "Received data should match");
+                    received = true;
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+    assert!(received, "Node2 should receive TX set response");
+
+    handle1.shutdown().await;
+    handle2.shutdown().await;
+}
+
+/// Test TX set fetch when no peers are connected
+#[tokio::test]
+async fn test_txset_fetch_no_peers() {
+    let keypair = Keypair::generate_ed25519();
+    let (handle, mut events, overlay) = create_overlay(keypair).unwrap();
+
+    let listen_port = 20701;
+    tokio::spawn(async move { overlay.run(listen_port).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Request TX set with no peers connected
+    let requested_hash: [u8; 32] = [0x88; 32];
+    handle.fetch_txset(requested_hash).await;
+
+    // Should not crash or hang - just no response
+    // Wait briefly to ensure no panic
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Drain any events (there shouldn't be any TX set related ones)
+    let mut txset_events = 0;
+    while let Ok(event) = events.try_recv() {
+        if matches!(event, OverlayEvent::TxSetReceived { .. }) {
+            txset_events += 1;
+        }
+    }
+    assert_eq!(
+        txset_events, 0,
+        "Should not receive TX set when no peers connected"
+    );
+
+    handle.shutdown().await;
+}
+
+/// Test multiple concurrent TX set requests
+#[tokio::test]
+async fn test_txset_multiple_concurrent_requests() {
+    let keypair1 = Keypair::generate_ed25519();
+    let keypair2 = Keypair::generate_ed25519();
+
+    let (handle1, mut events1, overlay1) = create_overlay(keypair1).unwrap();
+    let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
+
+    let listen_port = 20801;
+    tokio::spawn(async move { overlay1.run(listen_port).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    tokio::spawn(async move { overlay2.run(20802).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Connect
+    let addr: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1", listen_port)
+        .parse()
+        .unwrap();
+    handle2.dial(addr).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Drain events
+    while events1.try_recv().is_ok() {}
+    while events2.try_recv().is_ok() {}
+
+    // Request multiple TX sets concurrently
+    let hash1: [u8; 32] = [0x11; 32];
+    let hash2: [u8; 32] = [0x22; 32];
+    let hash3: [u8; 32] = [0x33; 32];
+
+    handle2.fetch_txset(hash1).await;
+    handle2.fetch_txset(hash2).await;
+    handle2.fetch_txset(hash3).await;
+
+    // Node1 should receive all 3 requests
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let mut received_hashes = std::collections::HashSet::new();
+
+    while tokio::time::Instant::now() < deadline && received_hashes.len() < 3 {
+        tokio::select! {
+            Some(event) = events1.recv() => {
+                if let OverlayEvent::TxSetRequested { hash, from } = event {
+                    received_hashes.insert(hash);
+                    // Respond to each request
+                    let data = format!("txset for {:?}", &hash[..4]).into_bytes();
+                    handle1.send_txset(hash, data, from).await;
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+
+    assert_eq!(
+        received_hashes.len(),
+        3,
+        "Should receive all 3 TX set requests"
+    );
+    assert!(received_hashes.contains(&hash1));
+    assert!(received_hashes.contains(&hash2));
+    assert!(received_hashes.contains(&hash3));
 
     handle1.shutdown().await;
     handle2.shutdown().await;

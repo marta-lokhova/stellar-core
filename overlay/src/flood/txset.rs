@@ -248,6 +248,32 @@ mod tests {
     }
 
     #[test]
+    fn test_hash_different_for_different_content() {
+        let prev_hash = [3u8; 32];
+        let xdr1 = build_tx_set_xdr(&prev_hash, &[]);
+        let xdr2 = build_tx_set_xdr(&prev_hash, &[vec![1, 2, 3]]);
+
+        let hash1 = hash_tx_set(&xdr1);
+        let hash2 = hash_tx_set(&xdr2);
+
+        assert_ne!(hash1, hash2, "Different TX sets should have different hashes");
+    }
+
+    #[test]
+    fn test_hash_different_for_different_prev_hash() {
+        let xdr1 = build_tx_set_xdr(&[1u8; 32], &[]);
+        let xdr2 = build_tx_set_xdr(&[2u8; 32], &[]);
+
+        let hash1 = hash_tx_set(&xdr1);
+        let hash2 = hash_tx_set(&xdr2);
+
+        assert_ne!(
+            hash1, hash2,
+            "TX sets with different prev_hash should have different hashes"
+        );
+    }
+
+    #[test]
     fn test_cache_insert_and_get() {
         let mut cache = TxSetCache::new(10);
 
@@ -286,5 +312,115 @@ mod tests {
 
         assert!(cache.get(&[1u8; 32]).is_none()); // evicted
         assert!(cache.get(&[2u8; 32]).is_some()); // kept
+    }
+
+    #[test]
+    fn test_cache_capacity_eviction() {
+        let mut cache = TxSetCache::new(2); // Small cache
+
+        cache.insert(CachedTxSet {
+            hash: [1u8; 32],
+            xdr: vec![],
+            ledger_seq: 100,
+            tx_hashes: vec![],
+        });
+        cache.insert(CachedTxSet {
+            hash: [2u8; 32],
+            xdr: vec![],
+            ledger_seq: 101,
+            tx_hashes: vec![],
+        });
+
+        assert_eq!(cache.len(), 2);
+
+        // Insert 3rd - should evict one
+        cache.insert(CachedTxSet {
+            hash: [3u8; 32],
+            xdr: vec![],
+            ledger_seq: 102,
+            tx_hashes: vec![],
+        });
+
+        assert_eq!(cache.len(), 2, "Cache should stay at capacity");
+        assert!(cache.get(&[3u8; 32]).is_some(), "New item should be present");
+    }
+
+    #[test]
+    fn test_cache_remove_returns_tx_hashes() {
+        let mut cache = TxSetCache::new(10);
+
+        let tx_hashes = vec![[0xAA; 32], [0xBB; 32]];
+        cache.insert(CachedTxSet {
+            hash: [1u8; 32],
+            xdr: vec![],
+            ledger_seq: 100,
+            tx_hashes: tx_hashes.clone(),
+        });
+
+        let removed = cache.remove(&[1u8; 32]);
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap(), tx_hashes);
+
+        // Should be gone now
+        assert!(cache.get(&[1u8; 32]).is_none());
+    }
+
+    #[test]
+    fn test_cache_remove_nonexistent() {
+        let mut cache = TxSetCache::new(10);
+
+        let removed = cache.remove(&[99u8; 32]);
+        assert!(removed.is_none());
+    }
+
+    #[test]
+    fn test_cache_clear() {
+        let mut cache = TxSetCache::new(10);
+
+        cache.insert(CachedTxSet {
+            hash: [1u8; 32],
+            xdr: vec![],
+            ledger_seq: 100,
+            tx_hashes: vec![],
+        });
+        cache.insert(CachedTxSet {
+            hash: [2u8; 32],
+            xdr: vec![],
+            ledger_seq: 101,
+            tx_hashes: vec![],
+        });
+
+        assert_eq!(cache.len(), 2);
+
+        cache.clear();
+
+        assert_eq!(cache.len(), 0);
+        assert!(cache.get(&[1u8; 32]).is_none());
+        assert!(cache.get(&[2u8; 32]).is_none());
+    }
+
+    #[test]
+    fn test_cache_overwrite_same_hash() {
+        let mut cache = TxSetCache::new(10);
+
+        cache.insert(CachedTxSet {
+            hash: [1u8; 32],
+            xdr: vec![1, 2, 3],
+            ledger_seq: 100,
+            tx_hashes: vec![],
+        });
+
+        // Insert with same hash but different data
+        cache.insert(CachedTxSet {
+            hash: [1u8; 32],
+            xdr: vec![4, 5, 6],
+            ledger_seq: 200,
+            tx_hashes: vec![],
+        });
+
+        assert_eq!(cache.len(), 1, "Should not create duplicate");
+        let retrieved = cache.get(&[1u8; 32]).unwrap();
+        assert_eq!(retrieved.ledger_seq, 200, "Should have newer data");
+        assert_eq!(retrieved.xdr, vec![4, 5, 6]);
     }
 }

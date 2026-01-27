@@ -139,6 +139,7 @@ void
 RustOverlayManager::broadcastTransaction(TransactionEnvelope const& tx,
                                          int64_t fee, uint32_t numOps)
 {
+    CLOG_INFO(Overlay, "RustOverlayManager::broadcastTransaction fee={} numOps={}", fee, numOps);
     if (mOverlayIPC && !mShuttingDown)
     {
         mOverlayIPC->submitTransaction(tx, fee, numOps);
@@ -182,6 +183,16 @@ RustOverlayManager::cacheTxSet(Hash const& txSetHash,
     {
         mOverlayIPC->cacheTxSet(txSetHash, xdr);
     }
+}
+
+std::vector<TransactionEnvelope>
+RustOverlayManager::getTopTransactions(size_t count, int timeoutMs)
+{
+    if (mOverlayIPC && !mShuttingDown)
+    {
+        return mOverlayIPC->getTopTransactions(count, timeoutMs);
+    }
+    return {};
 }
 
 OverlayMetrics&
