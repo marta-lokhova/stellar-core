@@ -9,7 +9,6 @@
 #include "herder/QuorumTracker.h"
 #include "herder/TransactionQueue.h"
 #include "lib/json/json-forwards.h"
-#include "overlay/Peer.h"
 #include "overlay/StellarXDR.h"
 #include "scp/SCP.h"
 #include "util/Timer.h"
@@ -144,8 +143,6 @@ class Herder
     virtual TransactionQueue::AddResult
     recvTransaction(TransactionFrameBasePtr tx, bool submittedFromSelf) = 0;
 #endif
-    virtual void peerDoesntHave(stellar::MessageType type,
-                                uint256 const& itemID, Peer::pointer peer) = 0;
     virtual TxSetXDRFrameConstPtr getTxSet(Hash const& hash) = 0;
     virtual SCPQuorumSetPtr getQSet(Hash const& qSetHash) = 0;
 
@@ -179,8 +176,9 @@ class Herder
 
     virtual bool sourceAccountPending(AccountID const& accountID) const = 0;
 #endif
-    // a peer needs our SCP state
-    virtual void sendSCPStateToPeer(uint32 ledgerSeq, Peer::pointer peer) = 0;
+    // Collect SCP state for a given ledger to send to a requesting peer
+    // Returns vector of SCP envelopes that should be sent
+    virtual std::vector<SCPEnvelope> getSCPStateForPeer(uint32 ledgerSeq) = 0;
 
     virtual uint32_t trackingConsensusLedgerIndex() const = 0;
     virtual uint32_t getMaxClassicTxSize() const = 0;

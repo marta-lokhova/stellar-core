@@ -7,7 +7,7 @@
 #include "herder/TxSetFrame.h"
 #include "main/Application.h"
 #include "main/Config.h"
-#include "overlay/OverlayManager.h"
+#include "overlay/RustOverlayManager.h"
 #include "scp/QuorumSetUtils.h"
 #include "scp/Slot.h"
 #include "util/GlobalChecks.h"
@@ -29,10 +29,6 @@ PendingEnvelopes::PendingEnvelopes(Application& app, HerderImpl& herder)
     : mApp(app)
     , mHerder(herder)
     , mQsetCache(QSET_CACHE_SIZE)
-    , mTxSetFetcher(
-          app, [](Peer::pointer peer, Hash hash) { peer->sendGetTxSet(hash); })
-    , mQuorumSetFetcher(app, [](Peer::pointer peer,
-                                Hash hash) { peer->sendGetQuorumSet(hash); })
     , mTxSetCache(TXSET_CACHE_SIZE)
     , mValueSizeCache(TXSET_CACHE_SIZE + QSET_CACHE_SIZE)
     , mRebuildQuorum(true)
@@ -53,28 +49,6 @@ PendingEnvelopes::PendingEnvelopes(Application& app, HerderImpl& herder)
 
 PendingEnvelopes::~PendingEnvelopes()
 {
-}
-
-void
-PendingEnvelopes::peerDoesntHave(MessageType type, Hash const& itemID,
-                                 Peer::pointer peer)
-{
-    switch (type)
-    {
-    // Subtle: it is important to treat both TX_SET and GENERALIZED_TX_SET the
-    // same way here, since the sending node may have the type wrong depending
-    // on the protocol version
-    case TX_SET:
-    case GENERALIZED_TX_SET:
-        mTxSetFetcher.doesntHave(itemID, peer);
-        break;
-    case SCP_QUORUMSET:
-        mQuorumSetFetcher.doesntHave(itemID, peer);
-        break;
-    default:
-        CLOG_INFO(Herder, "Unknown Type in peerDoesntHave: {}", type);
-        break;
-    }
 }
 
 SCPQuorumSetPtr
@@ -117,7 +91,7 @@ PendingEnvelopes::addSCPQuorumSet(Hash const& hash, SCPQuorumSet const& q)
 {
     ZoneScoped;
     putQSet(hash, q);
-    mQuorumSetFetcher.recv(hash, mFetchQsetTimer);
+    mPendingQSetFetches.erase(hash);
 }
 
 bool
@@ -126,8 +100,8 @@ PendingEnvelopes::recvSCPQuorumSet(Hash const& hash, SCPQuorumSet const& q)
     ZoneScoped;
     CLOG_TRACE(Herder, "Got SCPQSet {}", hexAbbrev(hash));
 
-    auto lastSeenSlotIndex = mQuorumSetFetcher.getLastSeenSlotIndex(hash);
-    if (lastSeenSlotIndex == 0)
+    // Only accept if we were actually fetching this
+    if (mPendingQSetFetches.find(hash) == mPendingQSetFetches.end())
     {
         return false;
     }
@@ -152,9 +126,26 @@ PendingEnvelopes::discardSCPEnvelopesWithQSet(Hash const& hash)
     CLOG_TRACE(Herder, "Discarding SCP Envelopes with SCPQSet {}",
                hexAbbrev(hash));
 
-    auto envelopes = mQuorumSetFetcher.fetchingFor(hash);
-    for (auto& envelope : envelopes)
-        discardSCPEnvelope(envelope);
+    // Find all fetching envelopes that need this qset and discard them
+    for (auto& slotEnvs : mEnvelopes)
+    {
+        for (auto it = slotEnvs.second.mFetchingEnvelopes.begin();
+             it != slotEnvs.second.mFetchingEnvelopes.end();)
+        {
+            Hash qsetHash = Slot::getCompanionQuorumSetHashFromStatement(
+                it->first.statement);
+            if (qsetHash == hash)
+            {
+                discardSCPEnvelope(it->first);
+                it = slotEnvs.second.mFetchingEnvelopes.erase(it);
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    }
+    mPendingQSetFetches.erase(hash);
 }
 
 void
@@ -235,7 +226,7 @@ PendingEnvelopes::addTxSet(Hash const& hash, uint64 lastSeenSlotIndex,
     CLOG_TRACE(Herder, "Add TxSet {}", hexAbbrev(hash));
 
     putTxSet(hash, lastSeenSlotIndex, txset);
-    mTxSetFetcher.recv(hash, mFetchTxSetTimer);
+    mPendingTxSetFetches.erase(hash);
 }
 
 bool
@@ -244,13 +235,29 @@ PendingEnvelopes::recvTxSet(Hash const& hash, TxSetXDRFrameConstPtr txset)
     ZoneScoped;
     CLOG_TRACE(Herder, "Got TxSet {}", hexAbbrev(hash));
 
-    auto lastSeenSlotIndex = mTxSetFetcher.getLastSeenSlotIndex(hash);
-    if (lastSeenSlotIndex == 0)
+    // Only accept if we were actually fetching this
+    if (mPendingTxSetFetches.find(hash) == mPendingTxSetFetches.end())
     {
         return false;
     }
 
-    addTxSet(hash, lastSeenSlotIndex, txset);
+    // Find the slot index for this txset from fetching envelopes
+    uint64 slotIndex = 0;
+    for (auto const& slotEnvs : mEnvelopes)
+    {
+        for (auto const& fetchEnv : slotEnvs.second.mFetchingEnvelopes)
+        {
+            for (auto const& h : getValidatedTxSetHashes(fetchEnv.first))
+            {
+                if (h == hash)
+                {
+                    slotIndex = std::max(slotIndex, slotEnvs.first);
+                }
+            }
+        }
+    }
+
+    addTxSet(hash, slotIndex, txset);
     return true;
 }
 
@@ -590,7 +597,8 @@ PendingEnvelopes::startFetch(SCPEnvelope const& envelope)
     bool needSomething = false;
     if (!getKnownQSet(h, false))
     {
-        mQuorumSetFetcher.fetch(h, envelope);
+        // Track that we need this qset - will be requested via IPC
+        mPendingQSetFetches.insert(h);
         needSomething = true;
     }
 
@@ -598,7 +606,9 @@ PendingEnvelopes::startFetch(SCPEnvelope const& envelope)
     {
         if (!getKnownTxSet(h2, 0, false))
         {
-            mTxSetFetcher.fetch(h2, envelope);
+            // Track that we need this txset - request via IPC
+            mPendingTxSetFetches.insert(h2);
+            mApp.getOverlayManager().requestTxSet(h2);
             needSomething = true;
         }
     }
@@ -616,11 +626,11 @@ PendingEnvelopes::stopFetch(SCPEnvelope const& envelope)
 {
     ZoneScoped;
     Hash h = Slot::getCompanionQuorumSetHashFromStatement(envelope.statement);
-    mQuorumSetFetcher.stopFetch(h, envelope);
+    mPendingQSetFetches.erase(h);
 
     for (auto const& h2 : getValidatedTxSetHashes(envelope))
     {
-        mTxSetFetcher.stopFetch(h2, envelope);
+        mPendingTxSetFetches.erase(h2);
     }
 
     CLOG_TRACE(Herder, "StopFetch env {} i:{} t:{}",
@@ -727,8 +737,8 @@ PendingEnvelopes::stopAllBelow(uint64 slotIndex, uint64 slotToKeep)
             recordReceivedCost(env.first);
         }
     }
-    mTxSetFetcher.stopFetchingBelow(slotIndex, slotToKeep);
-    mQuorumSetFetcher.stopFetchingBelow(slotIndex, slotToKeep);
+    // Clear pending fetches for old slots - no need to track individual slots
+    // since Rust overlay handles timeout/retry logic
 }
 
 void

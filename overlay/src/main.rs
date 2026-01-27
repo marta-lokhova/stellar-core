@@ -9,10 +9,10 @@
 //! Communicates with Core via Unix domain socket IPC.
 
 mod config;
-mod ipc;
 mod flood;
 mod http;
 pub mod integrated;
+mod ipc;
 pub mod libp2p_overlay;
 
 use std::collections::HashSet;
@@ -23,14 +23,14 @@ use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, warn};
 
 use config::Config;
+use flood::{build_tx_set_xdr, hash_tx_set, CachedTxSet, Hash256, TxSetCache};
+use integrated::{CoreCommand, Overlay, OverlayHandle};
 use ipc::{CoreIpc, Message, MessageType};
-use integrated::{Overlay, OverlayHandle, CoreCommand};
-use flood::{TxSetCache, CachedTxSet, Hash256, build_tx_set_xdr, hash_tx_set};
-use libp2p_overlay::{
-    create_overlay, OverlayHandle as LibP2pOverlayHandle, 
-    OverlayEvent as LibP2pOverlayEvent, StellarOverlay,
-};
 use libp2p::identity::Keypair as Libp2pKeypair;
+use libp2p_overlay::{
+    create_overlay, OverlayEvent as LibP2pOverlayEvent, OverlayHandle as LibP2pOverlayHandle,
+    StellarOverlay,
+};
 
 /// Command-line arguments
 struct Args {
@@ -48,7 +48,7 @@ impl Args {
             listen_mode: false,
             peer_port: None,
         };
-        
+
         let mut iter = std::env::args().skip(1);
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -77,7 +77,9 @@ impl Args {
                     eprintln!("  -c, --config <PATH>    Path to config file (TOML)");
                     eprintln!("  -s, --socket <PATH>    Path to Core IPC socket");
                     eprintln!("  -p, --peer-port <PORT> Port for peer TCP connections");
-                    eprintln!("  -l, --listen           Listen mode (create socket, wait for Core)");
+                    eprintln!(
+                        "  -l, --listen           Listen mode (create socket, wait for Core)"
+                    );
                     eprintln!("  -h, --help             Show this help");
                     eprintln!();
                     eprintln!("By default, connects to an existing socket. Use --listen to create");
@@ -92,9 +94,62 @@ impl Args {
                 }
             }
         }
-        
+
         args
     }
+}
+
+/// Extract TX set hashes from an SCP envelope (best effort, may return empty)
+/// The SCP envelope contains StellarValue(s) which start with a 32-byte txSetHash.
+/// We look for these hashes without fully parsing the XDR - just scanning for them.
+fn extract_txset_hashes_from_scp(envelope: &[u8]) -> Vec<[u8; 32]> {
+    // StellarValue structure:
+    //   Hash txSetHash;      // 32 bytes
+    //   TimePoint closeTime; // uint64 (8 bytes)
+    //   UpgradeType upgrades<6>;
+    //   union switch (StellarValueType v) { ... }
+    //
+    // The txSetHash appears in SCPBallot.value within various statement types.
+    // Rather than fully parsing, we look for 32-byte sequences that could be hashes.
+    // This is imperfect but catches most cases.
+    //
+    // SCP statement types that contain StellarValue:
+    // - PREPARE: ballot.value, prepared.value, preparedPrime.value
+    // - CONFIRM: ballot.value
+    // - EXTERNALIZE: commit.value
+    // - NOMINATE: votes<>, accepted<>
+
+    let mut hashes = Vec::new();
+
+    // Skip the nodeID (32 bytes) and slotIndex (8 bytes) at the start of SCPStatement
+    // Then we have the pledges union...
+    // This is too complex to parse reliably without proper XDR decoding.
+
+    // Simple heuristic: look for 32-byte sequences followed by a reasonable timestamp
+    // (timestamps are 8-byte uint64s, Stellar timestamps are ~1.7B for year 2024)
+    if envelope.len() < 48 {
+        return hashes;
+    }
+
+    // Scan through looking for potential StellarValue structures
+    for i in 0..envelope.len().saturating_sub(40) {
+        // Check if bytes [i..i+32] could be a hash followed by a valid timestamp
+        if i + 40 <= envelope.len() {
+            let potential_timestamp =
+                u64::from_be_bytes(envelope[i + 32..i + 40].try_into().unwrap_or([0; 8]));
+            // Stellar timestamps are Unix time, valid range ~1.5B to ~2B for 2020-2033
+            if potential_timestamp > 1_500_000_000 && potential_timestamp < 2_500_000_000 {
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&envelope[i..i + 32]);
+                // Avoid duplicates
+                if !hashes.contains(&hash) {
+                    hashes.push(hash);
+                }
+            }
+        }
+    }
+
+    hashes
 }
 
 /// Application state
@@ -113,6 +168,8 @@ struct App {
     libp2p_handle: LibP2pOverlayHandle,
     /// libp2p overlay events
     libp2p_events: mpsc::UnboundedReceiver<LibP2pOverlayEvent>,
+    /// TX sets that Core has requested but we're still fetching from peers
+    pending_core_txset_requests: Arc<RwLock<HashSet<Hash256>>>,
 }
 
 impl App {
@@ -123,36 +180,39 @@ impl App {
         } else {
             CoreIpc::connect(&config.core_socket).await?
         };
-        
+
         // Create channels for mempool manager communication
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-        
+
         // Create mempool manager (no network - libp2p handles all P2P)
         let mempool_manager = Overlay::new(cmd_rx);
         let overlay_handle = OverlayHandle::new(cmd_tx);
-        
+
         // Spawn mempool manager task
         tokio::spawn(async move {
             if let Err(e) = mempool_manager.run().await {
                 error!("Mempool manager error: {}", e);
             }
         });
-        
+
         // Create libp2p QUIC overlay for SCP + TX + TxSet (unified, independent streams)
         let libp2p_keypair = Libp2pKeypair::generate_ed25519();
         let (libp2p_handle, libp2p_event_rx, libp2p_overlay) = create_overlay(libp2p_keypair)
             .map_err(|e| format!("Failed to create libp2p overlay: {}", e))?;
-        
+
         // Use peer_port + 1000 for libp2p QUIC to avoid collision with legacy TCP
         let libp2p_port = config.peer_port + 1000;
-        
+
         // Spawn libp2p overlay task
         tokio::spawn(async move {
             libp2p_overlay.run(libp2p_port).await;
         });
-        
-        info!("Started libp2p QUIC overlay on port {} (SCP + TX + TxSet streams)", libp2p_port);
-        
+
+        info!(
+            "Started libp2p QUIC overlay on port {} (SCP + TX + TxSet streams)",
+            libp2p_port
+        );
+
         Ok(Self {
             config,
             core_ipc,
@@ -162,13 +222,14 @@ impl App {
             current_ledger_seq: Arc::new(RwLock::new(0)),
             libp2p_handle,
             libp2p_events: libp2p_event_rx,
+            pending_core_txset_requests: Arc::new(RwLock::new(HashSet::new())),
         })
     }
-    
+
     /// Main event loop - process messages from Core and overlay events
     async fn run(mut self) {
         info!("Overlay started, processing Core messages");
-        
+
         loop {
             tokio::select! {
                 // Receive message from Core
@@ -181,73 +242,123 @@ impl App {
                         }
                     }
                 }
-                
+
                 // Receive events from libp2p QUIC overlay (SCP + TX + TxSet)
                 Some(event) = self.libp2p_events.recv() => {
                     self.handle_libp2p_event(event).await;
                 }
             }
         }
-        
+
         // Shutdown libp2p
         self.libp2p_handle.shutdown().await;
-        
+
         info!("Overlay shutting down");
     }
-    
+
     /// Handle an event from the libp2p QUIC overlay (SCP + TX)
     async fn handle_libp2p_event(&mut self, event: LibP2pOverlayEvent) {
         match event {
             LibP2pOverlayEvent::ScpReceived { envelope, from } => {
-                debug!("Received SCP via QUIC from {}: {} bytes", from, envelope.len());
+                // Copy first 4 bytes for logging identification
+                let mut id_bytes = [0u8; 4];
+                let id_len = std::cmp::min(envelope.len(), 4);
+                id_bytes[..id_len].copy_from_slice(&envelope[..id_len]);
+
+                info!(
+                    "SCP_FROM_PEER: Received SCP (id={:02x?}) ({} bytes) from {}, forwarding to Core",
+                    &id_bytes[..id_len],
+                    envelope.len(),
+                    from
+                );
+
+                // Extract TX set hashes and record which peer has them
+                let txset_hashes = extract_txset_hashes_from_scp(&envelope);
+                for txhash in &txset_hashes {
+                    debug!(
+                        "Recording peer {} as source for TX set {:02x?}...",
+                        from,
+                        &txhash[..4]
+                    );
+                    self.libp2p_handle.record_txset_source(*txhash, from).await;
+                }
+
                 // Forward to Core
                 if let Err(e) = self.core_ipc.sender.send_scp_received(envelope, 0) {
-                    error!("Failed to send SCP to Core: {}", e);
+                    error!("SCP_TO_CORE_FAIL: Failed to send SCP (id={:02x?}) to Core: {}", &id_bytes[..id_len], e);
+                } else {
+                    debug!("SCP_TO_CORE_OK: Forwarded SCP (id={:02x?}) to Core", &id_bytes[..id_len]);
                 }
             }
             LibP2pOverlayEvent::TxReceived { tx, from } => {
                 debug!("Received TX via QUIC from {}: {} bytes", from, tx.len());
                 // Add to mempool
+                // TODO: this needs to be properly submitted with FEE info (right now 0)
                 self.overlay_handle.submit_tx(tx, 0, 1);
             }
             LibP2pOverlayEvent::TxSetReceived { hash, data, from } => {
-                debug!("Received TxSet via QUIC from {}: {} bytes", from, data.len());
-                // Cache and notify Core
+                info!(
+                    "TXSET_RECV: Received TxSet {:02x?}... ({} bytes) from {}",
+                    &hash[..4],
+                    data.len(),
+                    from
+                );
+                
+                // Check if Core is waiting for this TX set
+                let was_pending = {
+                    let mut pending = self.pending_core_txset_requests.write().await;
+                    pending.remove(&hash)
+                };
+                
+                if was_pending {
+                    // Core is waiting - send it immediately
+                    info!(
+                        "TXSET_TO_CORE: Sending fetched TxSet {:02x?}... ({} bytes) to Core",
+                        &hash[..4],
+                        data.len()
+                    );
+                    if let Err(e) = self.core_ipc.sender.send_tx_set_available(hash, data.clone()) {
+                        error!("Failed to send TX set to Core: {}", e);
+                    }
+                }
+                
+                // Also cache the TxSet for future requests
                 let mut cache = self.tx_set_cache.write().await;
                 cache.insert(CachedTxSet {
                     hash,
-                    xdr: data.clone(),
+                    xdr: data,
                     ledger_seq: 0,
                     tx_hashes: vec![],
                 });
-                if let Err(e) = self.core_ipc.sender.send_tx_set_available(hash, data) {
-                    error!("Failed to send TxSet to Core: {}", e);
-                }
             }
             LibP2pOverlayEvent::TxSetRequested { hash, from } => {
                 info!("Peer {} requesting TxSet {:02x?}...", from, &hash[..4]);
                 // Look up in local cache and respond
                 let cache = self.tx_set_cache.read().await;
                 if let Some(cached) = cache.get(&hash) {
-                    info!("Serving TxSet {:02x?}... ({} bytes) to {}", &hash[..4], cached.xdr.len(), from);
+                    info!(
+                        "Serving TxSet {:02x?}... ({} bytes) to {}",
+                        &hash[..4],
+                        cached.xdr.len(),
+                        from
+                    );
                     let handle = self.libp2p_handle.clone();
                     let data = cached.xdr.clone();
                     tokio::spawn(async move {
                         handle.send_txset(hash, data, from).await;
                     });
                 } else {
-                    debug!("TxSet {:02x?}... not in local cache, cannot serve to {}", &hash[..4], from);
+                    warn!(
+                        "TxSet {:02x?}... NOT IN CACHE - cannot serve to {} (cache has {} entries)",
+                        &hash[..4],
+                        from,
+                        cache.len()
+                    );
                 }
-            }
-            LibP2pOverlayEvent::PeerConnected(peer_id) => {
-                info!("libp2p QUIC peer connected: {}", peer_id);
-            }
-            LibP2pOverlayEvent::PeerDisconnected(peer_id) => {
-                info!("libp2p QUIC peer disconnected: {}", peer_id);
             }
         }
     }
-    
+
     /// Handle a message from Core
     async fn handle_core_message(&mut self, msg: Message) {
         match msg.msg_type {
@@ -256,70 +367,89 @@ impl App {
                 // Exit the process
                 std::process::exit(0);
             }
-            
+
             MessageType::BroadcastScp => {
                 // Forward SCP broadcast via libp2p QUIC (dedicated stream, no blocking)
-                debug!("Received BroadcastScp from Core ({} bytes)", msg.payload.len());
+                let id_bytes = if msg.payload.len() >= 4 { &msg.payload[..4] } else { &msg.payload[..] };
+
+                info!(
+                    "SCP_FROM_CORE: Core requested broadcast of SCP (id={:02x?}) ({} bytes)",
+                    id_bytes,
+                    msg.payload.len()
+                );
                 let handle = self.libp2p_handle.clone();
                 let payload = msg.payload;
                 tokio::spawn(async move {
                     handle.broadcast_scp(payload).await;
                 });
             }
-            
+
             MessageType::RequestNominationHash => {
                 // Parse payload: [ledgerSeq:4][prevLedgerHash:32]
                 if msg.payload.len() < 36 {
-                    warn!("RequestNominationHash payload too short: {} bytes", msg.payload.len());
+                    warn!(
+                        "RequestNominationHash payload too short: {} bytes",
+                        msg.payload.len()
+                    );
                     if let Err(e) = self.core_ipc.sender.send_nomination_hash([0u8; 32]) {
                         error!("Failed to send nomination hash: {}", e);
                     }
                     return;
                 }
-                
+
                 let ledger_seq = u32::from_le_bytes(msg.payload[0..4].try_into().unwrap());
                 let mut prev_hash = [0u8; 32];
                 prev_hash.copy_from_slice(&msg.payload[4..36]);
-                
-                info!("Building TX set for ledger {} (prevHash={:?})", ledger_seq, &prev_hash[..4]);
-                
+
+                info!(
+                    "Building TX set for ledger {} (prevHash={:?})",
+                    ledger_seq,
+                    &prev_hash[..4]
+                );
+
                 // Get top transactions from mempool
                 let tx_set_cache = Arc::clone(&self.tx_set_cache);
                 let core_sender = self.core_ipc.sender.clone();
                 let overlay_handle = self.overlay_handle.clone();
-                
+
                 // Build TX set asynchronously
                 tokio::spawn(async move {
                     // Request top transactions from overlay
                     let max_ops = 10000usize;
-                    
+
                     let txs = match tokio::time::timeout(
                         std::time::Duration::from_millis(100),
-                        overlay_handle.get_top_txs(max_ops)
-                    ).await {
+                        overlay_handle.get_top_txs(max_ops),
+                    )
+                    .await
+                    {
                         Ok(txs) => txs,
                         Err(_) => {
                             warn!("Timeout getting transactions from mempool");
                             vec![]
                         }
                     };
-                    
+
                     info!("Building TX set with {} transactions", txs.len());
-                    
+
                     // Sort TXs by hash for consensus determinism (matches C++ TxSetUtils::sortTxsInHashOrder)
                     let mut txs = txs;
                     txs.sort_by(|a, b| a.0.cmp(&b.0));
-                    
+
                     // Extract TX hashes and data separately
                     let tx_hashes: Vec<[u8; 32]> = txs.iter().map(|(h, _)| *h).collect();
                     let tx_data: Vec<Vec<u8>> = txs.into_iter().map(|(_, d)| d).collect();
-                    
+
                     // Build the TX set XDR
                     let xdr = build_tx_set_xdr(&prev_hash, &tx_data);
                     let hash = hash_tx_set(&xdr);
-                    
-                    info!("Built TX set: hash={:?}, xdr_size={}", &hash[..4], xdr.len());
-                    
+
+                    info!(
+                        "Built TX set: hash={:?}, xdr_size={}",
+                        &hash[..4],
+                        xdr.len()
+                    );
+
                     // Cache the TX set with TX hashes for later cleanup
                     {
                         let mut cache = tx_set_cache.write().await;
@@ -330,164 +460,198 @@ impl App {
                             tx_hashes,
                         });
                     }
-                    
+
                     // Also cache in the overlay so it can serve GET_TX_SET requests from peers
                     overlay_handle.cache_tx_set(hash, xdr.clone());
-                    
+
                     // Send hash back to Core
                     if let Err(e) = core_sender.send_nomination_hash(hash) {
                         error!("Failed to send nomination hash: {}", e);
                     }
                 });
             }
-            
+
             MessageType::RequestTxSet => {
                 // Request TX set by hash - check local cache first, then fetch from peers via libp2p
                 if msg.payload.len() < 32 {
                     warn!("RequestTxSet payload too short");
                     return;
                 }
-                
+
                 let mut hash = [0u8; 32];
                 hash.copy_from_slice(&msg.payload[0..32]);
-                
+
                 let tx_set_cache = Arc::clone(&self.tx_set_cache);
                 let core_sender = self.core_ipc.sender.clone();
                 let libp2p_handle = self.libp2p_handle.clone();
-                
+                let pending_requests = Arc::clone(&self.pending_core_txset_requests);
+
                 tokio::spawn(async move {
                     // First check local cache
                     {
                         let cache = tx_set_cache.read().await;
                         if let Some(cached) = cache.get(&hash) {
-                            info!("Sending TX set for hash {:?} ({} bytes) from local cache", &hash[..4], cached.xdr.len());
-                            if let Err(e) = core_sender.send_tx_set_available(hash, cached.xdr.clone()) {
+                            info!(
+                                "TXSET_FROM_CACHE: Sending TX set {:02x?}... ({} bytes) from local cache",
+                                &hash[..4],
+                                cached.xdr.len()
+                            );
+                            if let Err(e) =
+                                core_sender.send_tx_set_available(hash, cached.xdr.clone())
+                            {
                                 error!("Failed to send TX set: {}", e);
                             }
                             return;
                         }
                     }
-                    
-                    // Not in local cache - request from peers via libp2p
-                    // The response will arrive as TxSetReceived event and be forwarded to Core
-                    info!("TX set {:?} not in local cache, requesting from peers via libp2p", &hash[..4]);
+
+                    // Not in local cache - mark as pending and request from peers
+                    info!(
+                        "TXSET_FETCH_START: TX set {:02x?}... not in cache, fetching from peers",
+                        &hash[..4]
+                    );
+                    pending_requests.write().await.insert(hash);
                     libp2p_handle.fetch_txset(hash).await;
                 });
             }
-            
+
             MessageType::SubmitTx => {
                 // Parse payload: [fee:i64][numOps:u32][txEnvelope...]
                 if msg.payload.len() < 12 {
                     warn!("SubmitTx payload too short");
                     return;
                 }
-                
+
                 let fee = i64::from_le_bytes(msg.payload[0..8].try_into().unwrap());
                 let num_ops = u32::from_le_bytes(msg.payload[8..12].try_into().unwrap());
                 let tx_data = msg.payload[12..].to_vec();
-                
-                debug!("Submitting TX: fee={}, numOps={}, size={}", fee, num_ops, tx_data.len());
-                
+
+                debug!(
+                    "Submitting TX: fee={}, numOps={}, size={}",
+                    fee,
+                    num_ops,
+                    tx_data.len()
+                );
+
                 // Add to mempool
-                self.overlay_handle.submit_tx(tx_data.clone(), fee as u64, num_ops);
-                
+                self.overlay_handle
+                    .submit_tx(tx_data.clone(), fee as u64, num_ops);
+
                 // Broadcast TX via libp2p QUIC (dedicated stream)
                 let handle = self.libp2p_handle.clone();
                 tokio::spawn(async move {
                     handle.broadcast_tx(tx_data).await;
                 });
             }
-            
+
             MessageType::RequestScpState => {
                 // TODO: Implement - query SCP state and respond
                 warn!("RequestScpState not yet implemented");
             }
-            
+
             MessageType::LedgerClosed => {
                 // Parse payload: [ledgerSeq:4][ledgerHash:32]
                 if msg.payload.len() >= 4 {
                     let ledger_seq = u32::from_le_bytes(msg.payload[0..4].try_into().unwrap());
                     info!("Ledger {} closed", ledger_seq);
-                    
+
                     let current_seq = Arc::clone(&self.current_ledger_seq);
                     let pushed = Arc::clone(&self.pushed_tx_sets);
                     let cache = Arc::clone(&self.tx_set_cache);
-                    
+
                     tokio::spawn(async move {
                         // Update current ledger
                         *current_seq.write().await = ledger_seq;
-                        
+
                         // Clear pushed TX sets (reset dedup tracking)
                         pushed.write().await.clear();
-                        
+
                         // Evict old TX sets from cache
-                        cache.write().await.evict_before(ledger_seq.saturating_sub(5));
+                        cache
+                            .write()
+                            .await
+                            .evict_before(ledger_seq.saturating_sub(5));
                     });
                 }
             }
-            
+
             MessageType::TxSetExternalized => {
                 // Parse payload: [hash:32]
                 if msg.payload.len() >= 32 {
                     let mut hash = [0u8; 32];
                     hash.copy_from_slice(&msg.payload[0..32]);
                     info!("TX set externalized: {:?}", &hash[..4]);
-                    
+
                     // Look up the TX set in cache and get TX hashes, then remove from mempool
                     let cache = Arc::clone(&self.tx_set_cache);
                     let overlay_handle = self.overlay_handle.clone();
-                    
+
                     tokio::spawn(async move {
                         let tx_hashes = {
                             let mut cache = cache.write().await;
                             cache.remove(&hash)
                         };
-                        
+
                         // Remove TXs from mempool
                         if let Some(hashes) = tx_hashes {
                             if !hashes.is_empty() {
                                 overlay_handle.remove_txs(hashes);
                             }
                         } else {
-                            debug!("TX set {:?} not found in cache (may be from another node)", &hash[..4]);
+                            debug!(
+                                "TX set {:?} not found in cache (may be from another node)",
+                                &hash[..4]
+                            );
                         }
                     });
                 }
             }
-            
+
             MessageType::ScpStateResponse => {
                 // TODO: Forward to peer that requested it
                 warn!("ScpStateResponse not yet implemented");
             }
-            
+
             MessageType::SetPeerConfig => {
                 // Parse JSON payload and configure peer connections
                 if let Ok(json_str) = std::str::from_utf8(&msg.payload) {
                     info!("Received peer config: {}", json_str);
                     if let Ok(config) = serde_json::from_str::<serde_json::Value>(json_str) {
-                        let known: Vec<String> = config["known_peers"].as_array()
-                            .map(|v| v.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+                        let known: Vec<String> = config["known_peers"]
+                            .as_array()
+                            .map(|v| {
+                                v.iter()
+                                    .filter_map(|s| s.as_str().map(String::from))
+                                    .collect()
+                            })
                             .unwrap_or_default();
-                        let preferred: Vec<String> = config["preferred_peers"].as_array()
-                            .map(|v| v.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+                        let preferred: Vec<String> = config["preferred_peers"]
+                            .as_array()
+                            .map(|v| {
+                                v.iter()
+                                    .filter_map(|s| s.as_str().map(String::from))
+                                    .collect()
+                            })
                             .unwrap_or_default();
                         let listen_port = config["listen_port"].as_u64().unwrap_or(11625) as u16;
-                        
-                        info!("Parsed peer config: known={:?}, preferred={:?}, port={}", 
-                              known, preferred, listen_port);
-                        
+
+                        info!(
+                            "Parsed peer config: known={:?}, preferred={:?}, port={}",
+                            known, preferred, listen_port
+                        );
+
                         // Connect libp2p QUIC to all known/preferred peers
-                        let all_peers: Vec<_> = known.into_iter().chain(preferred.into_iter()).collect();
+                        let all_peers: Vec<_> =
+                            known.into_iter().chain(preferred.into_iter()).collect();
                         for addr_str in all_peers {
                             if let Ok(addr) = addr_str.parse::<SocketAddr>() {
                                 // QUIC uses UDP, port + 1000
                                 let libp2p_port = addr.port() + 1000;
-                                let libp2p_addr: libp2p::Multiaddr = format!(
-                                    "/ip4/{}/udp/{}/quic-v1", 
-                                    addr.ip(), 
-                                    libp2p_port
-                                ).parse().unwrap();
-                                
+                                let libp2p_addr: libp2p::Multiaddr =
+                                    format!("/ip4/{}/udp/{}/quic-v1", addr.ip(), libp2p_port)
+                                        .parse()
+                                        .unwrap();
+
                                 let handle = self.libp2p_handle.clone();
                                 tokio::spawn(async move {
                                     handle.dial(libp2p_addr).await;
@@ -497,30 +661,7 @@ impl App {
                     }
                 }
             }
-            
-            MessageType::ConnectToPeer => {
-                // Connect to a specific peer via libp2p QUIC
-                if let Ok(addr_str) = std::str::from_utf8(&msg.payload) {
-                    info!("Requested to connect to peer: {}", addr_str);
-                    if let Ok(addr) = addr_str.parse::<SocketAddr>() {
-                        // Connect libp2p QUIC (UDP, port + 1000)
-                        let libp2p_port = addr.port() + 1000;
-                        let libp2p_addr: libp2p::Multiaddr = format!(
-                            "/ip4/{}/udp/{}/quic-v1", 
-                            addr.ip(), 
-                            libp2p_port
-                        ).parse().unwrap();
-                        
-                        let handle = self.libp2p_handle.clone();
-                        tokio::spawn(async move {
-                            handle.dial(libp2p_addr).await;
-                        });
-                    } else {
-                        warn!("Invalid peer address: {}", addr_str);
-                    }
-                }
-            }
-            
+
             _ => {
                 warn!("Unexpected message type from Core: {:?}", msg.msg_type);
             }
@@ -530,10 +671,9 @@ impl App {
 
 fn setup_logging(level: &str) {
     use tracing_subscriber::{fmt, EnvFilter};
-    
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(level));
-    
+
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
+
     fmt()
         .with_env_filter(filter)
         .with_target(true)
@@ -546,7 +686,7 @@ fn setup_logging(level: &str) {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    
+
     // Load config
     let mut config = if let Some(path) = &args.config_path {
         match Config::from_file(path) {
@@ -559,47 +699,52 @@ async fn main() {
     } else {
         Config::default()
     };
-    
+
     // Override socket path from command line
     if let Some(socket) = args.socket_path {
         config.core_socket = socket;
     }
-    
+
     // Override peer port from command line
     if let Some(port) = args.peer_port {
         config.peer_port = port;
     }
-    
+
     // Validate config
     if let Err(e) = config.validate() {
         eprintln!("Invalid config: {}", e);
         std::process::exit(1);
     }
-    
+
     // Setup logging
     setup_logging(&config.log_level);
-    
+
     info!("Stellar Overlay starting");
     info!("Core socket: {}", config.core_socket.display());
     info!("Peer port: {}", config.peer_port);
-    info!("Mode: {}", if args.listen_mode { "listen (server)" } else { "connect (client)" });
-    
+    info!(
+        "Mode: {}",
+        if args.listen_mode {
+            "listen (server)"
+        } else {
+            "connect (client)"
+        }
+    );
+
     // Handle SIGTERM/SIGINT for graceful shutdown
     let shutdown = async {
-        let mut sigterm = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate()
-        ).expect("Failed to register SIGTERM handler");
-        
-        let mut sigint = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::interrupt()
-        ).expect("Failed to register SIGINT handler");
-        
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to register SIGTERM handler");
+
+        let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .expect("Failed to register SIGINT handler");
+
         tokio::select! {
             _ = sigterm.recv() => info!("Received SIGTERM"),
             _ = sigint.recv() => info!("Received SIGINT"),
         }
     };
-    
+
     // Create and run app
     let app = match App::new(config, args.listen_mode).await {
         Ok(app) => app,
@@ -608,7 +753,7 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    
+
     // Run until shutdown signal or Core disconnects
     tokio::select! {
         _ = app.run() => {}
@@ -616,6 +761,114 @@ async fn main() {
             info!("Shutdown signal received");
         }
     }
-    
+
     info!("Overlay stopped");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_txset_hashes_empty() {
+        // Empty envelope should return no hashes
+        assert!(extract_txset_hashes_from_scp(&[]).is_empty());
+
+        // Short envelope should return no hashes
+        assert!(extract_txset_hashes_from_scp(&[0u8; 40]).is_empty());
+    }
+
+    #[test]
+    fn test_extract_txset_hashes_with_valid_timestamp() {
+        // Create a mock envelope with a known hash followed by a valid timestamp
+        let mut envelope = vec![0u8; 100];
+
+        // Place a known hash at offset 10
+        let expected_hash: [u8; 32] = [
+            0x88, 0x71, 0x32, 0x79, 0xAA, 0xBB, 0xCC, 0xDD, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+            0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00, 0x12, 0x34, 0x56, 0x78,
+            0x9A, 0xBC, 0xDE, 0xF0,
+        ];
+        envelope[10..42].copy_from_slice(&expected_hash);
+
+        // Place a valid timestamp (2024 = ~1704067200 = 0x65944600) after the hash
+        // XDR uses big-endian, timestamp ~1.7B = 0x00000000_65944600
+        let timestamp: u64 = 1704067200; // Jan 1, 2024
+        envelope[42..50].copy_from_slice(&timestamp.to_be_bytes());
+
+        let hashes = extract_txset_hashes_from_scp(&envelope);
+
+        assert_eq!(hashes.len(), 1, "Should find exactly one hash");
+        assert_eq!(hashes[0], expected_hash, "Should match expected hash");
+    }
+
+    #[test]
+    fn test_extract_txset_hashes_invalid_timestamp() {
+        // Create envelope with hash followed by invalid timestamp (too old)
+        // Use 0x00 fill with specific placement to avoid accidental valid timestamps
+        // The heuristic scanner can find false positives, so we construct carefully
+        let mut envelope = vec![0x00u8; 50]; // Minimal size, all zeros
+
+        let hash: [u8; 32] = [0x42u8; 32];
+        envelope[0..32].copy_from_slice(&hash);
+
+        // Invalid timestamp (year 1970) at offset 32
+        let bad_timestamp: u64 = 100;
+        envelope[32..40].copy_from_slice(&bad_timestamp.to_be_bytes());
+
+        // Pad with zeros (which won't form valid timestamps)
+        let hashes = extract_txset_hashes_from_scp(&envelope);
+
+        // The hash at offset 0 has an invalid timestamp (100), so shouldn't be found
+        // Note: This test verifies the timestamp validation, not hash detection
+        let found_our_hash = hashes.iter().any(|h| *h == hash);
+        assert!(
+            !found_our_hash,
+            "Should not find hash 0x42... with invalid timestamp 100"
+        );
+    }
+
+    #[test]
+    fn test_extract_txset_hashes_multiple() {
+        // Create envelope with multiple valid hash+timestamp pairs
+        let mut envelope = vec![0u8; 200];
+
+        let hash1: [u8; 32] = [0x11u8; 32];
+        let hash2: [u8; 32] = [0x22u8; 32];
+        let timestamp: u64 = 1704067200;
+
+        // First hash at offset 10
+        envelope[10..42].copy_from_slice(&hash1);
+        envelope[42..50].copy_from_slice(&timestamp.to_be_bytes());
+
+        // Second hash at offset 100
+        envelope[100..132].copy_from_slice(&hash2);
+        envelope[132..140].copy_from_slice(&timestamp.to_be_bytes());
+
+        let hashes = extract_txset_hashes_from_scp(&envelope);
+
+        assert_eq!(hashes.len(), 2, "Should find two hashes");
+        assert!(hashes.contains(&hash1), "Should contain first hash");
+        assert!(hashes.contains(&hash2), "Should contain second hash");
+    }
+
+    #[test]
+    fn test_extract_txset_hashes_dedup() {
+        // Create envelope with same hash appearing twice
+        let mut envelope = vec![0u8; 200];
+
+        let hash: [u8; 32] = [0x33u8; 32];
+        let timestamp: u64 = 1704067200;
+
+        // Same hash at two offsets
+        envelope[10..42].copy_from_slice(&hash);
+        envelope[42..50].copy_from_slice(&timestamp.to_be_bytes());
+
+        envelope[100..132].copy_from_slice(&hash);
+        envelope[132..140].copy_from_slice(&timestamp.to_be_bytes());
+
+        let hashes = extract_txset_hashes_from_scp(&envelope);
+
+        assert_eq!(hashes.len(), 1, "Should deduplicate same hash");
+    }
 }

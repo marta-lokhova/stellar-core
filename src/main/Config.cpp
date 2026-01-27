@@ -10,7 +10,7 @@
 #include "herder/Herder.h"
 #include "history/HistoryArchive.h"
 #include "main/StellarCoreVersion.h"
-#include "overlay/OverlayManager.h"
+#include "overlay/NetworkConstants.h"
 #include "scp/LocalNode.h"
 #include "scp/QuorumSetUtils.h"
 #include "util/Fs.h"
@@ -237,8 +237,9 @@ Config::Config() : NODE_SEED(SecretKey::random())
     PATH_TO_PROTOCOL_23_CORRUPTION_FILE = "";
 
     // Rust overlay defaults
-    OVERLAY_BINARY_PATH = "../target/release/stellar-overlay";  // Relative to src/
-    OVERLAY_SOCKET_PATH = ""; // Generated automatically if empty
+    OVERLAY_BINARY_PATH =
+        "../target/release/stellar-overlay"; // Relative to src/
+    OVERLAY_SOCKET_PATH = "";                // Generated automatically if empty
 
     LOG_COLOR = false;
 
@@ -1259,8 +1260,6 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                 {"LOG_COLOR", [&]() { LOG_COLOR = readBool(item); }},
                 {"BUCKET_DIR_PATH",
                  [&]() { BUCKET_DIR_PATH = readString(item); }},
-                {"USE_RUST_OVERLAY",
-                 [&]() { USE_RUST_OVERLAY = readBool(item); }},
                 {"OVERLAY_BINARY_PATH",
                  [&]() { OVERLAY_BINARY_PATH = readString(item); }},
                 {"OVERLAY_SOCKET_PATH",
@@ -2141,9 +2140,10 @@ Config::adjust()
     }
 
     // Ensure outbound connections are capped based on inbound rate
-    int limit =
-        MAX_ADDITIONAL_PEER_CONNECTIONS / OverlayManager::MIN_INBOUND_FACTOR +
-        OverlayManager::MIN_INBOUND_FACTOR;
+    // MIN_INBOUND_FACTOR was 3 in legacy OverlayManager
+    constexpr int MIN_INBOUND_FACTOR = 3;
+    int limit = MAX_ADDITIONAL_PEER_CONNECTIONS / MIN_INBOUND_FACTOR +
+                MIN_INBOUND_FACTOR;
     if (static_cast<int>(TARGET_PEER_CONNECTIONS) > limit)
     {
         TARGET_PEER_CONNECTIONS = static_cast<unsigned short>(limit);

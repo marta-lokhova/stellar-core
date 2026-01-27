@@ -251,3 +251,4 @@ make -j$(nproc) stellar-core
 ```
 
 Always run `cargo test` after Rust changes and `make check` after C++ changes before moving on.
+Periodically run `reflect` command and tell the user learnings so far, propose changes to AGENTS.md and dev/ai/STELLAR_CORE.md, summarize what you and the user could have done better to avoid wasting resources and get to the solution faster.

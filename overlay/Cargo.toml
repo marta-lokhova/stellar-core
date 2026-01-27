@@ -22,12 +22,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
 
-# Crypto (for Noise protocol - SCP layer)
-snow = "0.9"
-
 # libp2p for networking
-# Using QUIC transport for true stream independence (no TCP head-of-line blocking)
-libp2p = { version = "0.54", features = ["gossipsub", "noise", "tcp", "tokio", "macros", "yamux", "kad", "identify", "quic"] }
+# QUIC transport only - provides encryption (TLS 1.3), multiplexing, and stream independence
+libp2p = { version = "0.54", features = ["tokio", "macros", "kad", "identify", "quic"] }
 libp2p-stream = "0.2.0-alpha"
 futures = "0.3"
 
@@ -42,9 +39,6 @@ sha2 = "0.10"
 
 # Random
 rand = "0.8"
-
-# XDR for Stellar types (will use stellar-xdr crate)
-# stellar-xdr = { version = "21", features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3.10"

@@ -10,6 +10,7 @@
 #include "herder/QuorumIntersectionChecker.h"
 #include "herder/TransactionQueue.h"
 #include "herder/Upgrades.h"
+#include "overlay/NetworkConstants.h"
 #include "util/Timer.h"
 #include "util/UnorderedMap.h"
 #include "util/XDROperators.h"
@@ -148,12 +149,10 @@ class HerderImpl : public Herder
         mFlowControlExtraBuffer = std::make_optional<uint32_t>(bytes);
     }
 #endif
-    void sendSCPStateToPeer(uint32 ledgerSeq, Peer::pointer peer) override;
+    std::vector<SCPEnvelope> getSCPStateForPeer(uint32 ledgerSeq) override;
 
     bool recvSCPQuorumSet(Hash const& hash, SCPQuorumSet const& qset) override;
     bool recvTxSet(Hash const& hash, TxSetXDRFrameConstPtr txset) override;
-    void peerDoesntHave(MessageType type, uint256 const& itemID,
-                        Peer::pointer peer) override;
     TxSetXDRFrameConstPtr getTxSet(Hash const& hash) override;
     SCPQuorumSetPtr getQSet(Hash const& qSetHash) override;
 

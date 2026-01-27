@@ -28,7 +28,7 @@
 #include "main/PersistentState.h"
 #include "medida/counter.h"
 #include "medida/meter.h"
-#include "overlay/OverlayManager.h"
+#include "overlay/RustOverlayManager.h"
 #include "process/ProcessManager.h"
 #include "scp/LocalNode.h"
 #include "scp/Slot.h"
@@ -111,9 +111,10 @@ HerderImpl::HerderImpl(Application& app)
 
     mPendingEnvelopes.addSCPQuorumSet(ln->getQuorumSetHash(),
                                       ln->getQuorumSet());
-    
-    // Note: Rust overlay is now managed by RustOverlayManager (via OverlayManager::create)
-    // SCP broadcasts go through getOverlayManager().broadcastMessage()
+
+    // Note: Rust overlay is now managed by RustOverlayManager (via
+    // OverlayManager::create) SCP broadcasts go through
+    // getOverlayManager().broadcastMessage()
 }
 
 HerderImpl::~HerderImpl()
@@ -560,9 +561,10 @@ HerderImpl::broadcast(SCPEnvelope const& e)
                    e.statement.slotIndex);
 
         mSCPMetrics.mEnvelopeEmit.Mark();
-        
-        // Route through overlay (RustOverlayManager handles IPC to Rust overlay,
-        // OverlayManagerImpl handles built-in overlay in standalone mode)
+
+        // Route through overlay (RustOverlayManager handles IPC to Rust
+        // overlay, OverlayManagerImpl handles built-in overlay in standalone
+        // mode)
         auto m = std::make_shared<StellarMessage>();
         m->type(SCP_MESSAGE);
         m->envelope() = e;
@@ -666,7 +668,7 @@ HerderImpl::recvTransaction(TransactionFrameBasePtr tx, bool submittedFromSelf
         CLOG_TRACE(Herder, "recv transaction {} for {}",
                    hexAbbrev(tx->getFullHash()),
                    KeyUtils::toShortString(tx->getSourceID()));
-        
+
         // Forward to overlay for flooding
         // RustOverlayManager will send to Rust overlay via IPC
         auto const& env = tx->getEnvelope();
@@ -973,69 +975,22 @@ HerderImpl::sourceAccountPending(AccountID const& accountID) const
 
 #endif
 
-void
-HerderImpl::sendSCPStateToPeer(uint32 ledgerSeq, Peer::pointer peer)
+std::vector<SCPEnvelope>
+HerderImpl::getSCPStateForPeer(uint32 ledgerSeq)
 {
     ZoneScoped;
-    bool log = true;
+    std::vector<SCPEnvelope> envelopes;
     auto maxSlots = Herder::LEDGER_VALIDITY_BRACKET;
 
-    auto sendSlot = [weakPeer = std::weak_ptr<Peer>(peer)](SCPEnvelope const& e,
-                                                           bool log) {
-        // If in the process of shutting down, exit early
-        auto peerPtr = weakPeer.lock();
-        if (!peerPtr)
-        {
-            return false;
-        }
-
-        StellarMessage m;
-        m.type(SCP_MESSAGE);
-        m.envelope() = e;
-        auto mPtr = std::make_shared<StellarMessage const>(m);
-        peerPtr->sendMessage(mPtr, log);
-        return true;
-    };
-
-    bool delayCheckpoint = false;
-    auto checkpoint = getMostRecentCheckpointSeq();
-    auto consensusIndex = trackingConsensusLedgerIndex();
-    auto firstSequentialLedgerSeq =
-        consensusIndex > mApp.getConfig().MAX_SLOTS_TO_REMEMBER
-            ? consensusIndex - mApp.getConfig().MAX_SLOTS_TO_REMEMBER
-            : LedgerManager::GENESIS_LEDGER_SEQ;
-
-    // If there is a gap between the latest completed checkpoint and the next
-    // saved message, we should delay sending the checkpoint ledger. Send all
-    // other messages first, then send checkpoint messages after node that is
-    // catching up knows network state. We need to do this because checkpoint
-    // message are almost always outside MAXIMUM_LEDGER_CLOSETIME_DRIFT.
-    // Checkpoint ledgers are special cased to be allowed to be outside this
-    // range, but to determine if a message is a checkpoint message, the node
-    // needs the correct trackingConsensusLedgerIndex. We send the checkpoint
-    // message after a delay so that the receiving node has time to process the
-    // initially sent messages and establish trackingConsensusLedgerIndex
-    if (checkpoint < firstSequentialLedgerSeq)
-    {
-        delayCheckpoint = true;
-    }
-
-    // Send MAX_SLOTS_TO_SEND slots
+    // Collect up to MAX_SLOTS_TO_SEND slots worth of envelopes
     getSCP().processSlotsAscendingFrom(ledgerSeq, [&](uint64 seq) {
-        // Skip checkpoint ledger if we should delay
-        if (seq == checkpoint && delayCheckpoint)
-        {
-            return true;
-        }
-
         bool slotHadData = false;
         getSCP().processCurrentState(
             seq,
             [&](SCPEnvelope const& e) {
+                envelopes.push_back(e);
                 slotHadData = true;
-                auto ret = sendSlot(e, log);
-                log = false;
-                return ret;
+                return true; // continue
             },
             false);
         if (slotHadData)
@@ -1045,21 +1000,7 @@ HerderImpl::sendSCPStateToPeer(uint32 ledgerSeq, Peer::pointer peer)
         return maxSlots != 0;
     });
 
-    // Out of sync node needs to receive latest messages to determine network
-    // state before receiving checkpoint message. Delay sending checkpoint
-    // ledger to achieve this
-    if (delayCheckpoint)
-    {
-        peer->startExecutionDelayedTimer(
-            Herder::SEND_LATEST_CHECKPOINT_DELAY,
-            [checkpoint, this, sendSlot]() {
-                getSCP().processCurrentState(
-                    checkpoint,
-                    [&](SCPEnvelope const& e) { return sendSlot(e, true); },
-                    false);
-            },
-            &VirtualTimer::onFailureNoop);
-    }
+    return envelopes;
 }
 
 void
@@ -1325,14 +1266,6 @@ HerderImpl::recvTxSet(Hash const& hash, TxSetXDRFrameConstPtr txset)
     return mPendingEnvelopes.recvTxSet(hash, txset);
 }
 
-void
-HerderImpl::peerDoesntHave(MessageType type, uint256 const& itemID,
-                           Peer::pointer peer)
-{
-    ZoneScoped;
-    mPendingEnvelopes.peerDoesntHave(type, itemID, peer);
-}
-
 TxSetXDRFrameConstPtr
 HerderImpl::getTxSet(Hash const& hash)
 {
@@ -1438,7 +1371,7 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     // Since we are not currently applying, it is safe to use read-only LCL, as
     // it's guaranteed to be up-to-date
     auto lcl = mLedgerManager.getLastClosedLedgerHeader();
-    
+
     // We pick as next close time the current time unless it's before the last
     // close time. We don't know how much time it will take to reach consensus
     // so this is the most appropriate value to use as closeTime.
@@ -1496,17 +1429,17 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     TxSetXDRFrameConstPtr proposedSet;
     ApplicableTxSetFrameConstPtr applicableProposedSet;
     Hash txSetHash;
-    
+
     // Try to get TX set from overlay (RustOverlayManager provides this)
     auto overlayTxSet = mApp.getOverlayManager().getTxSetForNomination(
         lcl.header.ledgerSeq + 1, lcl.hash);
-    
+
     if (overlayTxSet)
     {
         // Got TX set from overlay - use it directly
         proposedSet = overlayTxSet->first;
         txSetHash = overlayTxSet->second;
-        
+
         // Prepare for apply to validate and get applicable frame
         applicableProposedSet = proposedSet->prepareForApply(mApp, lcl.header);
         if (!applicableProposedSet)
@@ -1514,9 +1447,9 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
             CLOG_WARNING(Herder, "TX set from overlay failed validation");
             return;
         }
-        
+
         CLOG_INFO(Herder, "Using TX set from overlay: hash={}",
-                    binToHex(txSetHash).substr(0, 8));
+                  binToHex(txSetHash).substr(0, 8));
     }
     else
     {
@@ -1524,7 +1457,7 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
         // (standalone mode or OverlayManagerImpl)
         PerPhaseTransactionList txPhases;
         txPhases.emplace_back(mTransactionQueue.getTransactions(lcl.header));
-        
+
         if (protocolVersionStartsFrom(lcl.header.ledgerVersion,
                                       SOROBAN_PROTOCOL_VERSION))
         {
@@ -1532,20 +1465,21 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
             txPhases.emplace_back(
                 mSorobanTransactionQueue->getTransactions(lcl.header));
         }
-        
+
         PerPhaseTransactionList invalidTxPhases;
         invalidTxPhases.resize(txPhases.size());
-        
+
         std::tie(proposedSet, applicableProposedSet) =
             makeTxSetFromTransactions(txPhases, mApp, lowerBoundCloseTimeOffset,
-                                      upperBoundCloseTimeOffset, invalidTxPhases);
-        
+                                      upperBoundCloseTimeOffset,
+                                      invalidTxPhases);
+
         if (!applicableProposedSet)
         {
             releaseAssert(!mApp.getConfig().FORCE_SCP);
             return;
         }
-        
+
         // Ban invalid transactions
         if (protocolVersionStartsFrom(lcl.header.ledgerVersion,
                                       SOROBAN_PROTOCOL_VERSION))
@@ -1556,11 +1490,11 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
         }
         mTransactionQueue.ban(
             invalidTxPhases[static_cast<size_t>(TxSetPhase::CLASSIC)]);
-        
+
         txSetHash = proposedSet->getContentsHash();
-        
+
         CLOG_INFO(Herder, "Built TX set locally: hash={}",
-                    binToHex(txSetHash).substr(0, 8));
+                  binToHex(txSetHash).substr(0, 8));
     }
 
     // New proposed tx set must be valid, so we explicitly populate tx set
@@ -2318,11 +2252,8 @@ HerderImpl::maybeHandleUpgrade()
         mMaxTxSize = std::max(getMaxClassicTxSize(), maybeNewMaxTxSize);
     }
 
-    // Maybe update capacity to reflect the upgrade
-    for (auto& peer : mApp.getOverlayManager().getAuthenticatedPeers())
-    {
-        peer.second->handleMaxTxSizeIncrease(diff);
-    }
+    // Note: With Rust overlay, no per-peer notifications needed here
+    // The overlay handles message sizes internally
 }
 
 void
@@ -2411,7 +2342,7 @@ HerderImpl::start()
     restoreUpgrades();
     startTxSetGCTimer();
     startCheckForDeadNodesInterval();
-    
+
     // RustOverlayManager is started automatically in OverlayManager::start()
     // which is called by ApplicationImpl::start() before Herder::start()
 }
@@ -2620,18 +2551,11 @@ void
 HerderImpl::getMoreSCPState()
 {
     ZoneScoped;
-    size_t const NB_PEERS_TO_ASK = 2;
-
     auto low = getMinLedgerSeqToAskPeers();
+    CLOG_INFO(Herder, "Requesting SCP state from peers, ledger >= {}", low);
 
-    CLOG_INFO(Herder, "Asking peers for SCP messages more recent than {}", low);
-
-    // ask a few random peers their SCP messages
-    auto r = mApp.getOverlayManager().getRandomAuthenticatedPeers();
-    for (size_t i = 0; i < NB_PEERS_TO_ASK && i < r.size(); i++)
-    {
-        r[i]->sendGetScpState(low);
-    }
+    // Request SCP state via Rust overlay - it will ask random peers
+    mApp.getOverlayManager().getOverlayIPC().requestScpState(low);
 }
 
 bool

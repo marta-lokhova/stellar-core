@@ -46,8 +46,8 @@ writeExact(int socket, uint8_t const* buffer, size_t n)
         // or ignore SIGPIPE (easier for now)
         ssize_t w = send(socket, buffer + totalWritten, n - totalWritten, 0);
 #else
-        ssize_t w = send(socket, buffer + totalWritten, n - totalWritten,
-                         MSG_NOSIGNAL);
+        ssize_t w =
+            send(socket, buffer + totalWritten, n - totalWritten, MSG_NOSIGNAL);
 #endif
         if (w <= 0)
         {
@@ -82,21 +82,21 @@ bool
 sendMessage(int socket, IPCMessage const& msg)
 {
     IgnoreSIGPIPE guard;
-    
+
     // Message format: [type:4 bytes][length:4 bytes][payload]
     uint32_t type = static_cast<uint32_t>(msg.type);
     uint32_t payloadLen = static_cast<uint32_t>(msg.payload.size());
-    
+
     // Send header
     uint8_t header[8];
     std::memcpy(&header[0], &type, 4);
     std::memcpy(&header[4], &payloadLen, 4);
-    
+
     if (!writeExact(socket, header, 8))
     {
         return false;
     }
-    
+
     // Send payload
     if (payloadLen > 0)
     {
@@ -105,7 +105,7 @@ sendMessage(int socket, IPCMessage const& msg)
             return false;
         }
     }
-    
+
     return true;
 }
 
@@ -118,18 +118,18 @@ receiveMessage(int socket)
     {
         return std::nullopt;
     }
-    
+
     // Parse header
     uint32_t type, payloadLen;
     std::memcpy(&type, &header[0], 4);
     std::memcpy(&payloadLen, &header[4], 4);
-    
+
     // Sanity check payload length (16MB max)
     if (payloadLen > 16 * 1024 * 1024)
     {
         return std::nullopt;
     }
-    
+
     // Read payload
     IPCMessage msg;
     msg.type = static_cast<IPCMessageType>(type);
@@ -141,7 +141,7 @@ receiveMessage(int socket)
             return std::nullopt;
         }
     }
-    
+
     return msg;
 }
 
@@ -171,19 +171,19 @@ IPCChannel::connect(std::string const& socketPath)
     {
         return nullptr;
     }
-    
+
     struct sockaddr_un addr;
     std::memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path) - 1);
-    
+
     if (::connect(sock, reinterpret_cast<struct sockaddr*>(&addr),
                   sizeof(addr)) < 0)
     {
         close(sock);
         return nullptr;
     }
-    
+
     return std::unique_ptr<IPCChannel>(new IPCChannel(sock));
 }
 
@@ -200,7 +200,7 @@ IPCChannel::send(IPCMessage const& msg)
     {
         return false;
     }
-    
+
     bool result = ipc::sendMessage(mSocket, msg);
     if (!result)
     {
@@ -216,7 +216,7 @@ IPCChannel::receive()
     {
         return std::nullopt;
     }
-    
+
     auto msg = ipc::receiveMessage(mSocket);
     if (!msg)
     {
@@ -258,31 +258,31 @@ IPCServer::create(std::string const& socketPath)
 {
     // Remove existing socket file if present
     unlink(socketPath.c_str());
-    
+
     int sock = socket(AF_UNIX, SOCK_STREAM, 0);
     if (sock < 0)
     {
         return nullptr;
     }
-    
+
     struct sockaddr_un addr;
     std::memset(&addr, 0, sizeof(addr));
     addr.sun_family = AF_UNIX;
     strncpy(addr.sun_path, socketPath.c_str(), sizeof(addr.sun_path) - 1);
-    
+
     if (bind(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0)
     {
         close(sock);
         return nullptr;
     }
-    
+
     if (listen(sock, 1) < 0)
     {
         close(sock);
         unlink(socketPath.c_str());
         return nullptr;
     }
-    
+
     return std::unique_ptr<IPCServer>(new IPCServer(sock, socketPath));
 }
 
@@ -294,7 +294,7 @@ IPCServer::accept()
     {
         return nullptr;
     }
-    
+
     return IPCChannel::fromSocket(clientSock);
 }
 

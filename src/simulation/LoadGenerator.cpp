@@ -7,7 +7,7 @@
 #include "herder/Herder.h"
 #include "ledger/LedgerManager.h"
 #include "main/Config.h"
-#include "overlay/OverlayManager.h"
+#include "overlay/RustOverlayManager.h"
 #include "test/TestAccount.h"
 #include "test/TxTests.h"
 #include "transactions/MutableTransactionResult.h"

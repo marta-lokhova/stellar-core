@@ -12,7 +12,7 @@
 #include "ledger/LedgerTxn.h"
 #include "ledger/LedgerTxnImpl.h"
 #include "main/Application.h"
-#include "overlay/OverlayManager.h"
+#include "overlay/RustOverlayManager.h"
 #include "transactions/FeeBumpTransactionFrame.h"
 #include "transactions/MutableTransactionResult.h"
 #include "transactions/OperationFrame.h"

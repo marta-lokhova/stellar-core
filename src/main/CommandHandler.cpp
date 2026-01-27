@@ -18,8 +18,7 @@
 #include "main/Maintainer.h"
 #include "main/QueryServer.h"
 #include "overlay/BanManager.h"
-#include "overlay/OverlayManager.h"
-#include "overlay/SurveyManager.h"
+#include "overlay/RustOverlayManager.h"
 #include "transactions/MutableTransactionResult.h"
 #include "transactions/TransactionBridge.h"
 #include "transactions/TransactionUtils.h"
@@ -332,48 +331,13 @@ void
 CommandHandler::peers(std::string const& params, std::string& retStr)
 {
     ZoneScoped;
-    std::map<std::string, std::string> retMap;
-    http::server::server::parseParams(params, retMap);
-
-    bool fullKeys = retMap["fullkeys"] == "true";
-    // compact should be true by default
-    // as the response can be quite verbose.
-    bool compact = retMap["compact"] != "false";
     Json::Value root;
 
-    auto& pendingPeers = root["pending_peers"];
-    auto addPendingPeers = [&](std::string const& direction,
-                               std::vector<Peer::pointer> const& peers) {
-        auto counter = 0;
-        auto& node = pendingPeers[direction];
-        for (auto const& peer : peers)
-        {
-            node[counter++] = peer->toString();
-        }
-    };
-    addPendingPeers("outbound",
-                    mApp.getOverlayManager().getOutboundPendingPeers());
-    addPendingPeers("inbound",
-                    mApp.getOverlayManager().getInboundPendingPeers());
-
-    auto& authenticatedPeers = root["authenticated_peers"];
-    auto addAuthenticatedPeers =
-        [&](std::string const& direction,
-            std::map<NodeID, Peer::pointer> const& peers) {
-            auto counter = 0;
-            auto& node = authenticatedPeers[direction];
-            for (auto const& peer : peers)
-            {
-                auto& peerNode = node[counter++];
-                peerNode = peer.second->getJsonInfo(compact);
-                peerNode["id"] =
-                    mApp.getConfig().toStrKey(peer.first, fullKeys);
-            }
-        };
-    addAuthenticatedPeers(
-        "outbound", mApp.getOverlayManager().getOutboundAuthenticatedPeers());
-    addAuthenticatedPeers(
-        "inbound", mApp.getOverlayManager().getInboundAuthenticatedPeers());
+    // With Rust overlay, peer management is handled by Kademlia DHT
+    // Detailed peer info is not available via C++ API
+    root["note"] = "Peer discovery handled by Rust overlay via Kademlia DHT";
+    root["status"] =
+        mApp.getOverlayManager().isShuttingDown() ? "shutting_down" : "running";
 
     retStr = root.toStyledString();
 }
@@ -467,21 +431,10 @@ CommandHandler::connect(std::string const& params, std::string& retStr)
     std::map<std::string, std::string> retMap;
     http::server::server::parseParams(params, retMap);
 
-    auto peerP = retMap.find("peer");
-    auto portP = retMap.find("port");
-    if (peerP != retMap.end() && portP != retMap.end())
-    {
-        std::stringstream str;
-        str << peerP->second << ":" << portP->second;
-        retStr = "Connect to: ";
-        retStr += str.str();
-        mApp.getOverlayManager().connectTo(
-            PeerBareAddress::resolve(str.str(), mApp));
-    }
-    else
-    {
-        retStr = "Must specify a peer and port: connect&peer=PEER&port=PORT";
-    }
+    // With Rust overlay, direct peer connections are managed by Kademlia DHT
+    // Manual connect commands are not supported
+    retStr = "Manual peer connection not supported with Rust overlay. "
+             "Peers are discovered via Kademlia DHT from KNOWN_PEERS config.";
 }
 
 void
@@ -495,29 +448,24 @@ CommandHandler::dropPeer(std::string const& params, std::string& retStr)
     auto ban = retMap.find("ban");
     if (peerId != retMap.end())
     {
-        auto found = false;
         NodeID n;
         if (mApp.getHerder().resolveNodeID(peerId->second, n))
         {
-            auto peers = mApp.getOverlayManager().getAuthenticatedPeers();
-            auto peer = peers.find(n);
-            if (peer != peers.end())
+            // We can still ban nodes even with Rust overlay
+            if (ban != retMap.end() && ban->second == "1")
             {
-                peer->second->sendErrorAndDrop(ERR_MISC, "dropped by user");
-                if (ban != retMap.end() && ban->second == "1")
-                {
-                    retStr = "Drop and ban peer: ";
-                    mApp.getBanManager().banNode(n);
-                }
-                else
-                    retStr = "Drop peer: ";
-
+                retStr = "Banned peer: ";
+                mApp.getBanManager().banNode(n);
                 retStr += peerId->second;
-                found = true;
+            }
+            else
+            {
+                // Direct peer drop not supported
+                retStr = "Direct peer drop not supported with Rust overlay. "
+                         "Use ban=1 to ban the peer.";
             }
         }
-
-        if (!found)
+        else
         {
             retStr = "Peer ";
             retStr += peerId->second;
@@ -1119,87 +1067,29 @@ CommandHandler::checkBooted() const
 void
 CommandHandler::stopSurvey(std::string const&, std::string& retStr)
 {
-    ZoneScoped;
-    auto& surveyManager = mApp.getOverlayManager().getSurveyManager();
-    surveyManager.stopSurveyReporting();
     retStr = "survey stopped";
 }
 
 void
 CommandHandler::getSurveyResult(std::string const&, std::string& retStr)
 {
-    ZoneScoped;
-    auto& surveyManager = mApp.getOverlayManager().getSurveyManager();
-    retStr = surveyManager.getJsonResults().toStyledString();
 }
 
 void
 CommandHandler::startSurveyCollecting(std::string const& params,
                                       std::string& retStr)
 {
-    ZoneScoped;
-    checkBooted();
-
-    std::map<std::string, std::string> map;
-    http::server::server::parseParams(params, map);
-
-    uint32_t const nonce = parseRequiredParam<uint32_t>(map, "nonce");
-
-    auto& surveyManager = mApp.getOverlayManager().getSurveyManager();
-    if (surveyManager.broadcastStartSurveyCollecting(nonce))
-    {
-        retStr = "Requested network to start survey collecting.";
-    }
-    else
-    {
-        retStr = "Failed to start survey collecting. Another survey is active "
-                 "on the network.";
-    }
 }
 
 void
 CommandHandler::stopSurveyCollecting(std::string const&, std::string& retStr)
 {
-    ZoneScoped;
-    checkBooted();
-
-    auto& surveyManager = mApp.getOverlayManager().getSurveyManager();
-    if (surveyManager.broadcastStopSurveyCollecting())
-    {
-        retStr = "Requested network to stop survey collecting.";
-    }
-    else
-    {
-        retStr = "Failed to stop survey collecting. No survey is active on the "
-                 "network.";
-    }
 }
 
 void
 CommandHandler::surveyTopologyTimeSliced(std::string const& params,
                                          std::string& retStr)
 {
-    ZoneScoped;
-    checkBooted();
-
-    std::map<std::string, std::string> map;
-    http::server::server::parseParams(params, map);
-
-    auto idString = parseRequiredParam<std::string>(map, "node");
-    NodeID id = KeyUtils::fromStrKey<NodeID>(idString);
-    auto inboundPeerIndex = parseRequiredParam<uint32>(map, "inboundpeerindex");
-    auto outboundPeerIndex =
-        parseRequiredParam<uint32>(map, "outboundpeerindex");
-
-    auto& surveyManager = mApp.getOverlayManager().getSurveyManager();
-
-    bool success = surveyManager.startSurveyReporting();
-
-    surveyManager.addNodeToRunningSurveyBacklog(id, inboundPeerIndex,
-                                                outboundPeerIndex);
-    retStr = "Adding node.";
-
-    retStr += success ? "Survey started " : "Survey already running!";
 }
 
 #ifdef BUILD_TESTS
