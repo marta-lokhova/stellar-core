@@ -182,7 +182,7 @@ void
 OverlayIPC::handleMessage(IPCMessage const& msg)
 {
     CLOG_INFO(Overlay, "IPC handleMessage: type={}, payload_size={}",
-               static_cast<uint32_t>(msg.type), msg.payload.size());
+              static_cast<uint32_t>(msg.type), msg.payload.size());
     switch (msg.type)
     {
     case IPCMessageType::SCP_RECEIVED:
@@ -243,7 +243,7 @@ OverlayIPC::handleMessage(IPCMessage const& msg)
                                              msg.payload.end());
                 xdr::xdr_from_opaque(xdrData, txSet);
                 CLOG_INFO(Overlay, "Received TX set {} ({} bytes) from overlay",
-                           hexAbbrev(hash), xdrData.size());
+                          hexAbbrev(hash), xdrData.size());
                 mOnTxSetReceived(hash, txSet);
             }
             catch (std::exception const& e)
@@ -254,7 +254,8 @@ OverlayIPC::handleMessage(IPCMessage const& msg)
         }
         else if (!mOnTxSetReceived)
         {
-            CLOG_WARNING(Overlay, "TX_SET_AVAILABLE but no callback registered");
+            CLOG_WARNING(Overlay,
+                         "TX_SET_AVAILABLE but no callback registered");
         }
         else
         {
@@ -392,7 +393,8 @@ OverlayIPC::getTopTransactions(size_t count, int timeoutMs)
     auto& response = *mPendingResponse;
     if (response.type != IPCMessageType::TOP_TXS_RESPONSE)
     {
-        CLOG_WARNING(Overlay, "Unexpected response type for getTopTransactions");
+        CLOG_WARNING(Overlay,
+                     "Unexpected response type for getTopTransactions");
         return result;
     }
 

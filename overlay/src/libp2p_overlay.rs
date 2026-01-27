@@ -481,7 +481,10 @@ impl StellarOverlay {
         {
             let mut seen = self.state.scp_seen.write().await;
             if seen.contains(&hash) {
-                trace!("SCP_BROADCAST_SKIP: SCP {:02x?}... already seen, skipping", &hash[..4]);
+                trace!(
+                    "SCP_BROADCAST_SKIP: SCP {:02x?}... already seen, skipping",
+                    &hash[..4]
+                );
                 return;
             }
             seen.put(hash, ());
@@ -501,10 +504,19 @@ impl StellarOverlay {
         for peer_id in peers {
             match send_to_peer_stream(&self.state, peer_id, StreamType::Scp, envelope).await {
                 Ok(_) => {
-                    debug!("SCP_SEND_OK: Sent SCP {:02x?}... to {}", &hash[..4], peer_id);
+                    debug!(
+                        "SCP_SEND_OK: Sent SCP {:02x?}... to {}",
+                        &hash[..4],
+                        peer_id
+                    );
                 }
                 Err(e) => {
-                    warn!("SCP_SEND_FAIL: Failed to send SCP {:02x?}... to {}: {}", &hash[..4], peer_id, e);
+                    warn!(
+                        "SCP_SEND_FAIL: Failed to send SCP {:02x?}... to {}: {}",
+                        &hash[..4],
+                        peer_id,
+                        e
+                    );
                 }
             }
         }
@@ -528,7 +540,12 @@ impl StellarOverlay {
         let peers: Vec<_> = streams.keys().cloned().collect();
         drop(streams);
 
-        info!("TX_BROADCAST: Broadcasting TX {:02x?}... ({} bytes) to {} peers", &hash[..4], tx.len(), peers.len());
+        info!(
+            "TX_BROADCAST: Broadcasting TX {:02x?}... ({} bytes) to {} peers",
+            &hash[..4],
+            tx.len(),
+            peers.len()
+        );
 
         for peer_id in peers {
             if let Err(e) = send_to_peer_stream(&self.state, peer_id, StreamType::Tx, tx).await {
@@ -543,7 +560,10 @@ impl StellarOverlay {
         {
             let mut pending = self.state.pending_txset_requests.write().await;
             if pending.contains(&hash) {
-                debug!("TXSET_FETCH_SKIP: TxSet {:02x?}... already being fetched, skipping duplicate", &hash[..4]);
+                debug!(
+                    "TXSET_FETCH_SKIP: TxSet {:02x?}... already being fetched, skipping duplicate",
+                    &hash[..4]
+                );
                 return;
             }
             pending.insert(hash);
@@ -574,8 +594,15 @@ impl StellarOverlay {
                         p
                     }
                     None => {
-                        warn!("TXSET_FETCH_FAIL: No peers to fetch TX set {:02x?}... from", &hash[..4]);
-                        self.state.pending_txset_requests.write().await.remove(&hash);
+                        warn!(
+                            "TXSET_FETCH_FAIL: No peers to fetch TX set {:02x?}... from",
+                            &hash[..4]
+                        );
+                        self.state
+                            .pending_txset_requests
+                            .write()
+                            .await
+                            .remove(&hash);
                         return;
                     }
                 }
@@ -593,8 +620,15 @@ impl StellarOverlay {
                     p
                 }
                 None => {
-                    warn!("TXSET_FETCH_FAIL: No peers to fetch TX set {:02x?}... from", &hash[..4]);
-                    self.state.pending_txset_requests.write().await.remove(&hash);
+                    warn!(
+                        "TXSET_FETCH_FAIL: No peers to fetch TX set {:02x?}... from",
+                        &hash[..4]
+                    );
+                    self.state
+                        .pending_txset_requests
+                        .write()
+                        .await
+                        .remove(&hash);
                     return;
                 }
             }
@@ -602,10 +636,23 @@ impl StellarOverlay {
 
         // Send request on TxSet stream (just the 32-byte hash)
         match send_to_peer_stream(&self.state, peer, StreamType::TxSet, &hash).await {
-            Ok(_) => info!("TXSET_FETCH_SENT: Sent request for TxSet {:02x?}... to {}", &hash[..4], peer),
+            Ok(_) => info!(
+                "TXSET_FETCH_SENT: Sent request for TxSet {:02x?}... to {}",
+                &hash[..4],
+                peer
+            ),
             Err(e) => {
-                warn!("TXSET_FETCH_FAIL: Failed to send TxSet request {:02x?}... to {}: {}", &hash[..4], peer, e);
-                self.state.pending_txset_requests.write().await.remove(&hash);
+                warn!(
+                    "TXSET_FETCH_FAIL: Failed to send TxSet request {:02x?}... to {}: {}",
+                    &hash[..4],
+                    peer,
+                    e
+                );
+                self.state
+                    .pending_txset_requests
+                    .write()
+                    .await
+                    .remove(&hash);
             }
         }
     }
@@ -772,7 +819,11 @@ async fn handle_inbound_scp_streams(mut incoming: IncomingStreams, state: Arc<Sh
                         };
 
                         if is_dup {
-                            debug!("SCP_RECV_DUP: Duplicate SCP {:02x?}... from {}", &hash[..4], peer_id);
+                            debug!(
+                                "SCP_RECV_DUP: Duplicate SCP {:02x?}... from {}",
+                                &hash[..4],
+                                peer_id
+                            );
                             continue;
                         }
 
@@ -788,7 +839,10 @@ async fn handle_inbound_scp_streams(mut incoming: IncomingStreams, state: Arc<Sh
                         });
                     }
                     Err(e) => {
-                        warn!("SCP_STREAM_CLOSED: SCP stream from {} closed: {}", peer_id, e);
+                        warn!(
+                            "SCP_STREAM_CLOSED: SCP stream from {} closed: {}",
+                            peer_id, e
+                        );
                         break;
                     }
                 }
@@ -819,7 +873,12 @@ async fn handle_inbound_tx_streams(mut incoming: IncomingStreams, state: Arc<Sha
                             seen.put(hash, ());
                         }
 
-                        info!("TX_RECV: Received TX {:02x?}... ({} bytes) from {}", &hash[..4], tx.len(), peer_id);
+                        info!(
+                            "TX_RECV: Received TX {:02x?}... ({} bytes) from {}",
+                            &hash[..4],
+                            tx.len(),
+                            peer_id
+                        );
                         let _ = state
                             .event_tx
                             .send(OverlayEvent::TxReceived { tx, from: peer_id });
@@ -2006,7 +2065,10 @@ async fn test_txset_request_and_response() {
             _ = tokio::time::sleep(Duration::from_millis(10)) => {}
         }
     }
-    assert!(responded, "Node1 should receive and respond to TX set request");
+    assert!(
+        responded,
+        "Node1 should receive and respond to TX set request"
+    );
 
     // Node2 should receive the TX set
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);

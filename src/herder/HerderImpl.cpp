@@ -321,8 +321,8 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
     std::vector<Hash> txHashes;
     if (externalizedSet)
     {
-        auto applicableTxSet =
-            externalizedSet->prepareForApply(mApp, mLedgerManager.getLastClosedLedgerHeader().header);
+        auto applicableTxSet = externalizedSet->prepareForApply(
+            mApp, mLedgerManager.getLastClosedLedgerHeader().header);
         if (applicableTxSet)
         {
             for (auto const& phase : applicableTxSet->getPhases())
@@ -1455,7 +1455,7 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     // Get TXs from Rust overlay
     auto& overlayMgr = mApp.getOverlayManager();
     auto txEnvelopes = overlayMgr.getTopTransactions(
-        mApp.getLedgerManager().getLastMaxTxSetSizeOps(), 5000);
+        mApp.getLedgerManager().getLastMaxTxSetSizeOps() * 2, 5000);
 
     CLOG_INFO(Herder, "Got {} transactions from Rust overlay mempool",
               txEnvelopes.size());
@@ -1485,8 +1485,9 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
 
     std::tie(proposedSet, applicableProposedSet) =
         makeTxSetFromTransactions(txPhases, mApp, lowerBoundCloseTimeOffset,
-                                  upperBoundCloseTimeOffset,
-                                  invalidTxPhases);
+                                  upperBoundCloseTimeOffset, invalidTxPhases);
+    CLOG_INFO(Herder, "Proposed TX set has {} transactions",
+              proposedSet->sizeTxTotal());
 
     if (!applicableProposedSet)
     {

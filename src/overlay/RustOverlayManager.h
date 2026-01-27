@@ -44,7 +44,8 @@ class RustOverlayManager
 
     void clearLedgersBelow(uint32_t ledgerSeq, uint32_t lclSeq);
 
-    // TX set management - notify that TX set was externalized with its TX hashes
+    // TX set management - notify that TX set was externalized with its TX
+    // hashes
     void notifyTxSetExternalized(Hash const& txSetHash,
                                  std::vector<Hash> const& txHashes);
 

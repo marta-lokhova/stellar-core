@@ -62,8 +62,8 @@ class PendingEnvelopes
     UnorderedMap<Hash, std::weak_ptr<SCPQuorumSet>> mKnownQSets;
 
     // hashes of txsets/qsets we're currently fetching
-    std::set<Hash> mPendingTxSetFetches;
-    std::set<Hash> mPendingQSetFetches;
+    std::map<Hash, std::vector<SCPEnvelope>> mPendingTxSetFetches;
+    std::map<Hash, std::vector<SCPEnvelope>> mPendingQSetFetches;
 
     using TxSetFramCacheItem = std::pair<uint64, TxSetXDRFrameConstPtr>;
     // recent txsets

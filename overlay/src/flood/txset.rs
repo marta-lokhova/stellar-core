@@ -256,7 +256,10 @@ mod tests {
         let hash1 = hash_tx_set(&xdr1);
         let hash2 = hash_tx_set(&xdr2);
 
-        assert_ne!(hash1, hash2, "Different TX sets should have different hashes");
+        assert_ne!(
+            hash1, hash2,
+            "Different TX sets should have different hashes"
+        );
     }
 
     #[test]
@@ -342,7 +345,10 @@ mod tests {
         });
 
         assert_eq!(cache.len(), 2, "Cache should stay at capacity");
-        assert!(cache.get(&[3u8; 32]).is_some(), "New item should be present");
+        assert!(
+            cache.get(&[3u8; 32]).is_some(),
+            "New item should be present"
+        );
     }
 
     #[test]

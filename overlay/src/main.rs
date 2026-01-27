@@ -285,15 +285,27 @@ impl App {
 
                 // Forward to Core
                 if let Err(e) = self.core_ipc.sender.send_scp_received(envelope, 0) {
-                    error!("SCP_TO_CORE_FAIL: Failed to send SCP (id={:02x?}) to Core: {}", &id_bytes[..id_len], e);
+                    error!(
+                        "SCP_TO_CORE_FAIL: Failed to send SCP (id={:02x?}) to Core: {}",
+                        &id_bytes[..id_len],
+                        e
+                    );
                 } else {
-                    debug!("SCP_TO_CORE_OK: Forwarded SCP (id={:02x?}) to Core", &id_bytes[..id_len]);
+                    debug!(
+                        "SCP_TO_CORE_OK: Forwarded SCP (id={:02x?}) to Core",
+                        &id_bytes[..id_len]
+                    );
                 }
             }
             LibP2pOverlayEvent::TxReceived { tx, from } => {
                 debug!("Received TX via QUIC from {}: {} bytes", from, tx.len());
                 // Add to mempool
-                // TODO: this needs to be properly submitted with FEE info (right now 0)
+                // TODO: Parse XDR to extract fee and ops instead of hardcoding fee=0, ops=1
+                // This causes network-flooded TXs to have wrong priority in mempool
+                // and breaks fee-based eviction. Need to:
+                // 1. Parse TransactionEnvelope XDR to get tx.fee and operation count
+                // 2. Extract source account and sequence number
+                // 3. Consider signature validation to prevent spam
                 self.overlay_handle.submit_tx(tx, 0, 1);
             }
             LibP2pOverlayEvent::TxSetReceived { hash, data, from } => {
@@ -303,13 +315,13 @@ impl App {
                     data.len(),
                     from
                 );
-                
+
                 // Check if Core is waiting for this TX set
                 let was_pending = {
                     let mut pending = self.pending_core_txset_requests.write().await;
                     pending.remove(&hash)
                 };
-                
+
                 if was_pending {
                     // Core is waiting - send it immediately
                     info!(
@@ -317,11 +329,15 @@ impl App {
                         &hash[..4],
                         data.len()
                     );
-                    if let Err(e) = self.core_ipc.sender.send_tx_set_available(hash, data.clone()) {
+                    if let Err(e) = self
+                        .core_ipc
+                        .sender
+                        .send_tx_set_available(hash, data.clone())
+                    {
                         error!("Failed to send TX set to Core: {}", e);
                     }
                 }
-                
+
                 // Also cache the TxSet for future requests
                 let mut cache = self.tx_set_cache.write().await;
                 cache.insert(CachedTxSet {
@@ -370,7 +386,11 @@ impl App {
 
             MessageType::BroadcastScp => {
                 // Forward SCP broadcast via libp2p QUIC (dedicated stream, no blocking)
-                let id_bytes = if msg.payload.len() >= 4 { &msg.payload[..4] } else { &msg.payload[..] };
+                let id_bytes = if msg.payload.len() >= 4 {
+                    &msg.payload[..4]
+                } else {
+                    &msg.payload[..]
+                };
 
                 info!(
                     "SCP_FROM_CORE: Core requested broadcast of SCP (id={:02x?}) ({} bytes)",
@@ -508,13 +528,6 @@ impl App {
                 let num_ops = u32::from_le_bytes(msg.payload[8..12].try_into().unwrap());
                 let tx_data = msg.payload[12..].to_vec();
 
-                info!(
-                    "SUBMIT_TX: Core submitted TX: fee={}, numOps={}, size={}",
-                    fee,
-                    num_ops,
-                    tx_data.len()
-                );
-
                 // Add to mempool
                 self.overlay_handle
                     .submit_tx(tx_data.clone(), fee as u64, num_ops);
@@ -583,12 +596,15 @@ impl App {
                         }
                     }
 
-                    // Remove TXs from mempool directly using the provided hashes
+                    // Remove TXs from mempool and WAIT for completion
+                    // This prevents race where next nomination queries stale mempool
                     if !tx_hashes.is_empty() {
                         let overlay_handle = self.overlay_handle.clone();
-                        tokio::spawn(async move {
-                            overlay_handle.remove_txs(tx_hashes);
+                        // Spawn but await the task to ensure completion before returning
+                        let task = tokio::spawn(async move {
+                            overlay_handle.remove_txs_sync(tx_hashes).await;
                         });
+                        let _ = task.await;
                     }
 
                     // Also clean up TX set cache (in case we had cached it)

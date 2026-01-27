@@ -366,10 +366,7 @@ mod tests {
     #[test]
     fn test_message_type_try_from_all_valid() {
         assert_eq!(MessageType::try_from(1).unwrap(), MessageType::BroadcastScp);
-        assert_eq!(
-            MessageType::try_from(2).unwrap(),
-            MessageType::GetTopTxs
-        );
+        assert_eq!(MessageType::try_from(2).unwrap(), MessageType::GetTopTxs);
         assert_eq!(
             MessageType::try_from(3).unwrap(),
             MessageType::RequestScpState

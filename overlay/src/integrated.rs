@@ -45,7 +45,10 @@ pub enum CoreCommand {
     },
 
     /// Remove transactions from mempool (after ledger close)
-    RemoveTxsFromMempool { tx_hashes: Vec<[u8; 32]> },
+    RemoveTxsFromMempool {
+        tx_hashes: Vec<[u8; 32]>,
+        reply: Option<mpsc::Sender<()>>,
+    },
 
     /// Fetch a TX set from peers by hash (libp2p handles network)
     FetchTxSet {
@@ -128,12 +131,18 @@ impl Overlay {
                     num_ops
                 );
 
+                // TODO: Parse XDR to extract source_account and sequence instead of zeros
+                // This breaks:
+                // 1. Account-based TX ordering in mempool
+                // 2. Per-account TX queries
+                // 3. Sequence number validation
+                // Need to parse TransactionEnvelope.tx.sourceAccount and seqNum from XDR
                 let mut mempool = self.mempool.write().await;
                 let entry = crate::flood::TxEntry {
                     data,
                     hash,
-                    source_account: [0u8; 32],
-                    sequence: 0,
+                    source_account: [0u8; 32], // TODO: Parse from XDR
+                    sequence: 0,                // TODO: Parse from XDR
                     fee,
                     num_ops,
                     received_at: std::time::Instant::now(),
@@ -156,13 +165,17 @@ impl Overlay {
                 trace!("SetPeerConfig ignored (handled by libp2p)");
             }
 
-            CoreCommand::RemoveTxsFromMempool { tx_hashes } => {
+            CoreCommand::RemoveTxsFromMempool { tx_hashes, reply } => {
                 let mut mempool = self.mempool.write().await;
                 let count = tx_hashes.len();
                 for hash in tx_hashes {
                     mempool.remove(&hash);
                 }
                 info!("Removed {} TXs from mempool", count);
+                // Signal completion if caller is waiting
+                if let Some(tx) = reply {
+                    let _ = tx.send(()).await;
+                }
             }
 
             CoreCommand::FetchTxSet { hash, reply } => {
@@ -222,11 +235,23 @@ impl OverlayHandle {
         reply_rx.recv().await.unwrap_or_default()
     }
 
-    /// Remove transactions from mempool.
+    /// Remove transactions from mempool (fire-and-forget).
     pub fn remove_txs(&self, tx_hashes: Vec<[u8; 32]>) {
-        let _ = self
-            .cmd_tx
-            .send(CoreCommand::RemoveTxsFromMempool { tx_hashes });
+        let _ = self.cmd_tx.send(CoreCommand::RemoveTxsFromMempool {
+            tx_hashes,
+            reply: None,
+        });
+    }
+
+    /// Remove transactions from mempool and wait for completion.
+    /// This prevents race conditions where GetTopTxs queries stale data.
+    pub async fn remove_txs_sync(&self, tx_hashes: Vec<[u8; 32]>) {
+        let (reply_tx, mut reply_rx) = mpsc::channel(1);
+        let _ = self.cmd_tx.send(CoreCommand::RemoveTxsFromMempool {
+            tx_hashes,
+            reply: Some(reply_tx),
+        });
+        let _ = reply_rx.recv().await;
     }
 
     /// Cache a TX set.

@@ -42,8 +42,8 @@ class OverlayIPC
         std::function<std::vector<SCPEnvelope>(uint32_t ledgerSeq)>;
 
     /// Callback when TX set received from peers (async fetch response)
-    using TxSetReceivedCallback =
-        std::function<void(Hash const& hash, GeneralizedTransactionSet const& txSet)>;
+    using TxSetReceivedCallback = std::function<void(
+        Hash const& hash, GeneralizedTransactionSet const& txSet)>;
 
     /**
      * Create an OverlayIPC instance.
@@ -104,8 +104,8 @@ class OverlayIPC
      *
      * @param count Number of transactions to request
      * @param timeoutMs Timeout in milliseconds
-     * @return Vector of transaction envelopes (may be less than count if mempool
-     * is small)
+     * @return Vector of transaction envelopes (may be less than count if
+     * mempool is small)
      */
     std::vector<TransactionEnvelope> getTopTransactions(size_t count,
                                                         int timeoutMs = 1000);

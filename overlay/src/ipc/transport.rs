@@ -76,16 +76,16 @@ impl CoreSender {
     pub fn send_top_txs_response(&self, txs: &[&[u8]]) -> Result<(), IpcError> {
         let total_size: usize = 4 + txs.iter().map(|tx| 4 + tx.len()).sum::<usize>();
         let mut payload = Vec::with_capacity(total_size);
-        
+
         // Count
         payload.extend_from_slice(&(txs.len() as u32).to_le_bytes());
-        
+
         // Each TX: [len:4][data:len]
         for tx in txs {
             payload.extend_from_slice(&(tx.len() as u32).to_le_bytes());
             payload.extend_from_slice(tx);
         }
-        
+
         self.send(Message::new(MessageType::TopTxsResponse, payload))
     }
 

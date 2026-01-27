@@ -116,6 +116,7 @@ PendingEnvelopes::recvSCPQuorumSet(Hash const& hash, SCPQuorumSet const& q)
     {
         discardSCPEnvelopesWithQSet(hash);
     }
+    mPendingQSetFetches.erase(hash);
     return res;
 }
 
@@ -226,7 +227,6 @@ PendingEnvelopes::addTxSet(Hash const& hash, uint64 lastSeenSlotIndex,
     CLOG_TRACE(Herder, "Add TxSet {}", hexAbbrev(hash));
 
     putTxSet(hash, lastSeenSlotIndex, txset);
-    mPendingTxSetFetches.erase(hash);
 }
 
 bool
@@ -236,7 +236,8 @@ PendingEnvelopes::recvTxSet(Hash const& hash, TxSetXDRFrameConstPtr txset)
     CLOG_INFO(Herder, "Got TxSet {}", hexAbbrev(hash));
 
     // Only accept if we were actually fetching this
-    if (mPendingTxSetFetches.find(hash) == mPendingTxSetFetches.end())
+    auto it = mPendingTxSetFetches.find(hash);
+    if (it == mPendingTxSetFetches.end())
     {
         CLOG_WARNING(Herder, "TxSet {} not in pending fetches - rejecting",
                      hexAbbrev(hash));
@@ -244,6 +245,13 @@ PendingEnvelopes::recvTxSet(Hash const& hash, TxSetXDRFrameConstPtr txset)
     }
 
     addTxSet(hash, 0, txset);
+    for (auto& env : it->second)
+    {
+        CLOG_INFO(Herder, "Re-processing envelope after TxSet {} fetch",
+                  hexAbbrev(hash));
+        mApp.getHerder().recvSCPEnvelope(env);
+    }
+    mPendingTxSetFetches.erase(hash);
     return true;
 }
 
@@ -317,6 +325,9 @@ PendingEnvelopes::recvSCPEnvelope(SCPEnvelope const& envelope)
     {
         if (isDiscarded(envelope))
         {
+            CLOG_INFO(Herder,
+                      "Dropping envelope from {} (previously discarded)",
+                      mApp.getConfig().toShortString(nodeID));
             return Herder::ENVELOPE_STATUS_DISCARDED;
         }
 
@@ -341,6 +352,10 @@ PendingEnvelopes::recvSCPEnvelope(SCPEnvelope const& envelope)
             else
             {
                 // we already have this one
+                CLOG_INFO(Herder,
+                          "Ignoring duplicate SCPEnvelope from {} for slot {}",
+                          mApp.getConfig().toShortString(nodeID),
+                          envelope.statement.slotIndex);
                 return Herder::ENVELOPE_STATUS_PROCESSED;
             }
         }
@@ -584,18 +599,25 @@ PendingEnvelopes::startFetch(SCPEnvelope const& envelope)
     if (!getKnownQSet(h, false))
     {
         // Track that we need this qset - will be requested via IPC
-        mPendingQSetFetches.insert(h);
+        auto& vec = mPendingQSetFetches[h];
+        vec.push_back(envelope);
         needSomething = true;
     }
 
     for (auto const& h2 : getValidatedTxSetHashes(envelope))
     {
-        if (!getKnownTxSet(h2, 0, false))
+        auto it = mPendingTxSetFetches.find(h2);
+        if (it != mPendingTxSetFetches.end())
         {
-            // Track that we need this txset - request via IPC
-            mPendingTxSetFetches.insert(h2);
-            mApp.getOverlayManager().requestTxSet(h2);
-            needSomething = true;
+            // Already fetching - just add envelope to waiting list
+            it->second.push_back(envelope);
+        }
+        else if (!getKnownTxSet(h2, 0, false))
+        {
+            // Not fetching yet - start fetch
+            auto& vec = mPendingTxSetFetches[h2];
+            vec.push_back(envelope);
+            mApp.getOverlayManager().requestTxSet(h2); // Only once!
         }
     }
 
@@ -616,7 +638,16 @@ PendingEnvelopes::stopFetch(SCPEnvelope const& envelope)
 
     for (auto const& h2 : getValidatedTxSetHashes(envelope))
     {
-        mPendingTxSetFetches.erase(h2);
+        auto it = mPendingTxSetFetches.find(h2);
+        if (it != mPendingTxSetFetches.end())
+        {
+            auto& vec = it->second;
+            vec.erase(std::remove(vec.begin(), vec.end(), envelope), vec.end());
+            if (vec.empty())
+            {
+                mPendingTxSetFetches.erase(it);
+            }
+        }
     }
 
     CLOG_TRACE(Herder, "StopFetch env {} i:{} t:{}",

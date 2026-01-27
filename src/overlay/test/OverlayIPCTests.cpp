@@ -1151,6 +1151,7 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc-stress]")
 
             LOG_INFO(DEFAULT_LOG, "{}: {} TXs submitted, {} included in {} ms",
                      run.label, txSubmitted, res.txIncluded, duration);
+            REQUIRE(txSubmitted == res.txIncluded);
         }
     }
 
