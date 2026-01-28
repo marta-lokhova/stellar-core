@@ -257,7 +257,7 @@ TEST_CASE("IPC concurrent access benchmark",
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
     {
-        WARN("Skipping test - overlay binary not found");
+        FAIL("Skipping test - overlay binary not found");
         return;
     }
 

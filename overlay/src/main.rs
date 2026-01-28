@@ -27,6 +27,7 @@ use flood::{build_tx_set_xdr, hash_tx_set, CachedTxSet, Hash256, TxSetCache};
 use integrated::{CoreCommand, Overlay, OverlayHandle};
 use ipc::{CoreIpc, Message, MessageType};
 use libp2p::identity::Keypair as Libp2pKeypair;
+use libp2p::PeerId;
 use libp2p_overlay::{
     create_overlay, OverlayEvent as LibP2pOverlayEvent, OverlayHandle as LibP2pOverlayHandle,
     StellarOverlay,
@@ -170,6 +171,9 @@ struct App {
     libp2p_events: mpsc::UnboundedReceiver<LibP2pOverlayEvent>,
     /// TX sets that Core has requested but we're still fetching from peers
     pending_core_txset_requests: Arc<RwLock<HashSet<Hash256>>>,
+    /// Pending SCP state requests: FIFO queue of peers awaiting SCP state
+    /// When Core responds with ScpStateResponse, we pop from queue and forward
+    pending_scp_state_requests: Arc<RwLock<std::collections::VecDeque<PeerId>>>,
 }
 
 impl App {
@@ -223,6 +227,7 @@ impl App {
             libp2p_handle,
             libp2p_events: libp2p_event_rx,
             pending_core_txset_requests: Arc::new(RwLock::new(HashSet::new())),
+            pending_scp_state_requests: Arc::new(RwLock::new(std::collections::VecDeque::new())),
         })
     }
 
@@ -370,6 +375,22 @@ impl App {
                         from,
                         cache.len()
                     );
+                }
+            }
+            
+            LibP2pOverlayEvent::ScpStateRequested { peer_id, ledger_seq } => {
+                info!("Peer {} requesting SCP state for ledger >= {}", peer_id, ledger_seq);
+                
+                // Add to queue of pending requests
+                self.pending_scp_state_requests.write().await.push_back(peer_id);
+                
+                // Request SCP state from Core (just send ledger_seq, no peer_id)
+                let payload = ledger_seq.to_le_bytes().to_vec();
+                let msg = Message::new(MessageType::PeerRequestsScpState, payload);
+                if let Err(e) = self.core_ipc.sender.send(msg) {
+                    error!("Failed to send PeerRequestsScpState to Core: {:?}", e);
+                    // Remove from queue on error
+                    self.pending_scp_state_requests.write().await.pop_back();
                 }
             }
         }
@@ -540,8 +561,20 @@ impl App {
             }
 
             MessageType::RequestScpState => {
-                // TODO: Implement - query SCP state and respond
-                warn!("RequestScpState not yet implemented");
+                // Core is asking us to request SCP state from peers
+                // Payload is ledger sequence (u32, 4 bytes)
+                if msg.payload.len() >= 4 {
+                    let ledger_seq = u32::from_le_bytes(msg.payload[0..4].try_into().unwrap());
+                    info!("Core requests SCP state from peers for ledger >= {}", ledger_seq);
+                    
+                    // Forward request to all connected peers
+                    let handle = self.libp2p_handle.clone();
+                    tokio::spawn(async move {
+                        handle.request_scp_state_from_all_peers(ledger_seq).await;
+                    });
+                } else {
+                    warn!("RequestScpState with invalid payload length: {}", msg.payload.len());
+                }
             }
 
             MessageType::LedgerClosed => {
@@ -617,8 +650,57 @@ impl App {
             }
 
             MessageType::ScpStateResponse => {
-                // TODO: Forward to peer that requested it
-                warn!("ScpStateResponse not yet implemented");
+                // Core responded with SCP state - pop from queue and forward to peer
+                // C++ payload format: [count:4][env1_len:4][env1_xdr]...
+                if msg.payload.len() < 4 {
+                    warn!("ScpStateResponse payload too short: {}", msg.payload.len());
+                    return;
+                }
+                
+                let num_envelopes = u32::from_le_bytes(msg.payload[0..4].try_into().unwrap()) as usize;
+                info!("Core responded with {} SCP envelopes", num_envelopes);
+                
+                // Pop the next pending request from the queue
+                let peer_id = {
+                    let mut pending = self.pending_scp_state_requests.write().await;
+                    match pending.pop_front() {
+                        Some(p) => p,
+                        None => {
+                            warn!("Received ScpStateResponse but no pending request in queue - dropping");
+                            return;
+                        }
+                    }
+                };
+                
+                info!("Forwarding {} SCP envelopes to peer {}", num_envelopes, peer_id);
+                
+                // Parse and forward each envelope to the requesting peer
+                let handle = self.libp2p_handle.clone();
+                let payload = msg.payload.clone();
+                tokio::spawn(async move {
+                    let mut offset = 4; // Skip count
+                    for _ in 0..num_envelopes {
+                        if offset + 4 > payload.len() {
+                            warn!("ScpStateResponse truncated at envelope length");
+                            break;
+                        }
+                        let env_len = u32::from_le_bytes(payload[offset..offset+4].try_into().unwrap()) as usize;
+                        offset += 4;
+                        
+                        if offset + env_len > payload.len() {
+                            warn!("ScpStateResponse truncated at envelope data");
+                            break;
+                        }
+                        let envelope = &payload[offset..offset+env_len];
+                        offset += env_len;
+                        
+                        // Send envelope to requesting peer over SCP stream
+                        if let Err(e) = handle.send_scp_to_peer(peer_id.clone(), envelope).await {
+                            warn!("Failed to send SCP envelope to {}: {:?}", peer_id, e);
+                        }
+                    }
+                    info!("Finished forwarding {} SCP envelopes to {}", num_envelopes, peer_id);
+                });
             }
 
             MessageType::SetPeerConfig => {
@@ -652,6 +734,8 @@ impl App {
                         // Connect libp2p QUIC to all known/preferred peers
                         let all_peers: Vec<_> =
                             known.into_iter().chain(preferred.into_iter()).collect();
+                        let peer_count = all_peers.len();
+                        
                         for addr_str in all_peers {
                             if let Ok(addr) = addr_str.parse::<SocketAddr>() {
                                 // QUIC uses UDP, port + 1000
@@ -666,6 +750,32 @@ impl App {
                                     handle.dial(libp2p_addr).await;
                                 });
                             }
+                        }
+
+                        // After dialing known peers, bootstrap Kademlia for peer discovery
+                        // This allows nodes to discover peers beyond KNOWN_PEERS
+                        if peer_count > 0 {
+                            let handle = self.libp2p_handle.clone();
+                            tokio::spawn(async move {
+                                // Give initial connections time to establish
+                                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                                info!("Initiating Kademlia bootstrap to discover additional peers");
+                                handle.bootstrap_kademlia().await;
+                                
+                                // TODO: Add periodic re-bootstrap for network maintenance
+                                // Kademlia routing tables become stale as peers join/leave
+                                // Re-bootstrapping every 5-10 minutes keeps routing fresh
+                                /*
+                                let mut interval = tokio::time::interval(
+                                    tokio::time::Duration::from_secs(300) // 5 minutes
+                                );
+                                loop {
+                                    interval.tick().await;
+                                    info!("Periodic Kademlia re-bootstrap");
+                                    handle.bootstrap_kademlia().await;
+                                }
+                                */
+                            });
                         }
                     }
                 }

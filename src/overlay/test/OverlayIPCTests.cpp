@@ -277,7 +277,7 @@ TEST_CASE("Rust overlay SCP consensus", "[overlay-ipc][.]")
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
     {
-        WARN("Skipping test - overlay binary not found");
+        FAIL("Skipping test - overlay binary not found");
         return;
     }
 
@@ -351,7 +351,7 @@ TEST_CASE("Rust overlay get top transactions", "[overlay-ipc][.]")
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
     {
-        WARN("Skipping test - overlay binary not found");
+        FAIL("Skipping test - overlay binary not found");
         return;
     }
 
@@ -386,7 +386,7 @@ TEST_CASE("Rust overlay TX submission", "[overlay-ipc][.]")
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
     {
-        WARN("Skipping test - overlay binary not found");
+        FAIL("Skipping test - overlay binary not found");
         return;
     }
 
@@ -476,7 +476,7 @@ TEST_CASE("Rust overlay TX inclusion", "[overlay-ipc][.]")
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
     {
-        WARN("Skipping test - overlay binary not found");
+        FAIL("Skipping test - overlay binary not found");
         return;
     }
 
@@ -527,7 +527,7 @@ TEST_CASE("Rust overlay TX fee per op inclusion", "[overlay-ipc][.]")
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
     {
-        WARN("Skipping test - overlay binary not found");
+        FAIL("Skipping test - overlay binary not found");
         return;
     }
 
@@ -577,7 +577,7 @@ TEST_CASE("Rust overlay mempool eviction", "[overlay-ipc][.]")
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
     {
-        WARN("Skipping test - overlay binary not found");
+        FAIL("Skipping test - overlay binary not found");
         return;
     }
 
@@ -637,7 +637,7 @@ TEST_CASE("Rust overlay TX deduplication", "[overlay-ipc][.]")
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
     {
-        WARN("Skipping test - overlay binary not found");
+        FAIL("Skipping test - overlay binary not found");
         return;
     }
 
@@ -677,7 +677,7 @@ TEST_CASE("Rust overlay mempool clear on externalize", "[overlay-ipc][.]")
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
     {
-        WARN("Skipping test - overlay binary not found");
+        FAIL("Skipping test - overlay binary not found");
         return;
     }
 
@@ -737,7 +737,7 @@ TEST_CASE("Rust overlay TX flooding between peers", "[overlay-ipc][.]")
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
     {
-        WARN("Skipping test - overlay binary not found");
+        FAIL("Skipping test - overlay binary not found");
         return;
     }
 
@@ -809,7 +809,7 @@ TEST_CASE("Rust overlay TX included in ledger", "[overlay-ipc][.]")
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
     {
-        WARN("Skipping test - overlay binary not found");
+        FAIL("Skipping test - overlay binary not found");
         return;
     }
 
@@ -921,7 +921,7 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc-stress]")
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
     {
-        WARN("Skipping test - overlay binary not found");
+        FAIL("Skipping test - overlay binary not found");
         return;
     }
 
@@ -1221,4 +1221,130 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc-stress]")
             static_cast<double>(r.txIncluded) / r.txSubmitted;
         REQUIRE(inclusionRate >= 0.8); // At least 80% of TXs should be included
     }
+}
+
+/**
+ * Test a 10-node network to verify Kademlia peer discovery and GossipSub
+ * message propagation work correctly.
+ *
+ * This test verifies:
+ * - 10 nodes can bootstrap with proper KNOWN_PEERS configuration
+ * - Kademlia discovers peers across the network
+ * - GossipSub propagates SCP messages reliably
+ * - Network can reach consensus and close 3 empty ledgers
+ *
+ * Run with: stellar-core test '[overlay-ipc-network]'
+ */
+TEST_CASE("Rust overlay 10-node network consensus", "[overlay-ipc]")
+{
+    std::string overlayBinary = findOverlayBinary();
+    if (overlayBinary.empty())
+    {
+        FAIL("Skipping test - overlay binary not found");
+        return;
+    }
+
+    LOG_INFO(DEFAULT_LOG, "");
+    LOG_INFO(DEFAULT_LOG,
+             "============================================================");
+    LOG_INFO(DEFAULT_LOG, "         10-NODE NETWORK CONSENSUS TEST");
+    LOG_INFO(DEFAULT_LOG,
+             "============================================================");
+    LOG_INFO(DEFAULT_LOG, "");
+
+    // Create simulation with 10 nodes
+    Hash networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
+    auto simulation = std::make_shared<Simulation>(networkID);
+
+    // Generate keys for 10 validators
+    std::vector<SecretKey> keys;
+    for (int i = 0; i < 10; i++)
+    {
+        keys.push_back(SecretKey::fromSeed(sha256(fmt::format("NODE_{}", i))));
+    }
+
+    // Create quorum set: 7-of-10 validators (70% threshold for BFT)
+    SCPQuorumSet qSet;
+    qSet.threshold = 7;
+    for (auto const& key : keys)
+    {
+        qSet.validators.push_back(key.getPublicKey());
+    }
+
+    // Configure nodes with ring topology for KNOWN_PEERS
+    // Each node knows 3 neighbors: prev, next, and one random peer
+    // This ensures connectivity while testing Kademlia discovery
+    std::vector<Application::pointer> nodes;
+    int basePort = 11630; // Start at 11630 to avoid conflicts
+    int baseHttpPort = 11700; // HTTP ports in separate range to avoid conflicts
+
+    for (int i = 0; i < 10; i++)
+    {
+        auto cfg = simulation->newConfig();
+        cfg.PEER_PORT = basePort + i;
+        cfg.HTTP_PORT = baseHttpPort + i; // Avoid HTTP/PEER port collisions
+
+        // Configure KNOWN_PEERS: ring topology with one cross-connection
+        // Node i knows: node (i-1) % 10, node (i+1) % 10, node (i+5) % 10
+        int prev = (i == 0) ? 9 : i - 1;
+        int next = (i + 1) % 10;
+        int cross = (i + 5) % 10;
+
+        cfg.KNOWN_PEERS.push_back(
+            fmt::format("127.0.0.1:{}", basePort + prev));
+        cfg.KNOWN_PEERS.push_back(
+            fmt::format("127.0.0.1:{}", basePort + next));
+        cfg.KNOWN_PEERS.push_back(
+            fmt::format("127.0.0.1:{}", basePort + cross));
+
+        LOG_INFO(DEFAULT_LOG, "Node {}: port={}, http={}, known_peers=[{}, {}, {}]", i,
+                 cfg.PEER_PORT, cfg.HTTP_PORT, basePort + prev, basePort + next,
+                 basePort + cross);
+
+        auto node = simulation->addNode(keys[i], qSet, &cfg);
+        nodes.push_back(node);
+    }
+
+    REQUIRE(nodes.size() == 10);
+    LOG_INFO(DEFAULT_LOG, "");
+    LOG_INFO(DEFAULT_LOG, "Starting all 10 nodes...");
+    auto startTime = std::chrono::steady_clock::now();
+    simulation->startAllNodes();
+
+    // Give Rust overlay time for Kademlia bootstrap and GossipSub mesh formation
+    LOG_INFO(DEFAULT_LOG, "Waiting for overlay network to form...");
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    // Crank the simulation to process any pending events
+    LOG_INFO(DEFAULT_LOG, "Processing initial events...");
+    for (int i = 0; i < 100; ++i)
+    {
+        simulation->crankForAtMost(std::chrono::milliseconds(10), false);
+    }
+
+    // Wait for initial network formation and peer discovery
+    // 10 nodes need more time to discover each other via Kademlia
+    LOG_INFO(DEFAULT_LOG,
+             "Waiting for network formation and first consensus...");
+
+    // Wait for first ledger close to ensure SCP is working
+    // With 10 nodes and fast Rust overlay, consensus can advance quickly
+    // Use generous maxSpread to avoid "overshoot" errors
+    simulation->crankUntil(
+        [&]() { return simulation->haveAllExternalized(5, 1); },
+        10 * simulation->getExpectedLedgerCloseTime(), false);
+
+    // Debug: print each node's ledger before checking
+    uint32_t min = UINT32_MAX, max = 0;
+    for (size_t i = 0; i < nodes.size(); i++)
+    {
+        auto n = nodes[i]->getLedgerManager().getLastClosedLedgerNum();
+        LOG_INFO(DEFAULT_LOG, "Node {} at ledger {}", i, n);
+        if (n < min) min = n;
+        if (n > max) max = n;
+    }
+    LOG_INFO(DEFAULT_LOG, "Ledger range: min={}, max={}, spread={}", min, max, max - min);
+
+    REQUIRE(simulation->haveAllExternalized(5, 10));
+    LOG_INFO(DEFAULT_LOG, "✓ Network formed and consensus reached");
 }

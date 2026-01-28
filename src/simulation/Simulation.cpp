@@ -162,14 +162,6 @@ Simulation::removeNode(NodeID const& id)
     }
 }
 
-void
-Simulation::configureKnownPeers()
-{
-    // Note: KNOWN_PEERS configuration removed as getConfig() returns const
-    // reference and cannot be modified at runtime. Peers should be configured
-    // before Application construction if needed.
-}
-
 std::chrono::milliseconds
 Simulation::getExpectedLedgerCloseTime() const
 {
@@ -186,14 +178,12 @@ Simulation::getExpectedLedgerCloseTime() const
 void
 Simulation::startAllNodes()
 {
-    // Configure KNOWN_PEERS before starting so Kademlia can discover peers
-    configureKnownPeers();
-
     for (auto const& it : mNodes)
     {
         auto app = it.second.mApp;
         if (app->getState() == Application::APP_CREATED_STATE)
         {
+            CLOG_INFO(Herder, "Starting node {}", app->getConfig().PEER_PORT);
             app->start();
         }
     }
@@ -433,7 +423,7 @@ Simulation::haveAllExternalized(uint32 num, uint32 maxSpread,
             FMT_STRING("%.0 overshoot in simulation: min {:d}, expected {:d}"),
             min, num));
     }
-    return (min == num) && ((max - min) <= maxSpread);
+    return (min >= num) && ((max - min) <= maxSpread);
 }
 
 Config

@@ -17,6 +17,7 @@ use libp2p::{
     identity::Keypair,
     kad::{
         store::MemoryStore, Behaviour as Kademlia, Config as KademliaConfig, Event as KademliaEvent,
+        Mode as KademliaMode,
     },
     swarm::{NetworkBehaviour, SwarmEvent},
     Multiaddr, PeerId, Stream, StreamProtocol, Swarm, SwarmBuilder,
@@ -53,6 +54,8 @@ pub enum OverlayEvent {
     },
     /// Peer is requesting a TX set (need to look up and respond)
     TxSetRequested { hash: [u8; 32], from: PeerId },
+    /// Peer is requesting SCP state
+    ScpStateRequested { peer_id: PeerId, ledger_seq: u32 },
 }
 
 /// Commands to the overlay
@@ -74,6 +77,12 @@ pub enum OverlayCommand {
     RecordTxSetSource { hash: [u8; 32], peer: PeerId },
     /// Connect to a peer
     Dial(Multiaddr),
+    /// Bootstrap Kademlia DHT for peer discovery
+    BootstrapKademlia,
+    /// Request SCP state from all peers
+    RequestScpState { ledger_seq: u32 },
+    /// Send SCP envelope to a specific peer
+    SendScpToPeer { peer_id: PeerId, envelope: Vec<u8> },
     /// Shutdown
     Shutdown,
 }
@@ -170,6 +179,22 @@ impl OverlayHandle {
         let _ = self.cmd_tx.send(OverlayCommand::Dial(addr)).await;
     }
 
+    pub async fn bootstrap_kademlia(&self) {
+        let _ = self.cmd_tx.send(OverlayCommand::BootstrapKademlia).await;
+    }
+    
+    pub async fn request_scp_state_from_all_peers(&self, ledger_seq: u32) {
+        let _ = self.cmd_tx.send(OverlayCommand::RequestScpState { ledger_seq }).await;
+    }
+    
+    pub async fn send_scp_to_peer(&self, peer_id: PeerId, envelope: &[u8]) -> io::Result<()> {
+        self.cmd_tx.send(OverlayCommand::SendScpToPeer {
+            peer_id,
+            envelope: envelope.to_vec(),
+        }).await.map_err(|_| io::Error::new(io::ErrorKind::Other, "Channel closed"))?;
+        Ok(())
+    }
+
     pub async fn shutdown(&self) {
         let _ = self.cmd_tx.send(OverlayCommand::Shutdown).await;
     }
@@ -183,6 +208,10 @@ struct SharedState {
     scp_seen: RwLock<lru::LruCache<[u8; 32], ()>>,
     /// TX messages seen (for dedup)
     tx_seen: RwLock<lru::LruCache<[u8; 32], ()>>,
+    /// Track which peers we've sent each SCP message to (prevent duplicate sends)
+    scp_sent_to: RwLock<lru::LruCache<[u8; 32], std::collections::HashSet<PeerId>>>,
+    /// Track which peers we've sent each TX to (prevent duplicate sends)
+    tx_sent_to: RwLock<lru::LruCache<[u8; 32], std::collections::HashSet<PeerId>>>,
     /// TX set sources: which peer has which TX set (learned from SCP messages)
     txset_sources: RwLock<lru::LruCache<[u8; 32], PeerId>>,
     /// Pending TX set requests (to avoid duplicate fetches)
@@ -201,6 +230,12 @@ impl SharedState {
                 std::num::NonZeroUsize::new(10000).unwrap(),
             )),
             tx_seen: RwLock::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(100000).unwrap(),
+            )),
+            scp_sent_to: RwLock::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(10000).unwrap(),
+            )),
+            tx_sent_to: RwLock::new(lru::LruCache::new(
                 std::num::NonZeroUsize::new(100000).unwrap(),
             )),
             txset_sources: RwLock::new(lru::LruCache::new(
@@ -245,11 +280,17 @@ pub fn create_overlay(
         .with_behaviour(|key| {
             let stream = StreamBehaviour::new();
 
+            // Configure Kademlia for active DHT participation
+            // - Server mode: respond to DHT queries (required for peer discovery)
+            // - Default periodic bootstrap: 5 minutes
+            let mut kad_config = KademliaConfig::default();
+            // Note: We'll set server mode after swarm creation since set_mode is on Behaviour
+            
             #[allow(deprecated)]
             let kademlia = Kademlia::with_config(
                 key.public().to_peer_id(),
                 MemoryStore::new(key.public().to_peer_id()),
-                KademliaConfig::default(),
+                kad_config,
             );
 
             let identify = Identify::new(IdentifyConfig::new(
@@ -265,6 +306,16 @@ pub fn create_overlay(
         })?
         .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(300)))
         .build();
+
+    // CRITICAL: Set Kademlia to Server mode immediately
+    // By default, Kademlia starts in Client mode and only switches to Server
+    // when an external address is confirmed. In test networks with localhost
+    // addresses, this never happens, so nodes don't respond to DHT queries
+    // and peer discovery fails completely.
+    // Server mode = respond to DHT queries = enable peer discovery
+    let mut swarm = swarm;
+    swarm.behaviour_mut().kademlia.set_mode(Some(KademliaMode::Server));
+    info!("Kademlia: Set to Server mode for DHT query handling");
 
     let control = swarm.behaviour().stream.new_control();
 
@@ -340,6 +391,25 @@ impl StellarOverlay {
                                 warn!("Failed to dial {}: {}", addr, e);
                             }
                         }
+                        OverlayCommand::BootstrapKademlia => {
+                            info!("Kademlia: Starting bootstrap");
+                            if let Err(e) = self.swarm.behaviour_mut().kademlia.bootstrap() {
+                                warn!("Kademlia: Bootstrap failed to start: {:?}", e);
+                            } else {
+                                info!("Kademlia: Bootstrap initiated successfully");
+                            }
+                        }
+                        OverlayCommand::RequestScpState { ledger_seq } => {
+                            info!("Requesting SCP state (ledger >= {}) from all peers", ledger_seq);
+                            self.request_scp_state_from_all_peers(ledger_seq).await;
+                        }
+                        OverlayCommand::SendScpToPeer { peer_id, envelope } => {
+                            // Don't hold &self across await - extract state and call helper directly
+                            let state = Arc::clone(&self.state);
+                            if let Err(e) = send_to_peer_stream(&state, peer_id.clone(), StreamType::Scp, &envelope).await {
+                                warn!("Failed to send SCP to {}: {:?}", peer_id, e);
+                            }
+                        }
                         OverlayCommand::Shutdown => {
                             info!("Overlay shutting down");
                             break;
@@ -400,18 +470,81 @@ impl StellarOverlay {
     fn handle_identify_event(&mut self, event: IdentifyEvent) {
         if let IdentifyEvent::Received { peer_id, info, .. } = event {
             debug!("Identified peer {}: {:?}", peer_id, info.listen_addrs);
+            
             for addr in info.listen_addrs {
                 self.swarm
                     .behaviour_mut()
                     .kademlia
-                    .add_address(&peer_id, addr);
+                    .add_address(&peer_id, addr.clone());
+                
+                // If not already connected, dial this Kademlia-discovered peer
+                // to add to GossipSub mesh for SCP message routing
+                if !self.swarm.is_connected(&peer_id) {
+                    info!("Auto-dialing Kademlia-discovered peer {} at {}", peer_id, addr);
+                    if let Err(e) = self.swarm.dial(addr) {
+                        warn!("Failed to dial discovered peer {}: {:?}", peer_id, e);
+                    }
+                    break; // Only dial once with first address
+                }
             }
         }
     }
 
     fn handle_kademlia_event(&mut self, event: KademliaEvent) {
-        if let KademliaEvent::RoutingUpdated { peer, .. } = event {
-            debug!("Kademlia routing updated for peer {}", peer);
+        match event {
+            KademliaEvent::RoutingUpdated { peer, .. } => {
+                debug!("Kademlia: Routing table updated for peer {}", peer);
+            }
+            KademliaEvent::OutboundQueryProgressed { result, .. } => {
+                use libp2p::kad::QueryResult;
+                match result {
+                    QueryResult::Bootstrap(Ok(bootstrap_result)) => {
+                        info!(
+                            "Kademlia: Bootstrap completed, {} peers in routing table",
+                            bootstrap_result.num_remaining
+                        );
+                        
+                        // After bootstrap, count discovered peers for logging
+                        let mut total_peers = 0;
+                        for kbucket in self.swarm.behaviour_mut().kademlia.kbuckets() {
+                            total_peers += kbucket.iter().count();
+                        }
+                        
+                        if total_peers > 0 {
+                            info!("Kademlia: Routing table has {} total peers", total_peers);
+                        }
+                    }
+                    QueryResult::Bootstrap(Err(e)) => {
+                        warn!("Kademlia: Bootstrap failed: {:?}", e);
+                    }
+                    QueryResult::GetClosestPeers(Ok(get_closest_result)) => {
+                        info!(
+                            "Kademlia: Found {} closest peers",
+                            get_closest_result.peers.len()
+                        );
+                        
+                        // Discovered new peers - they're already added to routing table
+                        // When Identify protocol runs, addresses will be added and we can dial them
+                        // TODO: Auto-dial discovered peers once we have their addresses
+                        // This would add them to GossipSub mesh for SCP message routing
+                        for peer in &get_closest_result.peers {
+                            debug!("Kademlia: Discovered peer {:?}", peer);
+                        }
+                    }
+                    QueryResult::GetClosestPeers(Err(e)) => {
+                        debug!("Kademlia: GetClosestPeers query failed: {:?}", e);
+                    }
+                    _ => {
+                        trace!("Kademlia: Query progressed: {:?}", result);
+                    }
+                }
+            }
+            KademliaEvent::InboundRequest { request } => {
+                debug!("Kademlia: Received inbound request: {:?}", request);
+            }
+            _ => {
+                trace!("Kademlia event: {:?}", event);
+            }
         }
     }
 
@@ -471,6 +604,28 @@ impl StellarOverlay {
             ps.tx = tx_stream;
             ps.txset = txset_stream;
         }
+        
+        // Request SCP state from newly connected peer
+        info!("Peer {} connected, sending SCP state request", peer_id);
+        // Send 4-byte ledger seq (0 = all recent state) over SCP stream
+        let state = Arc::clone(&self.state);
+        let peer_id_clone = peer_id.clone();
+        tokio::spawn(async move {
+            let ledger_seq: u32 = 0; // Request all recent state
+            
+            // Initial request (may return 0 if peer just started)
+            if let Err(e) = send_to_peer_stream(&state, peer_id_clone.clone(), StreamType::Scp, &ledger_seq.to_le_bytes()).await {
+                warn!("Failed to request SCP state from peer: {:?}", e);
+                return;
+            }
+            
+            // Retry after 3 seconds (peer will have emitted SCP messages by then)
+            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            info!("Retrying SCP state request from peer {}", peer_id_clone);
+            if let Err(e) = send_to_peer_stream(&state, peer_id_clone, StreamType::Scp, &ledger_seq.to_le_bytes()).await {
+                warn!("Failed to retry SCP state request from peer: {:?}", e);
+            }
+        });
     }
 
     /// Broadcast SCP envelope to all connected peers
@@ -501,8 +656,14 @@ impl StellarOverlay {
             peers.len()
         );
 
+        // Track which peers we're sending to
+        {
+            let mut sent_to = self.state.scp_sent_to.write().await;
+            sent_to.put(hash, peers.iter().cloned().collect());
+        }
+
         for peer_id in peers {
-            match send_to_peer_stream(&self.state, peer_id, StreamType::Scp, envelope).await {
+            match send_to_peer_stream(&self.state, peer_id.clone(), StreamType::Scp, envelope).await {
                 Ok(_) => {
                     debug!(
                         "SCP_SEND_OK: Sent SCP {:02x?}... to {}",
@@ -546,6 +707,12 @@ impl StellarOverlay {
             tx.len(),
             peers.len()
         );
+
+        // Track which peers we're sending to
+        {
+            let mut sent_to = self.state.tx_sent_to.write().await;
+            sent_to.put(hash, peers.iter().cloned().collect());
+        }
 
         for peer_id in peers {
             if let Err(e) = send_to_peer_stream(&self.state, peer_id, StreamType::Tx, tx).await {
@@ -686,6 +853,28 @@ impl StellarOverlay {
             ),
         }
     }
+
+    /// Request SCP state from all connected peers
+    pub async fn request_scp_state_from_all_peers(&mut self, ledger_seq: u32) {
+        let streams = self.state.peer_streams.read().await;
+        let peers: Vec<_> = streams.keys().cloned().collect();
+        drop(streams);
+        
+        info!("Requesting SCP state for ledger >= {} from {} peers", ledger_seq, peers.len());
+        
+        // Send request to each peer (request is just the ledger seq as 4 bytes)
+        let request = ledger_seq.to_le_bytes().to_vec();
+        for peer_id in peers {
+            if let Err(e) = send_to_peer_stream(&self.state, peer_id, StreamType::Scp, &request).await {
+                warn!("Failed to send SCP state request to {}: {:?}", peer_id, e);
+            }
+        }
+    }
+    
+    /// Send SCP envelope to a specific peer
+    pub async fn send_scp_to_peer(&self, peer_id: PeerId, envelope: &[u8]) -> io::Result<()> {
+        send_to_peer_stream(&self.state, peer_id, StreamType::Scp, envelope).await
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -703,6 +892,37 @@ impl StreamType {
             StreamType::TxSet => TXSET_PROTOCOL,
         }
     }
+}
+
+/// Send message to a specific peer's stream only if already open (for flooding)
+/// Returns Ok(()) if sent, Err if stream not open (doesn't try to reopen)
+async fn try_send_to_existing_stream(
+    state: &SharedState,
+    peer_id: PeerId,
+    stream_type: StreamType,
+    data: &[u8],
+) -> io::Result<()> {
+    let streams = state.peer_streams.read().await;
+    let peer_streams = streams
+        .get(&peer_id)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "peer not connected"))?
+        .clone();
+    drop(streams);
+
+    let mut ps = peer_streams.lock().await;
+
+    let stream_slot = match stream_type {
+        StreamType::Scp => &mut ps.scp,
+        StreamType::Tx => &mut ps.tx,
+        StreamType::TxSet => &mut ps.txset,
+    };
+
+    // If stream not open, fail immediately without reopening
+    let stream = stream_slot.as_mut().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::NotConnected, "stream not open")
+    })?;
+
+    write_framed(stream, data).await
 }
 
 /// Send message to a specific peer's stream, reopening if needed
@@ -805,6 +1025,22 @@ async fn handle_inbound_scp_streams(mut incoming: IncomingStreams, state: Arc<Sh
             loop {
                 match read_framed(&mut stream).await {
                     Ok(envelope) => {
+                        // Check if this is an SCP state request (small message, 4 bytes)
+                        if envelope.len() == 4 {
+                            // This is an SCP state request (ledger seq)
+                            let ledger_seq = u32::from_le_bytes(envelope[..4].try_into().unwrap());
+                            info!("SCP_STATE_REQ: Peer {} requests SCP state for ledger >= {}", peer_id, ledger_seq);
+                            
+                            // Notify main loop via event channel
+                            if let Err(e) = state.event_tx.send(OverlayEvent::ScpStateRequested {
+                                peer_id: peer_id.clone(),
+                                ledger_seq,
+                            }) {
+                                error!("Failed to send SCP state request event: {:?}", e);
+                            }
+                            continue;
+                        }
+                        
                         let hash = blake2b_hash(&envelope);
 
                         // Dedup
@@ -833,9 +1069,57 @@ async fn handle_inbound_scp_streams(mut incoming: IncomingStreams, state: Arc<Sh
                             envelope.len(),
                             peer_id
                         );
+                        
+                        // Forward to Core
+                        let envelope_clone = envelope.clone();
                         let _ = state.event_tx.send(OverlayEvent::ScpReceived {
-                            envelope,
-                            from: peer_id,
+                            envelope: envelope_clone,
+                            from: peer_id.clone(),
+                        });
+                        
+                        // FLOOD: Forward to peers we haven't sent this message to yet
+                        let state_forward = state.clone();
+                        let peer_id_sender = peer_id.clone();
+                        tokio::spawn(async move {
+                            // Get list of peers we've already sent this message to
+                            let already_sent = {
+                                let mut sent_to = state_forward.scp_sent_to.write().await;
+                                sent_to.get_or_insert(hash, || std::collections::HashSet::new()).clone()
+                            };
+                            
+                            // Get all connected peers except sender
+                            let streams = state_forward.peer_streams.read().await;
+                            let peers: Vec<_> = streams.keys()
+                                .filter(|p| **p != peer_id_sender && !already_sent.contains(p))
+                                .cloned()
+                                .collect();
+                            drop(streams);
+                            
+                            if peers.is_empty() {
+                                return;
+                            }
+                            
+                            debug!(
+                                "SCP_FLOOD: Forwarding SCP {:02x?}... to {} new peers (already sent to {})",
+                                &hash[..4],
+                                peers.len(),
+                                already_sent.len()
+                            );
+                            
+                            // Track that we're sending to these peers
+                            {
+                                let mut sent_to = state_forward.scp_sent_to.write().await;
+                                if let Some(set) = sent_to.get_mut(&hash) {
+                                    set.extend(peers.iter().cloned());
+                                }
+                            }
+                            
+                            for peer in peers {
+                                // Only send if stream is already open - don't try to reopen during flood
+                                if let Err(e) = try_send_to_existing_stream(&state_forward, peer.clone(), StreamType::Scp, &envelope).await {
+                                    debug!("SCP_FLOOD_SKIP: Skipping forward to {} (stream not open): {}", peer, e);
+                                }
+                            }
                         });
                     }
                     Err(e) => {
@@ -873,15 +1157,54 @@ async fn handle_inbound_tx_streams(mut incoming: IncomingStreams, state: Arc<Sha
                             seen.put(hash, ());
                         }
 
-                        info!(
+                        debug!(
                             "TX_RECV: Received TX {:02x?}... ({} bytes) from {}",
                             &hash[..4],
                             tx.len(),
                             peer_id
                         );
+                        
+                        // Forward to Core
+                        let tx_clone = tx.clone();
                         let _ = state
                             .event_tx
-                            .send(OverlayEvent::TxReceived { tx, from: peer_id });
+                            .send(OverlayEvent::TxReceived { tx: tx_clone, from: peer_id.clone() });
+                        
+                        // FLOOD: Forward to peers we haven't sent this TX to yet
+                        let state_forward = state.clone();
+                        let peer_id_sender = peer_id.clone();
+                        tokio::spawn(async move {
+                            let already_sent = {
+                                let mut sent_to = state_forward.tx_sent_to.write().await;
+                                sent_to.get_or_insert(hash, || std::collections::HashSet::new()).clone()
+                            };
+                            
+                            let streams = state_forward.peer_streams.read().await;
+                            let peers: Vec<_> = streams.keys()
+                                .filter(|p| **p != peer_id_sender && !already_sent.contains(p))
+                                .cloned()
+                                .collect();
+                            drop(streams);
+                            
+                            if peers.is_empty() {
+                                return;
+                            }
+                            
+                            // Track that we're sending to these peers
+                            {
+                                let mut sent_to = state_forward.tx_sent_to.write().await;
+                                if let Some(set) = sent_to.get_mut(&hash) {
+                                    set.extend(peers.iter().cloned());
+                                }
+                            }
+                            
+                            for peer in peers {
+                                // Only send if stream is already open - don't try to reopen during flood
+                                if let Err(e) = try_send_to_existing_stream(&state_forward, peer.clone(), StreamType::Tx, &tx).await {
+                                    trace!("TX_FLOOD_SKIP: Skipping forward to {} (stream not open): {}", peer, e);
+                                }
+                            }
+                        });
                     }
                     Err(e) => {
                         debug!("TX stream from {} closed: {}", peer_id, e);
@@ -2187,6 +2510,69 @@ async fn test_txset_multiple_concurrent_requests() {
     assert!(received_hashes.contains(&hash1));
     assert!(received_hashes.contains(&hash2));
     assert!(received_hashes.contains(&hash3));
+
+    handle1.shutdown().await;
+    handle2.shutdown().await;
+}
+
+#[tokio::test]
+async fn test_scp_state_request_on_connection() {
+    // Test that when two nodes connect, they request SCP state from each other
+    let keypair1 = Keypair::generate_ed25519();
+    let keypair2 = Keypair::generate_ed25519();
+
+    let (handle1, mut events1, overlay1) = create_overlay(keypair1).unwrap();
+    let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
+
+    let listen_port = 19801;
+    tokio::spawn(async move { overlay1.run(listen_port).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    tokio::spawn(async move { overlay2.run(19802).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Connect node2 to node1
+    let addr: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1", listen_port)
+        .parse()
+        .unwrap();
+    handle2.dial(addr).await;
+
+    // Wait for connection + SCP stream setup
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Both nodes should receive ScpStateRequested events (each receives request from the other)
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut node1_received_request = false;
+    let mut node2_received_request = false;
+
+    while tokio::time::Instant::now() < deadline
+        && (!node1_received_request || !node2_received_request)
+    {
+        tokio::select! {
+            Some(event) = events1.recv() => {
+                if let OverlayEvent::ScpStateRequested { ledger_seq, .. } = event {
+                    assert_eq!(ledger_seq, 0, "Should request all recent state (ledger_seq=0)");
+                    node1_received_request = true;
+                }
+            }
+            Some(event) = events2.recv() => {
+                if let OverlayEvent::ScpStateRequested { ledger_seq, .. } = event {
+                    assert_eq!(ledger_seq, 0, "Should request all recent state (ledger_seq=0)");
+                    node2_received_request = true;
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+
+    assert!(
+        node1_received_request,
+        "Node 1 should receive SCP state request from node 2"
+    );
+    assert!(
+        node2_received_request,
+        "Node 2 should receive SCP state request from node 1"
+    );
 
     handle1.shutdown().await;
     handle2.shutdown().await;

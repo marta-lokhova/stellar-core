@@ -22,7 +22,7 @@ RustOverlayManager::RustOverlayManager(Application& app)
     if (socketPath.empty())
     {
         socketPath = fmt::format("/tmp/stellar-overlay-{}-{}.sock", getpid(),
-                                 cfg.HTTP_PORT);
+                                 cfg.PEER_PORT);
     }
 
     std::string binaryPath = cfg.OVERLAY_BINARY_PATH;
