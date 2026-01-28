@@ -217,10 +217,14 @@ overlay/
 
 ### Connectivity Topology
 
-Currently peer management is outsourced to lipp2p GossipSub default implementaiton. Peer discovery is done via Kademlia DHT.
+Currently peer management is outsourced to lipp2p GossipSub default implementaiton. Peer discovery is done via Kademlia DHT. This needs to be optimized for Stellar network characteristics: Tier1 full connectivity, watchers subscribing to certain topics like EXTERNALIZE messages only, etc.
 
 
 ### Mempool
 
-Transactions aren't validated in the Rust overlay, only basic deduplication and fee ordering is done. Full validation is done at the block layer by SCP (DoS needs to be addressed).
+Transactions aren't validated in the Rust overlay, only basic deduplication and fee ordering is done. Full validation is done at the block layer by SCP (so mempool DoS needs to be addressed).
+
+### Survey
+
+Not supported at all at the moment.
 
