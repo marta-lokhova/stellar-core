@@ -206,15 +206,16 @@ impl App {
 
         // Use peer_port + 1000 for libp2p QUIC to avoid collision with legacy TCP
         let libp2p_port = config.peer_port + 1000;
+        let libp2p_listen_ip = config.libp2p_listen_ip.clone();
 
         // Spawn libp2p overlay task
         tokio::spawn(async move {
-            libp2p_overlay.run(libp2p_port).await;
+            libp2p_overlay.run(&libp2p_listen_ip, libp2p_port).await;
         });
 
         info!(
-            "Started libp2p QUIC overlay on port {} (SCP + TX + TxSet streams)",
-            libp2p_port
+            "Started libp2p QUIC overlay on {}:{} (SCP + TX + TxSet streams)",
+            config.libp2p_listen_ip, libp2p_port
         );
 
         Ok(Self {

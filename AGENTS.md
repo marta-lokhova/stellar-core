@@ -177,20 +177,6 @@ After every small change:
 2. **Run existing tests** - make sure you didn't break anything
 3. **Write a new test** - verify the new behavior works
 
-**From TX set session:**
-- I wrote GET_TX_SET/TX_SET handling, FetchTxSet command, CacheTxSet command all at once
-- Then had multiple compilation errors to fix
-- Then tests failed because I forgot to spawn advert flush tasks
-- User had to remind me: "TDD remember??"
-
-**Better approach:**
-```
-1. Add GET_TX_SET message type → compile → tests pass
-2. Add handler for GET_TX_SET → compile → write test for it → tests pass
-3. Add TX_SET message type → compile → tests pass
-4. Add handler for TX_SET → compile → write test for it → tests pass
-5. Add FetchTxSet command → compile → write test for timeout → tests pass
-6. Integration test → tests pass
 ```
 
 Each step is small, verified, and has a test. Bugs are caught immediately, not after 200 lines of changes. Do NOT swallow errors - prefer crashing/asserting over silently proceeding.

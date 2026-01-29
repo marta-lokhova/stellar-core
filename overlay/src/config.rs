@@ -14,6 +14,11 @@ pub struct Config {
     /// Address to listen for peer connections
     pub listen_addr: SocketAddr,
 
+    /// IP address for libp2p QUIC to bind to (e.g., "127.0.0.1" for local tests).
+    /// Using a specific IP avoids Identify protocol advertising all local IPs,
+    /// which can cause connection churn in test networks.
+    pub libp2p_listen_ip: String,
+
     /// Peer port (used when generating listen address dynamically)
     pub peer_port: u16,
 
@@ -47,6 +52,7 @@ impl Default for Config {
         Self {
             core_socket: PathBuf::from("/tmp/stellar-overlay.sock"),
             listen_addr: "0.0.0.0:11625".parse().unwrap(),
+            libp2p_listen_ip: "127.0.0.1".to_string(), // Use localhost by default for safety
             peer_port: 11625,
             target_outbound_peers: 8,
             max_inbound_peers: 64,

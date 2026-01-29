@@ -196,7 +196,7 @@ overlay/
 - SCP broadcast and receive
 - Two cores communicate via Rust overlays
 - Full SCP consensus (2-node)
-- **Full SCP consensus (10-node ring topology)** - Added Jan 27, 2026
+- **Full SCP consensus (10-node ring topology)**
 - TX submission, flooding, inclusion in ledger
 - Mempool operations (eviction, dedup, clear on externalize)
 - Stress: SCP latency under TX load (verifies stream independence)
@@ -219,12 +219,15 @@ overlay/
 
 Currently peer management is outsourced to lipp2p GossipSub default implementaiton. Peer discovery is done via Kademlia DHT. This needs to be optimized for Stellar network characteristics: Tier1 full connectivity, watchers subscribing to certain topics like EXTERNALIZE messages only, etc.
 
-
 ### Mempool
 
 Transactions aren't validated in the Rust overlay, only basic deduplication and fee ordering is done. Full validation is done at the block layer by SCP (so mempool DoS needs to be addressed).
 
 ### Survey
+
+Not supported at all at the moment.
+
+### Soroban Support
 
 Not supported at all at the moment.
 

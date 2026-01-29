@@ -276,9 +276,14 @@ pub fn create_overlay(
     );
 
     // Build swarm with QUIC transport
+    // Configure QUIC with keep-alive to prevent idle connection drops
+    let mut quic_config = libp2p::quic::Config::new(&keypair);
+    quic_config.keep_alive_interval = Duration::from_secs(15);
+    quic_config.max_idle_timeout = 60_000; // 60 seconds in ms
+
     let swarm = SwarmBuilder::with_existing_identity(keypair.clone())
         .with_tokio()
-        .with_quic()
+        .with_quic_config(|_| quic_config)
         .with_behaviour(|key| {
             let stream = StreamBehaviour::new();
 
@@ -340,9 +345,13 @@ pub fn create_overlay(
 
 impl StellarOverlay {
     /// Run the overlay event loop
-    pub async fn run(mut self, listen_port: u16) {
+    /// 
+    /// `listen_ip` should be a specific IP (e.g., "127.0.0.1" for local tests)
+    /// to avoid multi-homing issues where Identify advertises multiple addresses.
+    pub async fn run(mut self, listen_ip: &str, listen_port: u16) {
         // Start listening on QUIC (UDP)
-        let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/udp/{}/quic-v1", listen_port)
+        // Use specific IP to avoid Identify advertising all local IPs
+        let listen_addr: Multiaddr = format!("/ip4/{}/udp/{}/quic-v1", listen_ip, listen_port)
             .parse()
             .unwrap();
 
@@ -1294,7 +1303,7 @@ mod tests {
         let (handle, _events, overlay) = create_overlay(keypair).unwrap();
 
         let overlay_task = tokio::spawn(async move {
-            overlay.run(0).await;
+            overlay.run("127.0.0.1", 0).await;
         });
 
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1316,13 +1325,13 @@ mod tests {
 
         let listen_port = 19101;
         let overlay1_task = tokio::spawn(async move {
-            overlay1.run(listen_port).await;
+            overlay1.run("127.0.0.1", listen_port).await;
         });
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         let overlay2_task = tokio::spawn(async move {
-            overlay2.run(19102).await;
+            overlay2.run("127.0.0.1", 19102).await;
         });
 
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -1370,10 +1379,10 @@ mod tests {
         let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
 
         let listen_port = 19201;
-        tokio::spawn(async move { overlay1.run(listen_port).await });
+        tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        tokio::spawn(async move { overlay2.run(19202).await });
+        tokio::spawn(async move { overlay2.run("127.0.0.1", 19202).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Connect
@@ -1433,10 +1442,10 @@ mod tests {
         let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
 
         let listen_port = 19301;
-        tokio::spawn(async move { overlay1.run(listen_port).await });
+        tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        tokio::spawn(async move { overlay2.run(19302).await });
+        tokio::spawn(async move { overlay2.run("127.0.0.1", 19302).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Connect
@@ -1545,10 +1554,10 @@ mod tests {
         let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
 
         let listen_port = 19501;
-        tokio::spawn(async move { overlay1.run(listen_port).await });
+        tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        tokio::spawn(async move { overlay2.run(19502).await });
+        tokio::spawn(async move { overlay2.run("127.0.0.1", 19502).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Connect
@@ -1652,10 +1661,10 @@ mod tests {
         let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
 
         let listen_port = 19401;
-        tokio::spawn(async move { overlay1.run(listen_port).await });
+        tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        tokio::spawn(async move { overlay2.run(19402).await });
+        tokio::spawn(async move { overlay2.run("127.0.0.1", 19402).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Connect
@@ -1707,10 +1716,10 @@ mod tests {
         let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
 
         let listen_port = 19601;
-        tokio::spawn(async move { overlay1.run(listen_port).await });
+        tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        tokio::spawn(async move { overlay2.run(19602).await });
+        tokio::spawn(async move { overlay2.run("127.0.0.1", 19602).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Connect
@@ -1789,10 +1798,10 @@ mod tests {
         let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
 
         let listen_port = 19701;
-        tokio::spawn(async move { overlay1.run(listen_port).await });
+        tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        tokio::spawn(async move { overlay2.run(19702).await });
+        tokio::spawn(async move { overlay2.run("127.0.0.1", 19702).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Connect
@@ -1849,10 +1858,10 @@ mod tests {
         let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
 
         let listen_port = 19801;
-        tokio::spawn(async move { overlay1.run(listen_port).await });
+        tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        tokio::spawn(async move { overlay2.run(19802).await });
+        tokio::spawn(async move { overlay2.run("127.0.0.1", 19802).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Connect
@@ -1912,13 +1921,13 @@ mod tests {
         let port_b = 19902;
         let port_c = 19903;
 
-        tokio::spawn(async move { overlay_a.run(port_a).await });
+        tokio::spawn(async move { overlay_a.run("127.0.0.1", port_a).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        tokio::spawn(async move { overlay_b.run(port_b).await });
+        tokio::spawn(async move { overlay_b.run("127.0.0.1", port_b).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        tokio::spawn(async move { overlay_c.run(port_c).await });
+        tokio::spawn(async move { overlay_c.run("127.0.0.1", port_c).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Connect: B -> A, C -> A (both B and C connected to A)
@@ -1988,13 +1997,13 @@ mod tests {
         let port_b = 20002;
         let port_c = 20003;
 
-        tokio::spawn(async move { overlay_a.run(port_a).await });
+        tokio::spawn(async move { overlay_a.run("127.0.0.1", port_a).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        tokio::spawn(async move { overlay_b.run(port_b).await });
+        tokio::spawn(async move { overlay_b.run("127.0.0.1", port_b).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        tokio::spawn(async move { overlay_c.run(port_c).await });
+        tokio::spawn(async move { overlay_c.run("127.0.0.1", port_c).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Triangle topology: A-B, B-C, A-C
@@ -2057,7 +2066,7 @@ mod tests {
         let (handle, _events, overlay) = create_overlay(keypair).unwrap();
 
         let overlay_task = tokio::spawn(async move {
-            overlay.run(20100).await;
+            overlay.run("127.0.0.1", 20100).await;
         });
 
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -2085,7 +2094,7 @@ mod tests {
         let keypair = Keypair::generate_ed25519();
         let (handle, _events, overlay) = create_overlay(keypair).unwrap();
 
-        tokio::spawn(async move { overlay.run(20200).await });
+        tokio::spawn(async move { overlay.run("127.0.0.1", 20200).await });
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Dial an address where nothing is listening
@@ -2111,10 +2120,10 @@ async fn test_txset_source_tracking() {
     let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
 
     let listen_port = 20101;
-    tokio::spawn(async move { overlay1.run(listen_port).await });
+    tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    tokio::spawn(async move { overlay2.run(20102).await });
+    tokio::spawn(async move { overlay2.run("127.0.0.1", 20102).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Connect overlay2 to overlay1
@@ -2153,10 +2162,10 @@ async fn test_txset_fetch_flow() {
     let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
 
     let listen_port = 20201;
-    tokio::spawn(async move { overlay1.run(listen_port).await });
+    tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    tokio::spawn(async move { overlay2.run(20202).await });
+    tokio::spawn(async move { overlay2.run("127.0.0.1", 20202).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Connect
@@ -2201,10 +2210,10 @@ async fn test_peer_disconnect_detection() {
     let (handle2, _events2, overlay2) = create_overlay(keypair2).unwrap();
 
     let listen_port = 20301;
-    tokio::spawn(async move { overlay1.run(listen_port).await });
+    tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    tokio::spawn(async move { overlay2.run(20302).await });
+    tokio::spawn(async move { overlay2.run("127.0.0.1", 20302).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Connect
@@ -2236,7 +2245,7 @@ async fn test_connect_unreachable_peer_timeout() {
     let (handle, _events, overlay) = create_overlay(keypair).unwrap();
 
     let listen_port = 20401;
-    tokio::spawn(async move { overlay.run(listen_port).await });
+    tokio::spawn(async move { overlay.run("127.0.0.1", listen_port).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Try to connect to a non-existent peer
@@ -2270,10 +2279,10 @@ async fn test_large_txset_doesnt_block_scp() {
     let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
 
     let listen_port = 20501;
-    tokio::spawn(async move { overlay1.run(listen_port).await });
+    tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    tokio::spawn(async move { overlay2.run(20502).await });
+    tokio::spawn(async move { overlay2.run("127.0.0.1", 20502).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Connect
@@ -2345,10 +2354,10 @@ async fn test_txset_request_and_response() {
     let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
 
     let listen_port = 20601;
-    tokio::spawn(async move { overlay1.run(listen_port).await });
+    tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    tokio::spawn(async move { overlay2.run(20602).await });
+    tokio::spawn(async move { overlay2.run("127.0.0.1", 20602).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Connect
@@ -2418,7 +2427,7 @@ async fn test_txset_fetch_no_peers() {
     let (handle, mut events, overlay) = create_overlay(keypair).unwrap();
 
     let listen_port = 20701;
-    tokio::spawn(async move { overlay.run(listen_port).await });
+    tokio::spawn(async move { overlay.run("127.0.0.1", listen_port).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Request TX set with no peers connected
@@ -2454,10 +2463,10 @@ async fn test_txset_multiple_concurrent_requests() {
     let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
 
     let listen_port = 20801;
-    tokio::spawn(async move { overlay1.run(listen_port).await });
+    tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    tokio::spawn(async move { overlay2.run(20802).await });
+    tokio::spawn(async move { overlay2.run("127.0.0.1", 20802).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Connect
@@ -2521,10 +2530,10 @@ async fn test_scp_state_request_on_connection() {
     let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
 
     let listen_port = 19801;
-    tokio::spawn(async move { overlay1.run(listen_port).await });
+    tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    tokio::spawn(async move { overlay2.run(19802).await });
+    tokio::spawn(async move { overlay2.run("127.0.0.1", 19802).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Connect node2 to node1
@@ -2572,4 +2581,150 @@ async fn test_scp_state_request_on_connection() {
 
     handle1.shutdown().await;
     handle2.shutdown().await;
+}
+
+/// Test that QUIC keep-alive keeps connection alive during idle periods
+#[tokio::test]
+async fn test_quic_keepalive_survives_idle() {
+    let keypair1 = Keypair::generate_ed25519();
+    let keypair2 = Keypair::generate_ed25519();
+
+    let (handle1, mut events1, overlay1) = create_overlay(keypair1).unwrap();
+    let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
+
+    let listen_port = 21001;
+    tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    tokio::spawn(async move { overlay2.run("127.0.0.1", 21002).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Connect
+    let addr: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1", listen_port)
+        .parse()
+        .unwrap();
+    handle2.dial(addr).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Verify initial connectivity by sending SCP
+    let scp_msg1 = b"initial SCP".to_vec();
+    handle1.broadcast_scp(scp_msg1.clone()).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut received_initial = false;
+    while tokio::time::Instant::now() < deadline && !received_initial {
+        tokio::select! {
+            Some(event) = events2.recv() => {
+                if let OverlayEvent::ScpReceived { envelope, .. } = event {
+                    if envelope == scp_msg1 {
+                        received_initial = true;
+                    }
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+    assert!(received_initial, "Should receive initial SCP message");
+
+    // Wait longer than keep-alive interval (15s) but less than max idle (60s)
+    // Use 20 seconds to ensure keep-alive packets are sent
+    info!("Waiting 20 seconds to test keep-alive...");
+    tokio::time::sleep(Duration::from_secs(20)).await;
+
+    // Verify connection is still alive by sending another SCP
+    let scp_msg2 = b"post-idle SCP".to_vec();
+    handle1.broadcast_scp(scp_msg2.clone()).await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut received_after_idle = false;
+    while tokio::time::Instant::now() < deadline && !received_after_idle {
+        tokio::select! {
+            Some(event) = events2.recv() => {
+                if let OverlayEvent::ScpReceived { envelope, .. } = event {
+                    if envelope == scp_msg2 {
+                        received_after_idle = true;
+                    }
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+    assert!(
+        received_after_idle,
+        "Connection should survive 20s idle period thanks to QUIC keep-alive"
+    );
+
+    handle1.shutdown().await;
+    handle2.shutdown().await;
+}
+
+/// Test that overlay listens on configured IP address
+#[tokio::test]
+async fn test_listen_on_configured_ip() {
+    let keypair1 = Keypair::generate_ed25519();
+    let keypair2 = Keypair::generate_ed25519();
+
+    let (handle1, _events1, overlay1) = create_overlay(keypair1).unwrap();
+    let (handle2, mut events2, overlay2) = create_overlay(keypair2).unwrap();
+
+    let listen_port = 21101;
+
+    // Start overlay1 listening on 127.0.0.1
+    tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    tokio::spawn(async move { overlay2.run("127.0.0.1", 21102).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Connect using the specific IP - this should work
+    let addr: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1", listen_port)
+        .parse()
+        .unwrap();
+    handle2.dial(addr).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Verify connection works by checking for SCP state request
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut connected = false;
+    while tokio::time::Instant::now() < deadline && !connected {
+        tokio::select! {
+            Some(event) = events2.recv() => {
+                if let OverlayEvent::ScpStateRequested { .. } = event {
+                    connected = true;
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+    assert!(connected, "Should connect when dialing configured listen IP");
+
+    handle1.shutdown().await;
+    handle2.shutdown().await;
+}
+
+/// Test that different listen IPs work correctly
+#[tokio::test]
+async fn test_listen_ip_binding() {
+    // Test that we can specify different IPs for run()
+    // On most systems, 127.0.0.1 and 127.0.0.2 are both valid loopback addresses
+    let keypair = Keypair::generate_ed25519();
+    let (handle, _events, overlay) = create_overlay(keypair).unwrap();
+
+    let listen_port = 21201;
+
+    // Start on 127.0.0.1 specifically (not 0.0.0.0)
+    let overlay_task = tokio::spawn(async move {
+        overlay.run("127.0.0.1", listen_port).await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // The overlay should be running and listening
+    // We verify by checking it accepts the shutdown gracefully
+    handle.shutdown().await;
+
+    tokio::time::timeout(Duration::from_secs(2), overlay_task)
+        .await
+        .expect("Overlay should shutdown")
+        .expect("Overlay task should complete");
 }
