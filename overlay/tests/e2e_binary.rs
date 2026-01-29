@@ -18,6 +18,7 @@ mod ipc {
     pub const SET_PEER_CONFIG: u32 = 8;
     pub const SHUTDOWN: u32 = 7;
     pub const SCP_RECEIVED: u32 = 100;
+    pub const PEER_REQUESTS_SCP_STATE: u32 = 102;
 
     pub fn send_message(
         stream: &mut UnixStream,
@@ -219,12 +220,33 @@ mod tests {
         thread::sleep(Duration::from_millis(500));
 
         // B should receive SCP_RECEIVED from its overlay
+        // When B connects to A, B sends PeerRequestsScpState to ask Core for SCP state
+        // Then B should receive the relayed SCP from A
         stream_b.set_nonblocking(false).unwrap();
         stream_b
             .set_read_timeout(Some(Duration::from_secs(2)))
             .unwrap();
 
-        let result = ipc::recv_message(&mut stream_b);
+        let mut scp_state_requests = 0;
+        let mut result = Err("No SCP_RECEIVED message".to_string());
+        for _ in 0..5 {
+            match ipc::recv_message(&mut stream_b) {
+                Ok((msg_type, payload)) => {
+                    if msg_type == ipc::SCP_RECEIVED {
+                        result = Ok((msg_type, payload));
+                        break;
+                    } else if msg_type == ipc::PEER_REQUESTS_SCP_STATE {
+                        scp_state_requests += 1;
+                    }
+                }
+                Err(e) => {
+                    result = Err(e.to_string());
+                    break;
+                }
+            }
+        }
+
+        assert_eq!(scp_state_requests, 1, "B should request SCP state once when connecting to A");
 
         // Shutdown both
         ipc::send_message(&mut stream_a, ipc::SHUTDOWN, &[]).ok();

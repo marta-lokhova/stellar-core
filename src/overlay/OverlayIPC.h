@@ -211,6 +211,9 @@ class OverlayIPC
     std::mutex mRequestMutex;
     std::condition_variable mRequestCv;
     std::optional<IPCMessage> mPendingResponse;
+
+    // Protects mChannel->send() - channel is not thread-safe
+    mutable std::mutex mSendMutex;
 };
 
 } // namespace stellar

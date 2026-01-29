@@ -96,6 +96,7 @@ OverlayIPC::shutdown()
     {
         IPCMessage msg;
         msg.type = IPCMessageType::SHUTDOWN;
+        std::lock_guard<std::mutex> lock(mSendMutex);
         mChannel->send(msg);
     }
 
@@ -300,6 +301,7 @@ OverlayIPC::broadcastSCP(SCPEnvelope const& envelope)
     msg.type = IPCMessageType::BROADCAST_SCP;
     msg.payload = xdr::xdr_to_opaque(envelope);
 
+    std::lock_guard<std::mutex> lock(mSendMutex);
     return mChannel->send(msg);
 }
 
@@ -319,6 +321,7 @@ OverlayIPC::notifyLedgerClosed(uint32_t ledgerSeq, Hash const& ledgerHash)
     std::memcpy(msg.payload.data(), &ledgerSeq, 4);
     std::memcpy(msg.payload.data() + 4, ledgerHash.data(), 32);
 
+    std::lock_guard<std::mutex> lock(mSendMutex);
     mChannel->send(msg);
 }
 
@@ -351,6 +354,7 @@ OverlayIPC::notifyTxSetExternalized(Hash const& txSetHash,
         std::memcpy(msg.payload.data() + 36 + (i * 32), txHashes[i].data(), 32);
     }
 
+    std::lock_guard<std::mutex> lock(mSendMutex);
     mChannel->send(msg);
 }
 
@@ -371,9 +375,12 @@ OverlayIPC::getTopTransactions(size_t count, int timeoutMs)
     req.payload.resize(4);
     std::memcpy(req.payload.data(), &countU32, 4);
 
-    if (!mChannel->send(req))
     {
-        return result;
+        std::lock_guard<std::mutex> lock(mSendMutex);
+        if (!mChannel->send(req))
+        {
+            return result;
+        }
     }
 
     // Wait for response
@@ -467,6 +474,7 @@ OverlayIPC::submitTransaction(TransactionEnvelope const& tx, int64_t fee,
 
     std::memcpy(msg.payload.data() + offset, txData.data(), txData.size());
 
+    std::lock_guard<std::mutex> lock(mSendMutex);
     mChannel->send(msg);
 }
 
@@ -484,6 +492,7 @@ OverlayIPC::requestTxSet(Hash const& hash)
     std::memcpy(msg.payload.data(), hash.data(), 32);
 
     CLOG_DEBUG(Overlay, "Requesting TX set {}", hexAbbrev(hash));
+    std::lock_guard<std::mutex> lock(mSendMutex);
     mChannel->send(msg);
 }
 
@@ -503,6 +512,7 @@ OverlayIPC::cacheTxSet(Hash const& hash, std::vector<uint8_t> const& xdr)
 
     CLOG_DEBUG(Overlay, "Caching TX set {} ({} bytes)", hexAbbrev(hash),
                xdr.size());
+    std::lock_guard<std::mutex> lock(mSendMutex);
     mChannel->send(msg);
 }
 
@@ -538,6 +548,7 @@ OverlayIPC::setPeerConfig(std::vector<std::string> const& knownPeers,
     msg.payload.assign(json.begin(), json.end());
 
     CLOG_DEBUG(Overlay, "Sending peer config: {}", json);
+    std::lock_guard<std::mutex> lock(mSendMutex);
     mChannel->send(msg);
 }
 
@@ -556,6 +567,7 @@ OverlayIPC::requestScpState(uint32_t ledgerSeq)
 
     CLOG_DEBUG(Overlay, "Requesting SCP state from peers, ledger >= {}",
                ledgerSeq);
+    std::lock_guard<std::mutex> lock(mSendMutex);
     mChannel->send(msg);
 }
 
@@ -607,6 +619,7 @@ OverlayIPC::sendScpStateResponse(std::vector<SCPEnvelope> const& envelopes)
     msg.payload = std::move(payload);
 
     CLOG_DEBUG(Overlay, "Sending SCP state response with {} envelopes", count);
+    std::lock_guard<std::mutex> lock(mSendMutex);
     mChannel->send(msg);
 }
 

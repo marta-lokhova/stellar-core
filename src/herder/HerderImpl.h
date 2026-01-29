@@ -8,7 +8,7 @@
 #include "herder/HerderSCPDriver.h"
 #include "herder/PendingEnvelopes.h"
 #include "herder/QuorumIntersectionChecker.h"
-#include "herder/TransactionQueue.h"
+#include "herder/LedgerCloseData.h"
 #include "herder/Upgrades.h"
 #include "overlay/NetworkConstants.h"
 #include "util/Timer.h"
@@ -99,11 +99,11 @@ class HerderImpl : public Herder
     void emitEnvelope(SCPEnvelope const& envelope);
 
 #ifdef BUILD_TESTS
-    TransactionQueue::AddResult
+    TxSubmitStatus
     recvTransaction(TransactionFrameBasePtr tx, bool submittedFromSelf,
                     bool isLoadgenTx = false) override;
 #else
-    TransactionQueue::AddResult
+    TxSubmitStatus
     recvTransaction(TransactionFrameBasePtr tx,
                     bool submittedFromSelf) override;
 #endif
@@ -211,14 +211,7 @@ class HerderImpl : public Herder
     void startTxSetGCTimer();
 
 #ifdef BUILD_TESTS
-    // used for testing
     PendingEnvelopes& getPendingEnvelopes();
-
-    ClassicTransactionQueue& getTransactionQueue() override;
-    SorobanTransactionQueue& getSorobanTransactionQueue() override;
-    bool sourceAccountPending(AccountID const& accountID) const override;
-
-    // Test only helper to get the active upgrades
     Upgrades const& getUpgrades() const;
 #endif
 
@@ -230,12 +223,7 @@ class HerderImpl : public Herder
     // helper function to verify SCPValues are signed
     bool verifyStellarValueSignature(StellarValue const& sv);
 
-    size_t getMaxQueueSizeOps() const override;
-    size_t getMaxQueueSizeSorobanOps() const override;
     void maybeHandleUpgrade() override;
-
-    bool isBannedTx(Hash const& hash) const override;
-    TransactionFrameBaseConstPtr getTx(Hash const& hash) const override;
 
   private:
     // return true if values referenced by envelope have a valid close time:
@@ -260,13 +248,6 @@ class HerderImpl : public Herder
     void newSlotExternalized(bool synchronous, StellarValue const& value);
     void purgeOldPersistedTxSets();
     void writeDebugTxSet(LedgerCloseData const& lcd);
-
-    ClassicTransactionQueue mTransactionQueue;
-    std::unique_ptr<SorobanTransactionQueue> mSorobanTransactionQueue;
-
-    void updateTransactionQueue(TxSetXDRFrameConstPtr txSet,
-                                bool queueRebuildNeeded);
-    void maybeSetupSorobanQueue(uint32_t protocolVersion);
 
     PendingEnvelopes mPendingEnvelopes;
     Upgrades mUpgrades;

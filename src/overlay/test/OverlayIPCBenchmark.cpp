@@ -24,10 +24,8 @@ std::string
 findOverlayBinary()
 {
     std::vector<std::string> paths = {
-        "../target/release/stellar-overlay",
         "target/release/stellar-overlay",
-        "overlay/target/release/stellar-overlay",
-        "../overlay/target/release/stellar-overlay",
+        "../target/release/stellar-overlay",
     };
 
     for (auto const& p : paths)

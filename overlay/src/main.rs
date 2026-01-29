@@ -393,6 +393,17 @@ impl App {
                     self.pending_scp_state_requests.write().await.pop_back();
                 }
             }
+            
+            LibP2pOverlayEvent::PeerDisconnected { peer_id } => {
+                // Clean up any pending SCP state requests for this peer
+                let mut pending = self.pending_scp_state_requests.write().await;
+                let before_len = pending.len();
+                pending.retain(|p| p != &peer_id);
+                let removed = before_len - pending.len();
+                if removed > 0 {
+                    debug!("Removed {} pending SCP state requests for disconnected peer {}", removed, peer_id);
+                }
+            }
         }
     }
 
@@ -804,6 +815,19 @@ fn setup_logging(level: &str) {
 
 #[tokio::main]
 async fn main() {
+    // Install panic hook to log panics properly
+    std::panic::set_hook(Box::new(|panic_info| {
+        eprintln!("PANIC in Rust overlay: {}", panic_info);
+        if let Some(location) = panic_info.location() {
+            eprintln!("  at {}:{}:{}", location.file(), location.line(), location.column());
+        }
+        if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            eprintln!("  payload: {}", s);
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            eprintln!("  payload: {}", s);
+        }
+    }));
+
     let args = Args::parse();
 
     // Load config

@@ -56,6 +56,8 @@ pub enum OverlayEvent {
     TxSetRequested { hash: [u8; 32], from: PeerId },
     /// Peer is requesting SCP state
     ScpStateRequested { peer_id: PeerId, ledger_seq: u32 },
+    /// Peer disconnected - clean up any pending requests
+    PeerDisconnected { peer_id: PeerId },
 }
 
 /// Commands to the overlay
@@ -445,6 +447,10 @@ impl StellarOverlay {
                     let mut streams = self.state.peer_streams.write().await;
                     streams.remove(&peer_id);
                 }
+                // Notify main loop to clean up any pending requests for this peer
+                let _ = self.state.event_tx.send(OverlayEvent::PeerDisconnected { 
+                    peer_id: peer_id.clone() 
+                });
             }
 
             SwarmEvent::Behaviour(StellarBehaviourEvent::Identify(event)) => {
@@ -597,35 +603,23 @@ impl StellarOverlay {
         };
 
         // Store streams
-        let streams = self.state.peer_streams.read().await;
-        if let Some(peer_streams) = streams.get(&peer_id) {
-            let mut ps = peer_streams.lock().await;
-            ps.scp = scp_stream;
-            ps.tx = tx_stream;
-            ps.txset = txset_stream;
+        {
+            let streams = self.state.peer_streams.read().await;
+            if let Some(peer_streams) = streams.get(&peer_id) {
+                let mut ps = peer_streams.lock().await;
+                ps.scp = scp_stream;
+                ps.tx = tx_stream;
+                ps.txset = txset_stream;
+            }
         }
         
-        // Request SCP state from newly connected peer
+        // Request SCP state from newly connected peer synchronously
+        // No spawned task, no sleep - streams are open, send immediately
         info!("Peer {} connected, sending SCP state request", peer_id);
-        // Send 4-byte ledger seq (0 = all recent state) over SCP stream
-        let state = Arc::clone(&self.state);
-        let peer_id_clone = peer_id.clone();
-        tokio::spawn(async move {
-            let ledger_seq: u32 = 0; // Request all recent state
-            
-            // Initial request (may return 0 if peer just started)
-            if let Err(e) = send_to_peer_stream(&state, peer_id_clone.clone(), StreamType::Scp, &ledger_seq.to_le_bytes()).await {
-                warn!("Failed to request SCP state from peer: {:?}", e);
-                return;
-            }
-            
-            // Retry after 3 seconds (peer will have emitted SCP messages by then)
-            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-            info!("Retrying SCP state request from peer {}", peer_id_clone);
-            if let Err(e) = send_to_peer_stream(&state, peer_id_clone, StreamType::Scp, &ledger_seq.to_le_bytes()).await {
-                warn!("Failed to retry SCP state request from peer: {:?}", e);
-            }
-        });
+        let ledger_seq: u32 = 0; // Request all recent state
+        if let Err(e) = send_to_peer_stream(&self.state, peer_id.clone(), StreamType::Scp, &ledger_seq.to_le_bytes()).await {
+            debug!("Failed to request SCP state from peer {}: {:?}", peer_id, e);
+        }
     }
 
     /// Broadcast SCP envelope to all connected peers
@@ -1077,47 +1071,49 @@ async fn handle_inbound_scp_streams(mut incoming: IncomingStreams, state: Arc<Sh
                             from: peer_id.clone(),
                         });
                         
-                        // FLOOD: Forward to peers we haven't sent this message to yet
-                        let state_forward = state.clone();
-                        let peer_id_sender = peer_id.clone();
-                        tokio::spawn(async move {
-                            // Get list of peers we've already sent this message to
-                            let already_sent = {
-                                let mut sent_to = state_forward.scp_sent_to.write().await;
-                                sent_to.get_or_insert(hash, || std::collections::HashSet::new()).clone()
-                            };
+                        // FLOOD: Determine peers to forward to (atomically mark as sent)
+                        let peers_to_forward: Vec<PeerId> = {
+                            // Hold both locks to ensure atomicity
+                            let mut sent_to = state.scp_sent_to.write().await;
+                            let streams = state.peer_streams.read().await;
                             
-                            // Get all connected peers except sender
-                            let streams = state_forward.peer_streams.read().await;
+                            // Get current sent set or empty
+                            let already_sent: std::collections::HashSet<PeerId> = sent_to
+                                .get(&hash)
+                                .cloned()
+                                .unwrap_or_default();
+                            
+                            // Find peers we haven't sent to (excluding sender)
                             let peers: Vec<_> = streams.keys()
-                                .filter(|p| **p != peer_id_sender && !already_sent.contains(p))
+                                .filter(|p| **p != peer_id && !already_sent.contains(p))
                                 .cloned()
                                 .collect();
-                            drop(streams);
                             
-                            if peers.is_empty() {
-                                return;
-                            }
+                            // Update sent set with new peers + sender
+                            let mut new_sent = already_sent;
+                            new_sent.extend(peers.iter().cloned());
+                            new_sent.insert(peer_id.clone());
+                            sent_to.put(hash, new_sent);
                             
-                            debug!(
-                                "SCP_FLOOD: Forwarding SCP {:02x?}... to {} new peers (already sent to {})",
-                                &hash[..4],
-                                peers.len(),
-                                already_sent.len()
-                            );
-                            
-                            // Track that we're sending to these peers
-                            {
-                                let mut sent_to = state_forward.scp_sent_to.write().await;
-                                if let Some(set) = sent_to.get_mut(&hash) {
-                                    set.extend(peers.iter().cloned());
-                                }
-                            }
-                            
-                            for peer in peers {
-                                // Only send if stream is already open - don't try to reopen during flood
+                            peers
+                        };
+                        
+                        if peers_to_forward.is_empty() {
+                            continue;
+                        }
+                        
+                        debug!(
+                            "SCP_FLOOD: Forwarding SCP {:02x?}... to {} peers",
+                            &hash[..4],
+                            peers_to_forward.len()
+                        );
+                        
+                        // Send to peers (can be done outside the lock)
+                        let state_forward = state.clone();
+                        tokio::spawn(async move {
+                            for peer in peers_to_forward {
                                 if let Err(e) = try_send_to_existing_stream(&state_forward, peer.clone(), StreamType::Scp, &envelope).await {
-                                    debug!("SCP_FLOOD_SKIP: Skipping forward to {} (stream not open): {}", peer, e);
+                                    debug!("SCP_FLOOD_SKIP: Failed to forward to {}: {}", peer, e);
                                 }
                             }
                         });
@@ -1170,38 +1166,38 @@ async fn handle_inbound_tx_streams(mut incoming: IncomingStreams, state: Arc<Sha
                             .event_tx
                             .send(OverlayEvent::TxReceived { tx: tx_clone, from: peer_id.clone() });
                         
-                        // FLOOD: Forward to peers we haven't sent this TX to yet
-                        let state_forward = state.clone();
-                        let peer_id_sender = peer_id.clone();
-                        tokio::spawn(async move {
-                            let already_sent = {
-                                let mut sent_to = state_forward.tx_sent_to.write().await;
-                                sent_to.get_or_insert(hash, || std::collections::HashSet::new()).clone()
-                            };
+                        // FLOOD: Determine peers to forward to (atomically mark as sent)
+                        let peers_to_forward: Vec<PeerId> = {
+                            let mut sent_to = state.tx_sent_to.write().await;
+                            let streams = state.peer_streams.read().await;
                             
-                            let streams = state_forward.peer_streams.read().await;
+                            let already_sent: std::collections::HashSet<PeerId> = sent_to
+                                .get(&hash)
+                                .cloned()
+                                .unwrap_or_default();
+                            
                             let peers: Vec<_> = streams.keys()
-                                .filter(|p| **p != peer_id_sender && !already_sent.contains(p))
+                                .filter(|p| **p != peer_id && !already_sent.contains(p))
                                 .cloned()
                                 .collect();
-                            drop(streams);
                             
-                            if peers.is_empty() {
-                                return;
-                            }
+                            let mut new_sent = already_sent;
+                            new_sent.extend(peers.iter().cloned());
+                            new_sent.insert(peer_id.clone());
+                            sent_to.put(hash, new_sent);
                             
-                            // Track that we're sending to these peers
-                            {
-                                let mut sent_to = state_forward.tx_sent_to.write().await;
-                                if let Some(set) = sent_to.get_mut(&hash) {
-                                    set.extend(peers.iter().cloned());
-                                }
-                            }
-                            
-                            for peer in peers {
-                                // Only send if stream is already open - don't try to reopen during flood
+                            peers
+                        };
+                        
+                        if peers_to_forward.is_empty() {
+                            continue;
+                        }
+                        
+                        let state_forward = state.clone();
+                        tokio::spawn(async move {
+                            for peer in peers_to_forward {
                                 if let Err(e) = try_send_to_existing_stream(&state_forward, peer.clone(), StreamType::Tx, &tx).await {
-                                    trace!("TX_FLOOD_SKIP: Skipping forward to {} (stream not open): {}", peer, e);
+                                    trace!("TX_FLOOD_SKIP: Failed to forward to {}: {}", peer, e);
                                 }
                             }
                         });

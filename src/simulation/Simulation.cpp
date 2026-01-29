@@ -22,6 +22,7 @@
 #include "main/ApplicationUtils.h"
 #include "medida/medida.h"
 #include "medida/reporting/console_reporter.h"
+#include "util/Logging.h"
 
 #include <thread>
 
@@ -43,19 +44,26 @@ Simulation::Simulation(Hash const& networkID, ConfigGen confGen,
 
 Simulation::~Simulation()
 {
-    for (auto& node : mNodes)
-    {
-        node.second.mApp->gracefulStop();
-        crankUntil([node] { return node.second.mApp->getClock().isStopped(); },
-                   std::chrono::seconds(20), false);
-    }
+    // for (auto& node : mNodes)
+    // {
+    //     node.second.mApp->gracefulStop();
+    //     if (node.second.mApp->getState() == Application::APP_CREATED_STATE)
+    //     {
+    //         continue;
+    //     }
+    //     crankUntil([node] { return node.second.mApp->getClock().isStopped(); },
+    //                std::chrono::seconds(20), false);
+    // }
 
     // destroy all nodes first
     mNodes.clear();
 
     mIdleApp->gracefulStop();
-    crankUntil([this] { return mIdleApp->getClock().isStopped(); },
-               std::chrono::seconds(20), false);
+    // if (mIdleApp->getState() != Application::APP_CREATED_STATE)
+    // {
+    //     crankUntil([this] { return mIdleApp->getClock().isStopped(); },
+    //                std::chrono::seconds(20), false);
+    // }
 }
 
 void

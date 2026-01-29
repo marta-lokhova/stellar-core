@@ -984,28 +984,21 @@ CommandHandler::tx(std::string const& params, std::string& retStr)
             auto addResult =
                 mApp.getHerder().recvTransaction(transaction, true);
 
-            root["status"] = TX_STATUS_STRING[static_cast<int>(addResult.code)];
-            if (addResult.code ==
-                TransactionQueue::AddResultCode::ADD_STATUS_ERROR)
+            if (addResult == TxSubmitStatus::TX_STATUS_PENDING)
             {
-                std::string resultBase64;
-                releaseAssertOrThrow(addResult.txResult);
-
-                auto const& payload = addResult.txResult;
-                auto resultBin = xdr::xdr_to_opaque(payload->getXDR());
-                resultBase64.reserve(decoder::encoded_size64(resultBin.size()) +
-                                     1);
-                resultBase64 = decoder::encode_b64(resultBin);
-                root["error"] = resultBase64;
-                if (mApp.getConfig().ENABLE_DIAGNOSTICS_FOR_TX_SUBMISSION &&
-                    transaction->isSoroban() &&
-                    !addResult.mDiagnosticEvents.empty())
-                {
-                    auto diagsBin =
-                        xdr::xdr_to_opaque(addResult.mDiagnosticEvents);
-                    auto diagsBase64 = decoder::encode_b64(diagsBin);
-                    root["diagnostic_events"] = diagsBase64;
-                }
+                root["status"] = "PENDING";
+            }
+            else if (addResult == TxSubmitStatus::TX_STATUS_DUPLICATE)
+            {
+                root["status"] = "DUPLICATE";
+            }
+            else if (addResult == TxSubmitStatus::TX_STATUS_ERROR)
+            {
+                root["status"] = "ERROR";
+            }
+            else
+            {
+                root["status"] = "TRY_AGAIN_LATER";
             }
         }
     }
@@ -1373,12 +1366,21 @@ CommandHandler::testTx(std::string const& params, std::string& retStr)
         }
 
         auto addResult = mApp.getHerder().recvTransaction(txFrame, true);
-        root["status"] = TX_STATUS_STRING[static_cast<int>(addResult.code)];
-        if (addResult.code == TransactionQueue::AddResultCode::ADD_STATUS_ERROR)
+        if (addResult == TxSubmitStatus::TX_STATUS_PENDING)
         {
-            releaseAssert(addResult.txResult);
-            root["detail"] = xdrToCerealString(
-                addResult.txResult->getResultCode(), "TransactionResultCode");
+            root["status"] = "PENDING";
+        }
+        else if (addResult == TxSubmitStatus::TX_STATUS_DUPLICATE)
+        {
+            root["status"] = "DUPLICATE";
+        }
+        else if (addResult == TxSubmitStatus::TX_STATUS_ERROR)
+        {
+            root["status"] = "ERROR";
+        }
+        else
+        {
+            root["status"] = "TRY_AGAIN_LATER";
         }
     }
     else

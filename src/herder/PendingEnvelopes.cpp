@@ -16,6 +16,7 @@
 #include "util/UnorderedSet.h"
 #include <Tracy.hpp>
 #include <xdrpp/marshal.h>
+#include "database/Database.h"
 
 using namespace std;
 

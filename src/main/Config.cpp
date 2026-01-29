@@ -8,6 +8,7 @@
 #include "bucket/LiveBucketList.h"
 #include "crypto/KeyUtils.h"
 #include "herder/Herder.h"
+#include "ledger/LedgerManager.h"
 #include "history/HistoryArchive.h"
 #include "main/StellarCoreVersion.h"
 #include "overlay/NetworkConstants.h"

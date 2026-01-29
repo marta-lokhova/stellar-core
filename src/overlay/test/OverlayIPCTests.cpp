@@ -865,7 +865,7 @@ TEST_CASE("Rust overlay TX included in ledger", "[overlay-ipc][.]")
 
     // Submit via Herder (this will route to Rust overlay)
     auto result = node0->getHerder().recvTransaction(tx, false);
-    REQUIRE(result.code == TransactionQueue::AddResultCode::ADD_STATUS_PENDING);
+    REQUIRE(result == TxSubmitStatus::TX_STATUS_PENDING);
 
     LOG_INFO(DEFAULT_LOG,
              "TX submitted successfully, waiting for inclusion...");
@@ -1083,8 +1083,8 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc-stress]")
                     auto result = node0->getHerder().recvTransaction(tx, false);
                     txSubmitted++;
                     batchSubmitted++;
-                    if (result.code ==
-                        TransactionQueue::AddResultCode::ADD_STATUS_PENDING)
+                    if (result ==
+                        TxSubmitStatus::TX_STATUS_PENDING)
                     {
                         batchPending++;
                     }
@@ -1310,6 +1310,27 @@ TEST_CASE("Rust overlay 10-node network consensus", "[overlay-ipc]")
     LOG_INFO(DEFAULT_LOG, "Starting all 10 nodes...");
     auto startTime = std::chrono::steady_clock::now();
     simulation->startAllNodes();
+
+    // Wait for all nodes to finish starting (transition out of APP_CREATED_STATE)
+    LOG_INFO(DEFAULT_LOG, "Waiting for all nodes to complete startup...");
+    for (int i = 0; i < 50; ++i)
+    {
+        bool allStarted = true;
+        for (auto const& node : nodes)
+        {
+            if (node->getState() == Application::APP_CREATED_STATE)
+            {
+                allStarted = false;
+                break;
+            }
+        }
+        if (allStarted)
+        {
+            LOG_INFO(DEFAULT_LOG, "All nodes started after {}ms", i * 100);
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
 
     // Give Rust overlay time for Kademlia bootstrap and GossipSub mesh formation
     LOG_INFO(DEFAULT_LOG, "Waiting for overlay network to form...");
