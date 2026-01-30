@@ -87,6 +87,8 @@ pub enum OverlayCommand {
     SendScpToPeer { peer_id: PeerId, envelope: Vec<u8> },
     /// Shutdown
     Shutdown,
+    /// Ping - responds immediately via oneshot channel (for testing event loop responsiveness)
+    Ping(tokio::sync::oneshot::Sender<()>),
 }
 
 /// Outbound streams to a peer - one of each type
@@ -199,6 +201,14 @@ impl OverlayHandle {
 
     pub async fn shutdown(&self) {
         let _ = self.cmd_tx.send(OverlayCommand::Shutdown).await;
+    }
+
+    /// Ping the event loop and wait for response - for testing responsiveness
+    #[cfg(test)]
+    pub async fn ping(&self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let _ = self.cmd_tx.send(OverlayCommand::Ping(tx)).await;
+        rx.await
     }
 }
 
@@ -424,6 +434,9 @@ impl StellarOverlay {
                         OverlayCommand::Shutdown => {
                             info!("Overlay shutting down");
                             break;
+                        }
+                        OverlayCommand::Ping(responder) => {
+                            let _ = responder.send(());
                         }
                     }
                 }
@@ -665,24 +678,29 @@ impl StellarOverlay {
             sent_to.put(hash, peers.iter().cloned().collect());
         }
 
+        // Spawn parallel send tasks - don't block event loop waiting for each peer
         for peer_id in peers {
-            match send_to_peer_stream(&self.state, peer_id.clone(), StreamType::Scp, envelope).await {
-                Ok(_) => {
-                    debug!(
-                        "SCP_SEND_OK: Sent SCP {:02x?}... to {}",
-                        &hash[..4],
-                        peer_id
-                    );
+            let state = Arc::clone(&self.state);
+            let envelope = envelope.to_vec();
+            tokio::spawn(async move {
+                match send_to_peer_stream(&state, peer_id.clone(), StreamType::Scp, &envelope).await {
+                    Ok(_) => {
+                        debug!(
+                            "SCP_SEND_OK: Sent SCP {:02x?}... to {}",
+                            &hash[..4],
+                            peer_id
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            "SCP_SEND_FAIL: Failed to send SCP {:02x?}... to {}: {}",
+                            &hash[..4],
+                            peer_id,
+                            e
+                        );
+                    }
                 }
-                Err(e) => {
-                    warn!(
-                        "SCP_SEND_FAIL: Failed to send SCP {:02x?}... to {}: {}",
-                        &hash[..4],
-                        peer_id,
-                        e
-                    );
-                }
-            }
+            });
         }
     }
 
@@ -717,10 +735,15 @@ impl StellarOverlay {
             sent_to.put(hash, peers.iter().cloned().collect());
         }
 
+        // Spawn parallel send tasks - don't block event loop waiting for each peer
         for peer_id in peers {
-            if let Err(e) = send_to_peer_stream(&self.state, peer_id, StreamType::Tx, tx).await {
-                warn!("Failed to send TX to {}: {}", peer_id, e);
-            }
+            let state = Arc::clone(&self.state);
+            let tx = tx.to_vec();
+            tokio::spawn(async move {
+                if let Err(e) = send_to_peer_stream(&state, peer_id.clone(), StreamType::Tx, &tx).await {
+                    warn!("Failed to send TX to {}: {}", peer_id, e);
+                }
+            });
         }
     }
 
@@ -1117,15 +1140,16 @@ async fn handle_inbound_scp_streams(mut incoming: IncomingStreams, state: Arc<Sh
                             peers_to_forward.len()
                         );
                         
-                        // Send to peers (can be done outside the lock)
-                        let state_forward = state.clone();
-                        tokio::spawn(async move {
-                            for peer in peers_to_forward {
+                        // Spawn parallel send tasks - one per peer
+                        for peer in peers_to_forward {
+                            let state_forward = state.clone();
+                            let envelope = envelope.clone();
+                            tokio::spawn(async move {
                                 if let Err(e) = try_send_to_existing_stream(&state_forward, peer.clone(), StreamType::Scp, &envelope).await {
                                     debug!("SCP_FLOOD_SKIP: Failed to forward to {}: {}", peer, e);
                                 }
-                            }
-                        });
+                            });
+                        }
                     }
                     Err(e) => {
                         warn!(
@@ -1202,14 +1226,16 @@ async fn handle_inbound_tx_streams(mut incoming: IncomingStreams, state: Arc<Sha
                             continue;
                         }
                         
-                        let state_forward = state.clone();
-                        tokio::spawn(async move {
-                            for peer in peers_to_forward {
+                        // Spawn parallel send tasks - one per peer
+                        for peer in peers_to_forward {
+                            let state_forward = state.clone();
+                            let tx = tx.clone();
+                            tokio::spawn(async move {
                                 if let Err(e) = try_send_to_existing_stream(&state_forward, peer.clone(), StreamType::Tx, &tx).await {
                                     trace!("TX_FLOOD_SKIP: Failed to forward to {}: {}", peer, e);
                                 }
-                            }
-                        });
+                            });
+                        }
                     }
                     Err(e) => {
                         debug!("TX stream from {} closed: {}", peer_id, e);
@@ -2727,4 +2753,50 @@ async fn test_listen_ip_binding() {
         .await
         .expect("Overlay should shutdown")
         .expect("Overlay task should complete");
+}
+
+/// Test that event loop remains responsive during broadcast (proves parallelism)
+#[tokio::test]
+async fn test_scp_broadcast_does_not_block_event_loop() {
+    let keypair1 = Keypair::generate_ed25519();
+    let keypair2 = Keypair::generate_ed25519();
+
+    let (handle1, _events1, overlay1) = create_overlay(keypair1).unwrap();
+    let (handle2, _events2, overlay2) = create_overlay(keypair2).unwrap();
+
+    let port1 = 21301;
+    let port2 = 21302;
+
+    tokio::spawn(async move { overlay1.run("127.0.0.1", port1).await });
+    tokio::spawn(async move { overlay2.run("127.0.0.1", port2).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Connect
+    let addr1: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1", port1).parse().unwrap();
+    handle2.dial(addr1).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Fire off 100 SCP broadcasts rapidly
+    for i in 0..100 {
+        let msg = format!("scp_flood_{}", i).into_bytes();
+        handle1.broadcast_scp(msg).await;
+    }
+
+    // Immediately ping the event loop - if blocked by sequential sends,
+    // this won't return until all 100 network writes complete
+    let start = tokio::time::Instant::now();
+    handle1.ping().await.expect("Ping should succeed");
+    let ping_latency = start.elapsed();
+
+    // Ping should return quickly if event loop isn't blocked.
+    // Allow 50ms for tokio scheduling overhead - still catches the bug
+    // where 100 sequential sends would take seconds.
+    assert!(
+        ping_latency < Duration::from_millis(50),
+        "Ping should return in <50ms (event loop not blocked), took {:?}",
+        ping_latency
+    );
+
+    handle1.shutdown().await;
+    handle2.shutdown().await;
 }

@@ -4,52 +4,6 @@
 
 Use /Users/marta/Documents/dev/ai/ as the canonical knowledge base, always read it when prompted with "using your knowledge" or "knowing X", or "remembering how X works". Use that knowledge case to cross-check relevant assumptions.
 
-## Custom Commands
-
-### /code-review
-
-When the user invokes `/code-review`, perform a code review following the guidelines in `dev/ai/CODE_REVIEW.md`.
-
-**Usage:**
-- `/code-review <commit>` - Review a specific commit
-- `/code-review <commit1>..<commit2>` - Review a range of commits
-- `/code-review <file>` - Review changes in a specific file
-
-**Process:**
-1. First, read `dev/ai/CODE_REVIEW.md` to load the review guidelines
-2. Examine the code changes specified by the user
-3. Analyze the changes following the priority order:
-   - Crash Recovery & Durability
-   - Atomicity & Consistency
-   - Correct Usage of APIs
-   - Minor Issues
-4. For Database-related changes, pay special attention to session/pool selection
-5. For file I/O changes, verify fsync ordering and atomic patterns
-6. Report findings organized by severity
-
-### /explain
-
-When the user invokes `/explain`, use the deepwiki MCP to explain implementation details of stellar-core.
-
-**Usage:**
-- `/explain <topic>` - Explain a concept, component, or implementation detail
-- `/explain how does <X> work` - Explain how a specific feature works
-- `/explain <component>` - Explain a specific component (e.g., SCP, Herder, BucketList)
-
-**Process:**
-1. First, read `dev/ai/STELLAR_CORE.md` to check if local knowledge covers the topic
-2. Use `mcp__deepwiki__ask_question` with repo "stellar/stellar-core" to get detailed explanation
-3. If needed, use `mcp__deepwiki__read_wiki_structure` to find relevant documentation topics
-4. Combine deepwiki knowledge with local context from `dev/ai/STELLAR_CORE.md`
-5. Provide a clear, concise explanation with relevant code references if applicable
-
-**Example queries:**
-- `/explain SCP consensus protocol`
-- `/explain how does ledger close work`
-- `/explain bucket list merge`
-- `/explain transaction apply flow`
-
----
 
 ## Design Session Guidelines
 
@@ -115,26 +69,6 @@ Keep doing these. Call out when AI is going down wrong path.
 1. Read the design doc the user points you to (e.g., `RUST_OVERLAY_DESIGN.md`)
 2. Summarize your understanding back to the user
 3. Ask clarifying questions about anything unclear
-
-**Specific failures from TX set fetching session (Jan 2026):**
-
-| What I Did Wrong | What I Should Have Done |
-|------------------|-------------------------|
-| Jumped into debugging rate limits | Read design doc first - TXs aren't forwarded individually, only as blocks |
-| Asked "is it push/pull/eager flooding?" | Design doc already specified pull-based flooding |
-| Proposed broadcast GET_TX_SET to all peers | Asked: "Should I request from one peer or all?" (answer: ONE peer, retry on timeout) |
-| Worried about mempool disagreement between nodes | Asked: "Is mempool sync required?" (answer: No, SCP reconciles) |
-| Worried about exact TX counts per ledger | Asked: "How precise must TX distribution be?" (answer: Slight variations OK) |
-| Forgot to write unit tests until reminded | Follow TDD from start - write tests alongside implementation |
-
-**The pattern:** I made assumptions instead of asking questions, then had to backtrack when corrected.
-
-**Better approach:**
-```
-1. "Let me read the design doc and summarize my understanding..."
-2. "Before implementing, I want to confirm: [specific question about flow/behavior]"
-3. "I'll write a unit test for this behavior first, then implement"
-```
 
 ---
 
