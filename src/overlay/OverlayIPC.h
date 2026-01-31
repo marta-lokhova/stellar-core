@@ -190,8 +190,9 @@ class OverlayIPC
     /// Handle a received IPC message
     void handleMessage(IPCMessage const& msg);
 
-    /// Send SCP state response to overlay
-    void sendScpStateResponse(std::vector<SCPEnvelope> const& envelopes);
+    /// Send SCP state response to overlay with request ID for correlation
+    void sendScpStateResponse(uint64_t requestId,
+                              std::vector<SCPEnvelope> const& envelopes);
 
     std::string mSocketPath;
     std::string mOverlayBinaryPath;

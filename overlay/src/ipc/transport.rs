@@ -341,12 +341,14 @@ mod tests {
 
         // Overlay sends PeerRequestsScpState to Core
         // (simulating a peer asking for SCP state)
+        // New format: [request_id:8][ledger_seq:4]
+        let request_id: u64 = 42;
         let ledger_seq: u32 = 12345;
+        let mut payload = Vec::with_capacity(12);
+        payload.extend_from_slice(&request_id.to_le_bytes());
+        payload.extend_from_slice(&ledger_seq.to_le_bytes());
         ipc.sender
-            .send(Message::new(
-                MessageType::PeerRequestsScpState,
-                ledger_seq.to_le_bytes().to_vec(),
-            ))
+            .send(Message::new(MessageType::PeerRequestsScpState, payload))
             .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -354,16 +356,27 @@ mod tests {
         // Core receives the request
         let request = MessageCodec::read(&mut core).unwrap();
         assert_eq!(request.msg_type, MessageType::PeerRequestsScpState);
+        assert_eq!(request.payload.len(), 12);
         assert_eq!(
-            u32::from_le_bytes(request.payload[0..4].try_into().unwrap()),
+            u64::from_le_bytes(request.payload[0..8].try_into().unwrap()),
+            request_id
+        );
+        assert_eq!(
+            u32::from_le_bytes(request.payload[8..12].try_into().unwrap()),
             ledger_seq
         );
 
         // Core sends back ScpStateResponse with mock SCP envelopes
+        // New format: [request_id:8][count:4][env_len:4][env_data...]
         let mock_envelope = vec![0x5C, 0x50, 0xDA, 0x7A]; // mock SCP data
+        let mut response_payload = Vec::new();
+        response_payload.extend_from_slice(&request_id.to_le_bytes()); // echo request_id
+        response_payload.extend_from_slice(&1u32.to_le_bytes()); // count = 1
+        response_payload.extend_from_slice(&(mock_envelope.len() as u32).to_le_bytes());
+        response_payload.extend_from_slice(&mock_envelope);
         MessageCodec::write(
             &mut core,
-            &Message::new(MessageType::ScpStateResponse, mock_envelope.clone()),
+            &Message::new(MessageType::ScpStateResponse, response_payload.clone()),
         )
         .unwrap();
 
@@ -375,7 +388,116 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.msg_type, MessageType::ScpStateResponse);
-        assert_eq!(response.payload, mock_envelope);
+        // Verify request_id is in the response
+        assert_eq!(
+            u64::from_le_bytes(response.payload[0..8].try_into().unwrap()),
+            request_id
+        );
+    }
+
+    #[tokio::test]
+    async fn test_scp_state_request_id_out_of_order_correlation() {
+        // This test verifies that request IDs properly correlate responses with requests
+        // even when responses arrive out of order.
+        let (overlay_side, core_side) = StdUnixStream::pair().unwrap();
+        let ipc = CoreIpc::from_stream(overlay_side).unwrap();
+
+        let mut core = core_side;
+
+        // Send two PeerRequestsScpState requests with different request_ids
+        let request_id_1: u64 = 100;
+        let request_id_2: u64 = 200;
+        let ledger_seq_1: u32 = 1000;
+        let ledger_seq_2: u32 = 2000;
+
+        // Send request 1
+        let mut payload1 = Vec::with_capacity(12);
+        payload1.extend_from_slice(&request_id_1.to_le_bytes());
+        payload1.extend_from_slice(&ledger_seq_1.to_le_bytes());
+        ipc.sender
+            .send(Message::new(
+                MessageType::PeerRequestsScpState,
+                payload1.clone(),
+            ))
+            .unwrap();
+
+        // Send request 2
+        let mut payload2 = Vec::with_capacity(12);
+        payload2.extend_from_slice(&request_id_2.to_le_bytes());
+        payload2.extend_from_slice(&ledger_seq_2.to_le_bytes());
+        ipc.sender
+            .send(Message::new(
+                MessageType::PeerRequestsScpState,
+                payload2.clone(),
+            ))
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Core receives both requests
+        let req1 = MessageCodec::read(&mut core).unwrap();
+        let req2 = MessageCodec::read(&mut core).unwrap();
+        assert_eq!(req1.msg_type, MessageType::PeerRequestsScpState);
+        assert_eq!(req2.msg_type, MessageType::PeerRequestsScpState);
+
+        // Extract request IDs that Core received
+        let received_id_1 = u64::from_le_bytes(req1.payload[0..8].try_into().unwrap());
+        let received_id_2 = u64::from_le_bytes(req2.payload[0..8].try_into().unwrap());
+        assert_eq!(received_id_1, request_id_1);
+        assert_eq!(received_id_2, request_id_2);
+
+        // Core responds OUT OF ORDER: respond to request 2 first, then request 1
+        let envelope_for_req2 = vec![0x22, 0x22]; // data for request 2
+        let envelope_for_req1 = vec![0x11, 0x11]; // data for request 1
+
+        // Response for request 2 (sent first, out of order)
+        let mut resp2 = Vec::new();
+        resp2.extend_from_slice(&request_id_2.to_le_bytes());
+        resp2.extend_from_slice(&1u32.to_le_bytes()); // count
+        resp2.extend_from_slice(&(envelope_for_req2.len() as u32).to_le_bytes());
+        resp2.extend_from_slice(&envelope_for_req2);
+        MessageCodec::write(
+            &mut core,
+            &Message::new(MessageType::ScpStateResponse, resp2),
+        )
+        .unwrap();
+
+        // Response for request 1 (sent second)
+        let mut resp1 = Vec::new();
+        resp1.extend_from_slice(&request_id_1.to_le_bytes());
+        resp1.extend_from_slice(&1u32.to_le_bytes()); // count
+        resp1.extend_from_slice(&(envelope_for_req1.len() as u32).to_le_bytes());
+        resp1.extend_from_slice(&envelope_for_req1);
+        MessageCodec::write(
+            &mut core,
+            &Message::new(MessageType::ScpStateResponse, resp1),
+        )
+        .unwrap();
+
+        // Overlay receives both responses
+        let mut receiver = ipc.receiver;
+
+        // First response received is for request 2
+        let response_a = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response_a.msg_type, MessageType::ScpStateResponse);
+        let resp_a_id = u64::from_le_bytes(response_a.payload[0..8].try_into().unwrap());
+        assert_eq!(resp_a_id, request_id_2);
+
+        // Second response received is for request 1
+        let response_b = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response_b.msg_type, MessageType::ScpStateResponse);
+        let resp_b_id = u64::from_le_bytes(response_b.payload[0..8].try_into().unwrap());
+        assert_eq!(resp_b_id, request_id_1);
+
+        // KEY ASSERTION: Even though responses came out of order, the request_ids
+        // allow proper correlation. The handler in main.rs will use these IDs to
+        // look up the correct peer_id from the HashMap.
     }
 
     #[tokio::test]

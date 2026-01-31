@@ -15,9 +15,10 @@ pub mod integrated;
 mod ipc;
 pub mod libp2p_overlay;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, warn};
@@ -167,13 +168,17 @@ struct App {
     current_ledger_seq: Arc<RwLock<u32>>,
     /// libp2p overlay handle (QUIC-based SCP + TX)
     libp2p_handle: LibP2pOverlayHandle,
-    /// libp2p overlay events
+    /// libp2p overlay events (SCP, TxSet - critical, unbounded)
     libp2p_events: mpsc::UnboundedReceiver<LibP2pOverlayEvent>,
+    /// libp2p TX events (bounded, may drop under backpressure)
+    tx_events: mpsc::Receiver<LibP2pOverlayEvent>,
     /// TX sets that Core has requested but we're still fetching from peers
     pending_core_txset_requests: Arc<RwLock<HashSet<Hash256>>>,
-    /// Pending SCP state requests: FIFO queue of peers awaiting SCP state
-    /// When Core responds with ScpStateResponse, we pop from queue and forward
-    pending_scp_state_requests: Arc<RwLock<std::collections::VecDeque<PeerId>>>,
+    /// Pending SCP state requests: maps request_id to requesting peer
+    /// When Core responds with ScpStateResponse containing request_id, we look up the peer
+    pending_scp_state_requests: Arc<RwLock<HashMap<u64, PeerId>>>,
+    /// Counter for generating unique SCP state request IDs
+    next_scp_request_id: Arc<AtomicU64>,
 }
 
 impl App {
@@ -201,7 +206,7 @@ impl App {
 
         // Create libp2p QUIC overlay for SCP + TX + TxSet (unified, independent streams)
         let libp2p_keypair = Libp2pKeypair::generate_ed25519();
-        let (libp2p_handle, libp2p_event_rx, libp2p_overlay) = create_overlay(libp2p_keypair)
+        let (libp2p_handle, libp2p_event_rx, tx_event_rx, libp2p_overlay) = create_overlay(libp2p_keypair)
             .map_err(|e| format!("Failed to create libp2p overlay: {}", e))?;
 
         // Use peer_port + 1000 for libp2p QUIC to avoid collision with legacy TCP
@@ -227,8 +232,10 @@ impl App {
             current_ledger_seq: Arc::new(RwLock::new(0)),
             libp2p_handle,
             libp2p_events: libp2p_event_rx,
+            tx_events: tx_event_rx,
             pending_core_txset_requests: Arc::new(RwLock::new(HashSet::new())),
-            pending_scp_state_requests: Arc::new(RwLock::new(std::collections::VecDeque::new())),
+            pending_scp_state_requests: Arc::new(RwLock::new(HashMap::new())),
+            next_scp_request_id: Arc::new(AtomicU64::new(1)),
         })
     }
 
@@ -249,8 +256,13 @@ impl App {
                     }
                 }
 
-                // Receive events from libp2p QUIC overlay (SCP + TX + TxSet)
+                // Receive events from libp2p QUIC overlay (SCP + TxSet - critical)
                 Some(event) = self.libp2p_events.recv() => {
+                    self.handle_libp2p_event(event).await;
+                }
+
+                // Receive TX events from libp2p (bounded channel, may drop under backpressure)
+                Some(event) = self.tx_events.recv() => {
                     self.handle_libp2p_event(event).await;
                 }
             }
@@ -380,18 +392,24 @@ impl App {
             }
             
             LibP2pOverlayEvent::ScpStateRequested { peer_id, ledger_seq } => {
-                info!("Peer {} requesting SCP state for ledger >= {}", peer_id, ledger_seq);
+                // Generate unique request ID
+                let request_id = self.next_scp_request_id.fetch_add(1, Ordering::SeqCst);
+                info!("Peer {} requesting SCP state for ledger >= {} (request_id={})", 
+                      peer_id, ledger_seq, request_id);
                 
-                // Add to queue of pending requests
-                self.pending_scp_state_requests.write().await.push_back(peer_id);
+                // Store mapping from request_id to peer_id
+                self.pending_scp_state_requests.write().await.insert(request_id, peer_id);
                 
-                // Request SCP state from Core (just send ledger_seq, no peer_id)
-                let payload = ledger_seq.to_le_bytes().to_vec();
+                // Request SCP state from Core with request_id and ledger_seq
+                // Payload format: [request_id:8][ledger_seq:4]
+                let mut payload = Vec::with_capacity(12);
+                payload.extend_from_slice(&request_id.to_le_bytes());
+                payload.extend_from_slice(&ledger_seq.to_le_bytes());
                 let msg = Message::new(MessageType::PeerRequestsScpState, payload);
                 if let Err(e) = self.core_ipc.sender.send(msg) {
                     error!("Failed to send PeerRequestsScpState to Core: {:?}", e);
-                    // Remove from queue on error
-                    self.pending_scp_state_requests.write().await.pop_back();
+                    // Remove from map on error
+                    self.pending_scp_state_requests.write().await.remove(&request_id);
                 }
             }
             
@@ -399,7 +417,7 @@ impl App {
                 // Clean up any pending SCP state requests for this peer
                 let mut pending = self.pending_scp_state_requests.write().await;
                 let before_len = pending.len();
-                pending.retain(|p| p != &peer_id);
+                pending.retain(|_request_id, p| p != &peer_id);
                 let removed = before_len - pending.len();
                 if removed > 0 {
                     debug!("Removed {} pending SCP state requests for disconnected peer {}", removed, peer_id);
@@ -662,35 +680,36 @@ impl App {
             }
 
             MessageType::ScpStateResponse => {
-                // Core responded with SCP state - pop from queue and forward to peer
-                // C++ payload format: [count:4][env1_len:4][env1_xdr]...
-                if msg.payload.len() < 4 {
-                    warn!("ScpStateResponse payload too short: {}", msg.payload.len());
+                // Core responded with SCP state - look up peer by request_id and forward
+                // Payload format: [request_id:8][count:4][env1_len:4][env1_xdr]...
+                if msg.payload.len() < 12 {
+                    warn!("ScpStateResponse payload too short: {} (need at least 12 bytes)", msg.payload.len());
                     return;
                 }
                 
-                let num_envelopes = u32::from_le_bytes(msg.payload[0..4].try_into().unwrap()) as usize;
-                info!("Core responded with {} SCP envelopes", num_envelopes);
+                let request_id = u64::from_le_bytes(msg.payload[0..8].try_into().unwrap());
+                let num_envelopes = u32::from_le_bytes(msg.payload[8..12].try_into().unwrap()) as usize;
+                info!("Core responded with {} SCP envelopes for request_id={}", num_envelopes, request_id);
                 
-                // Pop the next pending request from the queue
+                // Look up the peer by request_id
                 let peer_id = {
                     let mut pending = self.pending_scp_state_requests.write().await;
-                    match pending.pop_front() {
+                    match pending.remove(&request_id) {
                         Some(p) => p,
                         None => {
-                            warn!("Received ScpStateResponse but no pending request in queue - dropping");
+                            warn!("Received ScpStateResponse for unknown request_id={} - dropping", request_id);
                             return;
                         }
                     }
                 };
                 
-                info!("Forwarding {} SCP envelopes to peer {}", num_envelopes, peer_id);
+                info!("Forwarding {} SCP envelopes to peer {} (request_id={})", num_envelopes, peer_id, request_id);
                 
                 // Parse and forward each envelope to the requesting peer
                 let handle = self.libp2p_handle.clone();
                 let payload = msg.payload.clone();
                 tokio::spawn(async move {
-                    let mut offset = 4; // Skip count
+                    let mut offset = 12; // Skip request_id (8) + count (4)
                     for _ in 0..num_envelopes {
                         if offset + 4 > payload.len() {
                             warn!("ScpStateResponse truncated at envelope length");

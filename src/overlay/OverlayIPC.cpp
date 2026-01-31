@@ -268,15 +268,19 @@ OverlayIPC::handleMessage(IPCMessage const& msg)
     case IPCMessageType::PEER_REQUESTS_SCP_STATE:
     {
         // Peer is asking for our SCP state
-        if (mOnScpStateRequest && msg.payload.size() >= 4)
+        // Payload format: [request_id:8][ledger_seq:4]
+        if (mOnScpStateRequest && msg.payload.size() >= 12)
         {
+            uint64_t requestId;
             uint32_t ledgerSeq;
-            std::memcpy(&ledgerSeq, msg.payload.data(), 4);
-            CLOG_DEBUG(Overlay, "Peer requesting SCP state for ledger >= {}",
-                       ledgerSeq);
+            std::memcpy(&requestId, msg.payload.data(), 8);
+            std::memcpy(&ledgerSeq, msg.payload.data() + 8, 4);
+            CLOG_DEBUG(Overlay,
+                       "Peer requesting SCP state for ledger >= {} (request_id={})",
+                       ledgerSeq, requestId);
 
             auto envelopes = mOnScpStateRequest(ledgerSeq);
-            sendScpStateResponse(envelopes);
+            sendScpStateResponse(requestId, envelopes);
         }
         break;
     }
@@ -590,7 +594,8 @@ OverlayIPC::setOnTxSetReceived(TxSetReceivedCallback cb)
 }
 
 void
-OverlayIPC::sendScpStateResponse(std::vector<SCPEnvelope> const& envelopes)
+OverlayIPC::sendScpStateResponse(uint64_t requestId,
+                                 std::vector<SCPEnvelope> const& envelopes)
 {
     if (!mChannel || !mChannel->isConnected())
     {
@@ -598,11 +603,12 @@ OverlayIPC::sendScpStateResponse(std::vector<SCPEnvelope> const& envelopes)
     }
 
     // Serialize all envelopes into payload
-    // Format: [count:u32][envelope1_len:u32][envelope1_xdr]...
+    // Format: [request_id:u64][count:u32][envelope1_len:u32][envelope1_xdr]...
     std::vector<uint8_t> payload;
     uint32_t count = static_cast<uint32_t>(envelopes.size());
-    payload.resize(4);
-    std::memcpy(payload.data(), &count, 4);
+    payload.resize(12); // 8 bytes request_id + 4 bytes count
+    std::memcpy(payload.data(), &requestId, 8);
+    std::memcpy(payload.data() + 8, &count, 4);
 
     for (auto const& env : envelopes)
     {
@@ -618,7 +624,9 @@ OverlayIPC::sendScpStateResponse(std::vector<SCPEnvelope> const& envelopes)
     msg.type = IPCMessageType::SCP_STATE_RESPONSE;
     msg.payload = std::move(payload);
 
-    CLOG_DEBUG(Overlay, "Sending SCP state response with {} envelopes", count);
+    CLOG_DEBUG(Overlay,
+               "Sending SCP state response with {} envelopes (request_id={})",
+               count, requestId);
     std::lock_guard<std::mutex> lock(mSendMutex);
     mChannel->send(msg);
 }
