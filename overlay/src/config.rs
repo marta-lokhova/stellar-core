@@ -52,7 +52,7 @@ impl Default for Config {
         Self {
             core_socket: PathBuf::from("/tmp/stellar-overlay.sock"),
             listen_addr: "0.0.0.0:11625".parse().unwrap(),
-            libp2p_listen_ip: "127.0.0.1".to_string(), // Use localhost by default for safety
+            libp2p_listen_ip: "0.0.0.0".to_string(), // Bind to all interfaces for internet operation
             peer_port: 11625,
             target_outbound_peers: 8,
             max_inbound_peers: 64,

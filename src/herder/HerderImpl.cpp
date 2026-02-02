@@ -309,16 +309,12 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
     std::vector<Hash> txHashes;
     if (externalizedSet)
     {
-        auto applicableTxSet = externalizedSet->prepareForApply(
-            mApp, mLedgerManager.getLastClosedLedgerHeader().header);
-        if (applicableTxSet)
+        auto txFramesList = externalizedSet->createTransactionFrames(mApp.getNetworkID());
+        for (auto const& txPhase : txFramesList)
         {
-            for (auto const& phase : applicableTxSet->getPhases())
+            for (auto const& txFrame : txPhase)
             {
-                for (auto const& tx : phase)
-                {
-                    txHashes.push_back(tx->getFullHash());
-                }
+                txHashes.push_back(txFrame->getFullHash());
             }
         }
     }
