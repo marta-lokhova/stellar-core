@@ -5,12 +5,16 @@
 //!
 //! Uses libp2p-stream for persistent bidirectional streams:
 //! - SCP stream: consensus messages (priority, ~500B)
-//! - TX stream: transaction flooding (~1KB)
+//! - TX stream: transaction flooding (~1KB) - uses INV/GETDATA protocol
 //! - TxSet stream: TX set request/response (~10MB)
 //!
 //! Each stream is opened once per peer and kept alive.
 //! QUIC provides independent loss recovery per stream.
 
+use crate::flood::{
+    GetData, InvBatcher, InvBatch, InvEntry, InvTracker, PendingRequests, TxBuffer,
+    TxMessageType, TxStreamMessage, INV_BATCH_MAX_DELAY, GETDATA_PEER_TIMEOUT,
+};
 use futures::{AsyncReadExt, AsyncWriteExt, StreamExt};
 use libp2p::{
     identify::{Behaviour as Identify, Config as IdentifyConfig, Event as IdentifyEvent},
@@ -228,7 +232,7 @@ struct SharedState {
     tx_seen: RwLock<lru::LruCache<[u8; 32], ()>>,
     /// Track which peers we've sent each SCP message to (prevent duplicate sends)
     scp_sent_to: RwLock<lru::LruCache<[u8; 32], std::collections::HashSet<PeerId>>>,
-    /// Track which peers we've sent each TX to (prevent duplicate sends)
+    /// Track which peers we've sent each TX to (prevent duplicate sends) - LEGACY
     tx_sent_to: RwLock<lru::LruCache<[u8; 32], std::collections::HashSet<PeerId>>>,
     /// TX set sources: which peer has which TX set (learned from SCP messages)
     txset_sources: RwLock<lru::LruCache<[u8; 32], PeerId>>,
@@ -242,6 +246,18 @@ struct SharedState {
     tx_dropped_count: AtomicU64,
     /// Stream control for reopening streams
     control: Control,
+    
+    // ============ INV/GETDATA State ============
+    /// Batches INV announcements before sending (100ms or 1000 INVs)
+    inv_batcher: RwLock<InvBatcher>,
+    /// Tracks which peers have INV'd which TXs (for round-robin GETDATA)
+    inv_tracker: RwLock<InvTracker>,
+    /// Pending GETDATA requests with timeout tracking
+    pending_getdata: RwLock<PendingRequests>,
+    /// TX buffer for responding to GETDATA requests
+    tx_buffer: RwLock<TxBuffer>,
+    /// Whether to use INV/GETDATA (vs legacy eager flooding)
+    use_inv_getdata: bool,
 }
 
 impl SharedState {
@@ -249,6 +265,16 @@ impl SharedState {
         event_tx: mpsc::UnboundedSender<OverlayEvent>,
         tx_event_tx: mpsc::Sender<OverlayEvent>,
         control: Control,
+    ) -> Self {
+        // Default to legacy mode until INV/GETDATA receive handler is implemented
+        Self::with_config(event_tx, tx_event_tx, control, false)
+    }
+    
+    fn with_config(
+        event_tx: mpsc::UnboundedSender<OverlayEvent>,
+        tx_event_tx: mpsc::Sender<OverlayEvent>,
+        control: Control,
+        use_inv_getdata: bool,
     ) -> Self {
         Self {
             peer_streams: RwLock::new(HashMap::new()),
@@ -272,6 +298,12 @@ impl SharedState {
             tx_event_tx,
             tx_dropped_count: AtomicU64::new(0),
             control,
+            // INV/GETDATA state
+            inv_batcher: RwLock::new(InvBatcher::new()),
+            inv_tracker: RwLock::new(InvTracker::new()),
+            pending_getdata: RwLock::new(PendingRequests::new()),
+            tx_buffer: RwLock::new(TxBuffer::new()),
+            use_inv_getdata,
         }
     }
 }
@@ -379,6 +411,105 @@ pub fn create_overlay(
     Ok((handle, event_rx, tx_event_rx, overlay))
 }
 
+/// Create overlay with INV/GETDATA mode enabled (for testing)
+#[cfg(test)]
+pub fn create_overlay_with_inv_getdata(
+    keypair: Keypair,
+) -> Result<
+    (
+        OverlayHandle,
+        mpsc::UnboundedReceiver<OverlayEvent>,
+        mpsc::Receiver<OverlayEvent>,
+        StellarOverlay,
+    ),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    create_test_overlay(keypair, true, true)
+}
+
+/// Create overlay with INV/GETDATA mode and no Kademlia (for topology-controlled tests)
+#[cfg(test)]
+pub fn create_overlay_no_kademlia(
+    keypair: Keypair,
+) -> Result<
+    (
+        OverlayHandle,
+        mpsc::UnboundedReceiver<OverlayEvent>,
+        mpsc::Receiver<OverlayEvent>,
+        StellarOverlay,
+    ),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    create_test_overlay(keypair, true, false)
+}
+
+/// Create test overlay with configurable options
+#[cfg(test)]
+fn create_test_overlay(
+    keypair: Keypair,
+    use_inv_getdata: bool,
+    enable_kademlia: bool,
+) -> Result<
+    (
+        OverlayHandle,
+        mpsc::UnboundedReceiver<OverlayEvent>,
+        mpsc::Receiver<OverlayEvent>,
+        StellarOverlay,
+    ),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    let peer_id = keypair.public().to_peer_id();
+    info!(
+        "Creating test StellarOverlay peer_id={} (inv_getdata={}, kademlia={})",
+        peer_id, use_inv_getdata, enable_kademlia
+    );
+
+    let mut quic_config = libp2p::quic::Config::new(&keypair);
+    quic_config.keep_alive_interval = Duration::from_secs(15);
+    quic_config.max_idle_timeout = 60_000;
+
+    let swarm = SwarmBuilder::with_existing_identity(keypair.clone())
+        .with_tokio()
+        .with_quic_config(|_| quic_config)
+        .with_behaviour(|key| {
+            let stream = StreamBehaviour::new();
+            let kad_config = KademliaConfig::default();
+            #[allow(deprecated)]
+            let kademlia = Kademlia::with_config(
+                key.public().to_peer_id(),
+                MemoryStore::new(key.public().to_peer_id()),
+                kad_config,
+            );
+            let identify = Identify::new(IdentifyConfig::new(
+                "/stellar/1.0.0".to_string(),
+                key.public(),
+            ));
+            StellarBehaviour { stream, kademlia, identify }
+        })?
+        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(300)))
+        .build();
+
+    let mut swarm = swarm;
+    if enable_kademlia {
+        swarm.behaviour_mut().kademlia.set_mode(Some(KademliaMode::Server));
+    } else {
+        // Client mode = don't respond to DHT queries = no peer discovery
+        swarm.behaviour_mut().kademlia.set_mode(Some(KademliaMode::Client));
+    }
+
+    let control = swarm.behaviour().stream.new_control();
+    let (cmd_tx, cmd_rx) = mpsc::channel(256);
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (tx_event_tx, tx_event_rx) = mpsc::channel(TX_EVENT_CHANNEL_CAPACITY);
+
+    let state = Arc::new(SharedState::with_config(event_tx, tx_event_tx, control.clone(), use_inv_getdata));
+
+    let overlay = StellarOverlay { swarm, control, state, cmd_rx };
+    let handle = OverlayHandle { cmd_tx };
+
+    Ok((handle, event_rx, tx_event_rx, overlay))
+}
+
 impl StellarOverlay {
     /// Run the overlay event loop
     /// 
@@ -407,6 +538,11 @@ impl StellarOverlay {
         tokio::spawn(handle_inbound_scp_streams(scp_incoming, state.clone()));
         tokio::spawn(handle_inbound_tx_streams(tx_incoming, state.clone()));
         tokio::spawn(handle_inbound_txset_streams(txset_incoming, state.clone()));
+        
+        // Spawn INV/GETDATA housekeeping task (only if enabled)
+        if self.state.use_inv_getdata {
+            tokio::spawn(inv_getdata_housekeeping_task(state.clone()));
+        }
 
         loop {
             tokio::select! {
@@ -747,7 +883,76 @@ impl StellarOverlay {
     }
 
     /// Broadcast TX to all connected peers
+    /// Uses INV/GETDATA protocol if enabled, otherwise eager flooding (legacy)
     async fn broadcast_tx(&mut self, tx: &[u8]) {
+        if self.state.use_inv_getdata {
+            self.broadcast_tx_inv(tx).await;
+        } else {
+            self.broadcast_tx_legacy(tx).await;
+        }
+    }
+    
+    /// Broadcast TX using INV/GETDATA protocol (bandwidth efficient)
+    async fn broadcast_tx_inv(&mut self, tx: &[u8]) {
+        let hash = blake2b_hash(tx);
+
+        // Dedup check
+        {
+            let mut seen = self.state.tx_seen.write().await;
+            if seen.contains(&hash) {
+                trace!("TX already seen, skipping broadcast");
+                return;
+            }
+            seen.put(hash, ());
+        }
+
+        // Store TX in buffer for GETDATA responses
+        {
+            let mut buffer = self.state.tx_buffer.write().await;
+            buffer.insert(hash, tx.to_vec());
+        }
+
+        let streams = self.state.peer_streams.read().await;
+        let peers: Vec<_> = streams.keys().cloned().collect();
+        drop(streams);
+
+        if peers.is_empty() {
+            debug!("TX_INV: No peers to announce TX {:02x?}...", &hash[..4]);
+            return;
+        }
+
+        info!(
+            "TX_INV: Announcing TX {:02x?}... ({} bytes) to {} peers via INV",
+            &hash[..4],
+            tx.len(),
+            peers.len()
+        );
+
+        // Create INV entry (fee is 0 for now - TODO: pass from caller)
+        let inv_entry = InvEntry {
+            hash,
+            fee_per_op: 0, // TODO: pass actual fee from SubmitTx
+        };
+
+        // Add to batcher for each peer, check if any are ready to flush
+        let mut ready_peers = Vec::new();
+        {
+            let mut batcher = self.state.inv_batcher.write().await;
+            for peer in &peers {
+                if batcher.add(*peer, inv_entry.clone()) {
+                    ready_peers.push(*peer);
+                }
+            }
+        }
+
+        // Flush ready batches
+        for peer in ready_peers {
+            flush_inv_batch_to_peer(&self.state, peer).await;
+        }
+    }
+
+    /// Legacy broadcast TX - eager flooding to all peers
+    async fn broadcast_tx_legacy(&mut self, tx: &[u8]) {
         let hash = blake2b_hash(tx);
 
         // Dedup check
@@ -1067,6 +1272,28 @@ async fn write_framed(stream: &mut Stream, data: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+/// Flush INV batch for a specific peer
+async fn flush_inv_batch_to_peer(state: &Arc<SharedState>, peer: PeerId) {
+    let batch = {
+        let mut batcher = state.inv_batcher.write().await;
+        batcher.flush(&peer)
+    };
+    
+    if let Some(batch) = batch {
+        let msg = TxStreamMessage::InvBatch(batch);
+        let encoded = msg.encode();
+        
+        let state = Arc::clone(state);
+        tokio::spawn(async move {
+            if let Err(e) = send_to_peer_stream(&state, peer.clone(), StreamType::Tx, &encoded).await {
+                warn!("Failed to send INV batch to {}: {}", peer, e);
+            } else {
+                debug!("TX_INV_SENT: Sent INV batch to {}", peer);
+            }
+        });
+    }
+}
+
 /// Read length-prefixed frame from stream
 async fn read_framed(stream: &mut Stream) -> io::Result<Vec<u8>> {
     let mut len_buf = [0u8; 4];
@@ -1217,76 +1444,13 @@ async fn handle_inbound_tx_streams(mut incoming: IncomingStreams, state: Arc<Sha
         tokio::spawn(async move {
             loop {
                 match read_framed(&mut stream).await {
-                    Ok(tx) => {
-                        let hash = blake2b_hash(&tx);
-
-                        // Dedup
-                        {
-                            let mut seen = state.tx_seen.write().await;
-                            if seen.contains(&hash) {
-                                trace!("Duplicate TX from {}", peer_id);
-                                continue;
-                            }
-                            seen.put(hash, ());
-                        }
-
-                        debug!(
-                            "TX_RECV: Received TX {:02x?}... ({} bytes) from {}",
-                            &hash[..4],
-                            tx.len(),
-                            peer_id
-                        );
-                        
-                        // Forward to Core via bounded TX channel (backpressure)
-                        let tx_clone = tx.clone();
-                        if let Err(_) = state.tx_event_tx.try_send(
-                            OverlayEvent::TxReceived { tx: tx_clone, from: peer_id.clone() }
-                        ) {
-                            let dropped = state.tx_dropped_count.fetch_add(1, Ordering::Relaxed) + 1;
-                            if dropped % 1000 == 1 {
-                                warn!(
-                                    "TX_BACKPRESSURE: Dropped TX {:02x?}... (total dropped: {})",
-                                    &hash[..4], dropped
-                                );
-                            }
-                        }
-                        
-                        // FLOOD: Determine peers to forward to (atomically mark as sent)
-                        let peers_to_forward: Vec<PeerId> = {
-                            let mut sent_to = state.tx_sent_to.write().await;
-                            let streams = state.peer_streams.read().await;
-                            
-                            let already_sent: std::collections::HashSet<PeerId> = sent_to
-                                .get(&hash)
-                                .cloned()
-                                .unwrap_or_default();
-                            
-                            let peers: Vec<_> = streams.keys()
-                                .filter(|p| **p != peer_id && !already_sent.contains(p))
-                                .cloned()
-                                .collect();
-                            
-                            let mut new_sent = already_sent;
-                            new_sent.extend(peers.iter().cloned());
-                            new_sent.insert(peer_id.clone());
-                            sent_to.put(hash, new_sent);
-                            
-                            peers
-                        };
-                        
-                        if peers_to_forward.is_empty() {
-                            continue;
-                        }
-                        
-                        // Spawn parallel send tasks - one per peer
-                        for peer in peers_to_forward {
-                            let state_forward = state.clone();
-                            let tx = tx.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = try_send_to_existing_stream(&state_forward, peer.clone(), StreamType::Tx, &tx).await {
-                                    trace!("TX_FLOOD_SKIP: Failed to forward to {}: {}", peer, e);
-                                }
-                            });
+                    Ok(data) => {
+                        if state.use_inv_getdata {
+                            // INV/GETDATA mode: parse message type
+                            handle_tx_stream_message(&state, &peer_id, &data, &mut stream).await;
+                        } else {
+                            // Legacy mode: raw TX data
+                            handle_tx_legacy(&state, &peer_id, data).await;
                         }
                     }
                     Err(e) => {
@@ -1294,6 +1458,301 @@ async fn handle_inbound_tx_streams(mut incoming: IncomingStreams, state: Arc<Sha
                         break;
                     }
                 }
+            }
+        });
+    }
+}
+
+/// Handle TX stream message in INV/GETDATA mode
+async fn handle_tx_stream_message(
+    state: &Arc<SharedState>,
+    peer_id: &PeerId,
+    data: &[u8],
+    stream: &mut Stream,
+) {
+    match TxStreamMessage::decode(data) {
+        Ok(TxStreamMessage::InvBatch(batch)) => {
+            handle_inv_batch(state, peer_id, batch).await;
+        }
+        Ok(TxStreamMessage::GetData(getdata)) => {
+            handle_getdata(state, peer_id, getdata, stream).await;
+        }
+        Ok(TxStreamMessage::Tx(tx_data)) => {
+            handle_tx_response(state, peer_id, tx_data).await;
+        }
+        Err(e) => {
+            warn!("TX_PARSE_ERR: Failed to parse message from {}: {}", peer_id, e);
+        }
+    }
+}
+
+/// Handle INV_BATCH message - record sources and request TXs we don't have
+async fn handle_inv_batch(state: &Arc<SharedState>, peer_id: &PeerId, batch: InvBatch) {
+    debug!(
+        "TX_INV_RECV: Received {} INVs from {}",
+        batch.entries.len(),
+        peer_id
+    );
+
+    let mut to_request: Vec<[u8; 32]> = Vec::new();
+
+    for entry in batch.entries {
+        // Check if we already have this TX
+        {
+            let seen = state.tx_seen.read().await;
+            if seen.contains(&entry.hash) {
+                // Already have it, just record this peer as a source (for relay tracking)
+                continue;
+            }
+        }
+
+        // Record this peer as a source for round-robin GETDATA
+        let is_first = {
+            let mut tracker = state.inv_tracker.write().await;
+            tracker.record_source(entry.hash, *peer_id)
+        };
+
+        // If this is the first INV for this TX, we should request it
+        if is_first {
+            to_request.push(entry.hash);
+        }
+    }
+
+    // Send GETDATA for TXs we don't have
+    if !to_request.is_empty() {
+        debug!(
+            "TX_GETDATA_SEND: Requesting {} TXs from {}",
+            to_request.len(),
+            peer_id
+        );
+
+        // Record pending requests
+        {
+            let mut pending = state.pending_getdata.write().await;
+            for hash in &to_request {
+                pending.insert(*hash, *peer_id);
+            }
+        }
+
+        // Build and send GETDATA
+        let mut getdata = GetData::new();
+        for hash in to_request {
+            getdata.push(hash);
+        }
+        let msg = TxStreamMessage::GetData(getdata);
+        let encoded = msg.encode();
+
+        let state_clone = Arc::clone(state);
+        let peer_clone = *peer_id;
+        tokio::spawn(async move {
+            if let Err(e) = send_to_peer_stream(&state_clone, peer_clone, StreamType::Tx, &encoded).await {
+                warn!("Failed to send GETDATA to {}: {}", peer_clone, e);
+            }
+        });
+    }
+}
+
+/// Handle GETDATA message - respond with requested TXs
+async fn handle_getdata(
+    state: &Arc<SharedState>,
+    peer_id: &PeerId,
+    getdata: GetData,
+    _stream: &mut Stream,
+) {
+    debug!(
+        "TX_GETDATA_RECV: Peer {} requesting {} TXs",
+        peer_id,
+        getdata.hashes.len()
+    );
+
+    for hash in getdata.hashes {
+        // Look up TX in our buffer
+        let tx_data = {
+            let mut buffer = state.tx_buffer.write().await;
+            buffer.get_cloned(&hash)
+        };
+
+        if let Some(tx_data) = tx_data {
+            // Send TX response
+            let msg = TxStreamMessage::Tx(tx_data);
+            let encoded = msg.encode();
+
+            let state_clone = Arc::clone(state);
+            let peer_clone = *peer_id;
+            tokio::spawn(async move {
+                if let Err(e) = send_to_peer_stream(&state_clone, peer_clone, StreamType::Tx, &encoded).await {
+                    warn!("Failed to send TX to {}: {}", peer_clone, e);
+                } else {
+                    debug!("TX_SEND: Sent TX {:02x?}... to {}", &hash[..4], peer_clone);
+                }
+            });
+        } else {
+            trace!("TX_GETDATA_MISS: Don't have TX {:02x?}... for {}", &hash[..4], peer_id);
+        }
+    }
+}
+
+/// Handle TX response (from GETDATA request)
+async fn handle_tx_response(state: &Arc<SharedState>, peer_id: &PeerId, tx: Vec<u8>) {
+    let hash = blake2b_hash(&tx);
+
+    // Dedup
+    {
+        let mut seen = state.tx_seen.write().await;
+        if seen.contains(&hash) {
+            trace!("Duplicate TX from {}", peer_id);
+            return;
+        }
+        seen.put(hash, ());
+    }
+
+    // Remove from pending requests
+    {
+        let mut pending = state.pending_getdata.write().await;
+        pending.remove(&hash);
+    }
+
+    // Store in buffer for responding to others' GETDATA
+    {
+        let mut buffer = state.tx_buffer.write().await;
+        buffer.insert(hash, tx.clone());
+    }
+
+    debug!(
+        "TX_RECV: Received TX {:02x?}... ({} bytes) from {}",
+        &hash[..4],
+        tx.len(),
+        peer_id
+    );
+
+    // Forward to Core via bounded TX channel
+    if let Err(_) = state.tx_event_tx.try_send(
+        OverlayEvent::TxReceived { tx: tx.clone(), from: peer_id.clone() }
+    ) {
+        let dropped = state.tx_dropped_count.fetch_add(1, Ordering::Relaxed) + 1;
+        if dropped % 1000 == 1 {
+            warn!(
+                "TX_BACKPRESSURE: Dropped TX {:02x?}... (total dropped: {})",
+                &hash[..4], dropped
+            );
+        }
+    }
+
+    // RELAY: Announce to other peers via INV
+    let peers_to_announce: Vec<PeerId> = {
+        let streams = state.peer_streams.read().await;
+        let tracker = state.inv_tracker.read().await;
+        
+        // Get peers who already know about this TX (INV'd us)
+        let known_sources: std::collections::HashSet<PeerId> = tracker
+            .peek_sources(&hash)
+            .map(|v| v.iter().cloned().collect())
+            .unwrap_or_default();
+        
+        streams.keys()
+            .filter(|p| **p != *peer_id && !known_sources.contains(p))
+            .cloned()
+            .collect()
+    };
+
+    if !peers_to_announce.is_empty() {
+        debug!(
+            "TX_RELAY: Announcing TX {:02x?}... to {} peers via INV",
+            &hash[..4],
+            peers_to_announce.len()
+        );
+
+        let inv_entry = InvEntry {
+            hash,
+            fee_per_op: 0, // TODO: extract fee from TX
+        };
+
+        let mut ready_peers = Vec::new();
+        {
+            let mut batcher = state.inv_batcher.write().await;
+            for peer in &peers_to_announce {
+                if batcher.add(*peer, inv_entry.clone()) {
+                    ready_peers.push(*peer);
+                }
+            }
+        }
+
+        // Flush ready batches
+        for peer in ready_peers {
+            flush_inv_batch_to_peer(state, peer).await;
+        }
+    }
+}
+
+/// Legacy TX handling - raw TX data without message framing
+async fn handle_tx_legacy(state: &Arc<SharedState>, peer_id: &PeerId, tx: Vec<u8>) {
+    let hash = blake2b_hash(&tx);
+
+    // Dedup
+    {
+        let mut seen = state.tx_seen.write().await;
+        if seen.contains(&hash) {
+            trace!("Duplicate TX from {}", peer_id);
+            return;
+        }
+        seen.put(hash, ());
+    }
+
+    debug!(
+        "TX_RECV: Received TX {:02x?}... ({} bytes) from {}",
+        &hash[..4],
+        tx.len(),
+        peer_id
+    );
+    
+    // Forward to Core via bounded TX channel (backpressure)
+    let tx_clone = tx.clone();
+    if let Err(_) = state.tx_event_tx.try_send(
+        OverlayEvent::TxReceived { tx: tx_clone, from: peer_id.clone() }
+    ) {
+        let dropped = state.tx_dropped_count.fetch_add(1, Ordering::Relaxed) + 1;
+        if dropped % 1000 == 1 {
+            warn!(
+                "TX_BACKPRESSURE: Dropped TX {:02x?}... (total dropped: {})",
+                &hash[..4], dropped
+            );
+        }
+    }
+    
+    // FLOOD: Determine peers to forward to (atomically mark as sent)
+    let peers_to_forward: Vec<PeerId> = {
+        let mut sent_to = state.tx_sent_to.write().await;
+        let streams = state.peer_streams.read().await;
+        
+        let already_sent: std::collections::HashSet<PeerId> = sent_to
+            .get(&hash)
+            .cloned()
+            .unwrap_or_default();
+        
+        let peers: Vec<_> = streams.keys()
+            .filter(|p| **p != *peer_id && !already_sent.contains(p))
+            .cloned()
+            .collect();
+        
+        let mut new_sent = already_sent;
+        new_sent.extend(peers.iter().cloned());
+        new_sent.insert(peer_id.clone());
+        sent_to.put(hash, new_sent);
+        
+        peers
+    };
+    
+    if peers_to_forward.is_empty() {
+        return;
+    }
+    
+    // Spawn parallel send tasks - one per peer
+    for peer in peers_to_forward {
+        let state_forward = state.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = try_send_to_existing_stream(&state_forward, peer.clone(), StreamType::Tx, &tx).await {
+                trace!("TX_FLOOD_SKIP: Failed to forward to {}: {}", peer, e);
             }
         });
     }
@@ -1359,6 +1818,86 @@ async fn handle_inbound_txset_streams(mut incoming: IncomingStreams, state: Arc<
                 }
             }
         });
+    }
+}
+
+/// INV/GETDATA housekeeping task.
+/// 
+/// Periodically:
+/// 1. Flushes INV batches that have timed out (100ms)
+/// 2. Checks GETDATA timeouts and retries to other peers
+async fn inv_getdata_housekeeping_task(state: Arc<SharedState>) {
+    use crate::flood::{INV_BATCH_MAX_DELAY, GETDATA_PEER_TIMEOUT};
+    
+    // Run every 50ms (half the batch timeout for responsiveness)
+    let mut interval = tokio::time::interval(Duration::from_millis(50));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    
+    loop {
+        interval.tick().await;
+        
+        // 1. Flush expired INV batches
+        let expired_peers = {
+            let batcher = state.inv_batcher.read().await;
+            batcher.expired_peers()
+        };
+        
+        for peer_id in expired_peers {
+            flush_inv_batch_to_peer(&state, peer_id).await;
+        }
+        
+        // 2. Handle GETDATA timeouts
+        let (to_retry, gave_up) = {
+            let mut pending = state.pending_getdata.write().await;
+            pending.process_timeouts()
+        };
+        
+        // Log give-ups
+        for hash in &gave_up {
+            warn!(
+                "GETDATA_TIMEOUT: Gave up on TX {:02x?}... after 30s",
+                &hash[..4]
+            );
+        }
+        
+        // Retry to next peer for timed-out requests
+        for hash in to_retry {
+            let next_peer = {
+                let mut tracker = state.inv_tracker.write().await;
+                tracker.get_next_peer(&hash)
+            };
+            
+            if let Some(peer) = next_peer {
+                debug!(
+                    "GETDATA_RETRY: Retrying TX {:02x?}... to peer {}",
+                    &hash[..4],
+                    peer
+                );
+                
+                // Update pending request with new peer
+                {
+                    let mut pending = state.pending_getdata.write().await;
+                    if let Some(req) = pending.get_mut(&hash) {
+                        req.retry(peer.clone());
+                    }
+                }
+                
+                // Send GETDATA
+                let getdata = GetData { hashes: vec![hash] };
+                let msg = TxStreamMessage::GetData(getdata);
+                let encoded = msg.encode();
+                
+                if let Err(e) = try_send_to_existing_stream(&state, peer.clone(), StreamType::Tx, &encoded).await {
+                    debug!("Failed to send GETDATA retry to {}: {:?}", peer, e);
+                }
+            } else {
+                // No more peers to try
+                debug!(
+                    "GETDATA_RETRY: No more peers for TX {:02x?}...",
+                    &hash[..4]
+                );
+            }
+        }
     }
 }
 
@@ -3193,4 +3732,177 @@ async fn test_pending_txset_cleanup_on_disconnect() {
 
     handle1.shutdown().await;
     handle2.shutdown().await;
+}
+
+/// Test INV/GETDATA protocol: TX propagation via INV→GETDATA→TX flow
+#[tokio::test]
+async fn test_inv_getdata_tx_propagation() {
+    let keypair1 = Keypair::generate_ed25519();
+    let keypair2 = Keypair::generate_ed25519();
+
+    // Create overlays with INV/GETDATA enabled
+    let (handle1, _events1, mut tx_events1, overlay1) = create_overlay_with_inv_getdata(keypair1.clone()).unwrap();
+    let (handle2, _events2, mut tx_events2, overlay2) = create_overlay_with_inv_getdata(keypair2).unwrap();
+
+    let peer1_id = PeerId::from_public_key(&keypair1.public());
+
+    let listen_port = 19251;
+    let overlay1_task = tokio::spawn(async move {
+        overlay1.run("127.0.0.1", listen_port).await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let overlay2_task = tokio::spawn(async move {
+        overlay2.run("127.0.0.1", listen_port + 1).await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Node2 dials Node1
+    let addr: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1/p2p/{}", listen_port, peer1_id)
+        .parse()
+        .unwrap();
+    handle2.dial(addr).await;
+
+    // Wait for connection to establish and streams to open
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Node1 broadcasts a TX
+    let test_tx = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x12, 0x34];
+    handle1.broadcast_tx(test_tx.clone()).await;
+
+    // Wait for INV→GETDATA→TX flow (with batching delay + RTT)
+    // - INV is batched for up to 100ms
+    // - GETDATA sent
+    // - TX response sent
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut tx_received = false;
+
+    while tokio::time::Instant::now() < deadline && !tx_received {
+        tokio::select! {
+            Some(event) = tx_events2.recv() => {
+                if let OverlayEvent::TxReceived { tx, from } = event {
+                    if tx == test_tx && from == peer1_id {
+                        tx_received = true;
+                    }
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+
+    assert!(tx_received, "Node2 should receive TX via INV/GETDATA protocol");
+
+    // Suppress warning
+    drop(tx_events1);
+
+    handle1.shutdown().await;
+    handle2.shutdown().await;
+    
+    let _ = tokio::time::timeout(Duration::from_secs(1), overlay1_task).await;
+    let _ = tokio::time::timeout(Duration::from_secs(1), overlay2_task).await;
+}
+
+/// Test INV/GETDATA protocol: TX relay through 3 nodes (A→B→C)
+#[tokio::test]
+async fn test_inv_getdata_three_node_relay() {
+    let keypair1 = Keypair::generate_ed25519();
+    let keypair2 = Keypair::generate_ed25519();
+    let keypair3 = Keypair::generate_ed25519();
+
+    // Create overlays with INV/GETDATA enabled but NO Kademlia (controlled topology)
+    let (handle1, _events1, _tx_events1, overlay1) = create_overlay_no_kademlia(keypair1.clone()).unwrap();
+    let (handle2, _events2, mut tx_events2, overlay2) = create_overlay_no_kademlia(keypair2.clone()).unwrap();
+    let (handle3, _events3, mut tx_events3, overlay3) = create_overlay_no_kademlia(keypair3).unwrap();
+
+    let peer1_id = PeerId::from_public_key(&keypair1.public());
+    let peer2_id = PeerId::from_public_key(&keypair2.public());
+
+    let base_port = 19261;
+    
+    let overlay1_task = tokio::spawn(async move {
+        overlay1.run("127.0.0.1", base_port).await;
+    });
+
+    let overlay2_task = tokio::spawn(async move {
+        overlay2.run("127.0.0.1", base_port + 1).await;
+    });
+
+    let overlay3_task = tokio::spawn(async move {
+        overlay3.run("127.0.0.1", base_port + 2).await;
+    });
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Topology: Node1 ←→ Node2 ←→ Node3 (Node1 NOT connected to Node3)
+    // Node2 dials Node1
+    let addr1: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1/p2p/{}", base_port, peer1_id)
+        .parse()
+        .unwrap();
+    handle2.dial(addr1).await;
+    
+    // Wait for Node1-Node2 connection
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Node3 dials Node2
+    let addr2: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1/p2p/{}", base_port + 1, peer2_id)
+        .parse()
+        .unwrap();
+    handle3.dial(addr2).await;
+
+    // Wait for Node2-Node3 connection
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Node1 broadcasts a TX
+    let test_tx = vec![0xCA, 0xFE, 0xBA, 0xBE, 0x56, 0x78];
+    handle1.broadcast_tx(test_tx.clone()).await;
+
+    // First verify Node2 receives the TX from Node1
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut node2_received = false;
+    while tokio::time::Instant::now() < deadline && !node2_received {
+        tokio::select! {
+            Some(event) = tx_events2.recv() => {
+                if let OverlayEvent::TxReceived { tx, from } = event {
+                    eprintln!("Node2 received TX from {}: {:02x?}", from, &tx[..tx.len().min(8)]);
+                    if tx == test_tx && from == peer1_id {
+                        node2_received = true;
+                    }
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+    assert!(node2_received, "Node2 should receive TX from Node1");
+
+    // Then Node3 should receive the TX via relay through Node2
+    // Flow: Node1 →INV→ Node2 →GETDATA→ Node1 →TX→ Node2 →INV→ Node3 →GETDATA→ Node2 →TX→ Node3
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut tx_received = false;
+
+    while tokio::time::Instant::now() < deadline && !tx_received {
+        tokio::select! {
+            Some(event) = tx_events3.recv() => {
+                if let OverlayEvent::TxReceived { tx, from } = event {
+                    eprintln!("Node3 received TX from {}: {:02x?}", from, &tx[..tx.len().min(8)]);
+                    // Node3 must receive TX from Node2 (relay), not Node1 (no direct connection)
+                    if tx == test_tx && from == peer2_id {
+                        tx_received = true;
+                    }
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+
+    assert!(tx_received, "Node3 should receive TX relayed through Node2 via INV/GETDATA");
+
+    handle1.shutdown().await;
+    handle2.shutdown().await;
+    handle3.shutdown().await;
+    
+    let _ = tokio::time::timeout(Duration::from_secs(1), overlay1_task).await;
+    let _ = tokio::time::timeout(Duration::from_secs(1), overlay2_task).await;
+    let _ = tokio::time::timeout(Duration::from_secs(1), overlay3_task).await;
 }
