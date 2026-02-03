@@ -1369,7 +1369,11 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
         classicTxs.push_back(txFrame);
     }
     txPhases.emplace_back(std::move(classicTxs));
-    txPhases.emplace_back();
+    if (protocolVersionStartsFrom(lcl.header.ledgerVersion,
+                                  SOROBAN_PROTOCOL_VERSION))
+    {
+        txPhases.emplace_back(); // empty Soroban phase
+    }
 
     PerPhaseTransactionList invalidTxPhases;
     invalidTxPhases.resize(txPhases.size());
