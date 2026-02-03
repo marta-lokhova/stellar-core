@@ -206,8 +206,9 @@ impl App {
 
         // Create libp2p QUIC overlay for SCP + TX + TxSet (unified, independent streams)
         let libp2p_keypair = Libp2pKeypair::generate_ed25519();
-        let (libp2p_handle, libp2p_event_rx, tx_event_rx, libp2p_overlay) = create_overlay(libp2p_keypair)
-            .map_err(|e| format!("Failed to create libp2p overlay: {}", e))?;
+        let (libp2p_handle, libp2p_event_rx, tx_event_rx, libp2p_overlay) =
+            create_overlay(libp2p_keypair)
+                .map_err(|e| format!("Failed to create libp2p overlay: {}", e))?;
 
         // Use peer_port + 1000 for libp2p QUIC to avoid collision with legacy TCP
         let libp2p_port = config.peer_port + 1000;
@@ -390,16 +391,24 @@ impl App {
                     );
                 }
             }
-            
-            LibP2pOverlayEvent::ScpStateRequested { peer_id, ledger_seq } => {
+
+            LibP2pOverlayEvent::ScpStateRequested {
+                peer_id,
+                ledger_seq,
+            } => {
                 // Generate unique request ID
                 let request_id = self.next_scp_request_id.fetch_add(1, Ordering::SeqCst);
-                info!("Peer {} requesting SCP state for ledger >= {} (request_id={})", 
-                      peer_id, ledger_seq, request_id);
-                
+                info!(
+                    "Peer {} requesting SCP state for ledger >= {} (request_id={})",
+                    peer_id, ledger_seq, request_id
+                );
+
                 // Store mapping from request_id to peer_id
-                self.pending_scp_state_requests.write().await.insert(request_id, peer_id);
-                
+                self.pending_scp_state_requests
+                    .write()
+                    .await
+                    .insert(request_id, peer_id);
+
                 // Request SCP state from Core with request_id and ledger_seq
                 // Payload format: [request_id:8][ledger_seq:4]
                 let mut payload = Vec::with_capacity(12);
@@ -409,10 +418,13 @@ impl App {
                 if let Err(e) = self.core_ipc.sender.send(msg) {
                     error!("Failed to send PeerRequestsScpState to Core: {:?}", e);
                     // Remove from map on error
-                    self.pending_scp_state_requests.write().await.remove(&request_id);
+                    self.pending_scp_state_requests
+                        .write()
+                        .await
+                        .remove(&request_id);
                 }
             }
-            
+
             LibP2pOverlayEvent::PeerDisconnected { peer_id } => {
                 // Clean up any pending SCP state requests for this peer
                 let mut pending = self.pending_scp_state_requests.write().await;
@@ -420,7 +432,10 @@ impl App {
                 pending.retain(|_request_id, p| p != &peer_id);
                 let removed = before_len - pending.len();
                 if removed > 0 {
-                    debug!("Removed {} pending SCP state requests for disconnected peer {}", removed, peer_id);
+                    debug!(
+                        "Removed {} pending SCP state requests for disconnected peer {}",
+                        removed, peer_id
+                    );
                 }
             }
         }
@@ -595,15 +610,21 @@ impl App {
                 // Payload is ledger sequence (u32, 4 bytes)
                 if msg.payload.len() >= 4 {
                     let ledger_seq = u32::from_le_bytes(msg.payload[0..4].try_into().unwrap());
-                    info!("Core requests SCP state from peers for ledger >= {}", ledger_seq);
-                    
+                    info!(
+                        "Core requests SCP state from peers for ledger >= {}",
+                        ledger_seq
+                    );
+
                     // Forward request to all connected peers
                     let handle = self.libp2p_handle.clone();
                     tokio::spawn(async move {
                         handle.request_scp_state_from_all_peers(ledger_seq).await;
                     });
                 } else {
-                    warn!("RequestScpState with invalid payload length: {}", msg.payload.len());
+                    warn!(
+                        "RequestScpState with invalid payload length: {}",
+                        msg.payload.len()
+                    );
                 }
             }
 
@@ -683,28 +704,41 @@ impl App {
                 // Core responded with SCP state - look up peer by request_id and forward
                 // Payload format: [request_id:8][count:4][env1_len:4][env1_xdr]...
                 if msg.payload.len() < 12 {
-                    warn!("ScpStateResponse payload too short: {} (need at least 12 bytes)", msg.payload.len());
+                    warn!(
+                        "ScpStateResponse payload too short: {} (need at least 12 bytes)",
+                        msg.payload.len()
+                    );
                     return;
                 }
-                
+
                 let request_id = u64::from_le_bytes(msg.payload[0..8].try_into().unwrap());
-                let num_envelopes = u32::from_le_bytes(msg.payload[8..12].try_into().unwrap()) as usize;
-                info!("Core responded with {} SCP envelopes for request_id={}", num_envelopes, request_id);
-                
+                let num_envelopes =
+                    u32::from_le_bytes(msg.payload[8..12].try_into().unwrap()) as usize;
+                info!(
+                    "Core responded with {} SCP envelopes for request_id={}",
+                    num_envelopes, request_id
+                );
+
                 // Look up the peer by request_id
                 let peer_id = {
                     let mut pending = self.pending_scp_state_requests.write().await;
                     match pending.remove(&request_id) {
                         Some(p) => p,
                         None => {
-                            warn!("Received ScpStateResponse for unknown request_id={} - dropping", request_id);
+                            warn!(
+                                "Received ScpStateResponse for unknown request_id={} - dropping",
+                                request_id
+                            );
                             return;
                         }
                     }
                 };
-                
-                info!("Forwarding {} SCP envelopes to peer {} (request_id={})", num_envelopes, peer_id, request_id);
-                
+
+                info!(
+                    "Forwarding {} SCP envelopes to peer {} (request_id={})",
+                    num_envelopes, peer_id, request_id
+                );
+
                 // Parse and forward each envelope to the requesting peer
                 let handle = self.libp2p_handle.clone();
                 let payload = msg.payload.clone();
@@ -715,22 +749,27 @@ impl App {
                             warn!("ScpStateResponse truncated at envelope length");
                             break;
                         }
-                        let env_len = u32::from_le_bytes(payload[offset..offset+4].try_into().unwrap()) as usize;
+                        let env_len =
+                            u32::from_le_bytes(payload[offset..offset + 4].try_into().unwrap())
+                                as usize;
                         offset += 4;
-                        
+
                         if offset + env_len > payload.len() {
                             warn!("ScpStateResponse truncated at envelope data");
                             break;
                         }
-                        let envelope = &payload[offset..offset+env_len];
+                        let envelope = &payload[offset..offset + env_len];
                         offset += env_len;
-                        
+
                         // Send envelope to requesting peer over SCP stream
                         if let Err(e) = handle.send_scp_to_peer(peer_id.clone(), envelope).await {
                             warn!("Failed to send SCP envelope to {}: {:?}", peer_id, e);
                         }
                     }
-                    info!("Finished forwarding {} SCP envelopes to {}", num_envelopes, peer_id);
+                    info!(
+                        "Finished forwarding {} SCP envelopes to {}",
+                        num_envelopes, peer_id
+                    );
                 });
             }
 
@@ -766,7 +805,7 @@ impl App {
                         let all_peers: Vec<_> =
                             known.into_iter().chain(preferred.into_iter()).collect();
                         let peer_count = all_peers.len();
-                        
+
                         for addr_str in all_peers {
                             if let Ok(addr) = addr_str.parse::<SocketAddr>() {
                                 // QUIC uses UDP, port + 1000
@@ -792,7 +831,7 @@ impl App {
                                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                                 info!("Initiating Kademlia bootstrap to discover additional peers");
                                 handle.bootstrap_kademlia().await;
-                                
+
                                 // TODO: Add periodic re-bootstrap for network maintenance
                                 // Kademlia routing tables become stale as peers join/leave
                                 // Re-bootstrapping every 5-10 minutes keeps routing fresh
@@ -839,7 +878,12 @@ async fn main() {
     std::panic::set_hook(Box::new(|panic_info| {
         eprintln!("PANIC in Rust overlay: {}", panic_info);
         if let Some(location) = panic_info.location() {
-            eprintln!("  at {}:{}:{}", location.file(), location.line(), location.column());
+            eprintln!(
+                "  at {}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            );
         }
         if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
             eprintln!("  payload: {}", s);

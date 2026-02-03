@@ -136,12 +136,12 @@ class Herder
     virtual bool recvTxSet(Hash const& hash, TxSetXDRFrameConstPtr txset) = 0;
     // We are learning about a new transaction.
 #ifdef BUILD_TESTS
-    virtual TxSubmitStatus
-    recvTransaction(TransactionFrameBasePtr tx, bool submittedFromSelf,
-                    bool isLoadgenTx = false) = 0;
+    virtual TxSubmitStatus recvTransaction(TransactionFrameBasePtr tx,
+                                           bool submittedFromSelf,
+                                           bool isLoadgenTx = false) = 0;
 #else
-    virtual TxSubmitStatus
-    recvTransaction(TransactionFrameBasePtr tx, bool submittedFromSelf) = 0;
+    virtual TxSubmitStatus recvTransaction(TransactionFrameBasePtr tx,
+                                           bool submittedFromSelf) = 0;
 #endif
     virtual TxSetXDRFrameConstPtr getTxSet(Hash const& hash) = 0;
     virtual SCPQuorumSetPtr getQSet(Hash const& qSetHash) = 0;
@@ -227,6 +227,5 @@ class Herder
     virtual QuorumTracker::QuorumMap const&
     getCurrentlyTrackedQuorum() const = 0;
     virtual void maybeHandleUpgrade() = 0;
-
 };
 }

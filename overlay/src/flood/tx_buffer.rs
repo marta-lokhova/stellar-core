@@ -45,10 +45,13 @@ impl TxBuffer {
 
     /// Store a TX in the buffer
     pub fn insert(&mut self, hash: [u8; 32], data: Vec<u8>) {
-        self.buffer.put(hash, BufferEntry {
-            data,
-            added_at: Instant::now(),
-        });
+        self.buffer.put(
+            hash,
+            BufferEntry {
+                data,
+                added_at: Instant::now(),
+            },
+        );
     }
 
     /// Get a TX from the buffer (returns None if expired)
@@ -60,7 +63,7 @@ impl TxBuffer {
             self.buffer.pop(hash);
             return None;
         }
-        
+
         // Re-get to return reference (borrow checker)
         self.buffer.get(hash).map(|e| e.data.as_slice())
     }
@@ -87,12 +90,13 @@ impl TxBuffer {
 
     /// Remove expired entries (call periodically for cleanup)
     pub fn evict_expired(&mut self) -> usize {
-        let expired: Vec<_> = self.buffer
+        let expired: Vec<_> = self
+            .buffer
             .iter()
             .filter(|(_, entry)| entry.added_at.elapsed() > self.max_age)
             .map(|(hash, _)| *hash)
             .collect();
-        
+
         let count = expired.len();
         for hash in expired {
             self.buffer.pop(&hash);
@@ -185,7 +189,7 @@ mod tests {
         let tx_data = vec![0x01, 0x02, 0x03];
 
         buffer.insert(hash(1), tx_data.clone());
-        
+
         let removed = buffer.remove(&hash(1)).unwrap();
         assert_eq!(removed, tx_data);
         assert!(!buffer.contains(&hash(1)));

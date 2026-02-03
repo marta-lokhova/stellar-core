@@ -1083,8 +1083,7 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc]")
                     auto result = node0->getHerder().recvTransaction(tx, false);
                     txSubmitted++;
                     batchSubmitted++;
-                    if (result ==
-                        TxSubmitStatus::TX_STATUS_PENDING)
+                    if (result == TxSubmitStatus::TX_STATUS_PENDING)
                     {
                         batchPending++;
                     }
@@ -1252,8 +1251,8 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc]")
 //     LOG_INFO(DEFAULT_LOG, "");
 //     LOG_INFO(DEFAULT_LOG,
 //              "============================================================");
-//     LOG_INFO(DEFAULT_LOG, "    15-NODE 2000 TPS HIGH-THROUGHPUT STRESS TEST");
-//     LOG_INFO(DEFAULT_LOG,
+//     LOG_INFO(DEFAULT_LOG, "    15-NODE 2000 TPS HIGH-THROUGHPUT STRESS
+//     TEST"); LOG_INFO(DEFAULT_LOG,
 //              "============================================================");
 //     LOG_INFO(DEFAULT_LOG, "");
 
@@ -1279,7 +1278,8 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc]")
 //     for (int i = 0; i < numNodes; i++)
 //     {
 //         keys.push_back(
-//             SecretKey::fromSeed(sha256(fmt::format("STRESS_15_NODE_{}", i))));
+//             SecretKey::fromSeed(sha256(fmt::format("STRESS_15_NODE_{}",
+//             i))));
 //     }
 
 //     // Quorum set: 10-of-15 (67% threshold for BFT)
@@ -1339,8 +1339,9 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc]")
 //     // Get metrics from node 0
 //     auto& metrics = nodes[0]->getMetrics();
 //     auto& scpNominated = metrics.NewTimer({"scp", "timing", "nominated"});
-//     auto& scpExternalized = metrics.NewTimer({"scp", "timing", "externalized"});
-//     auto& ledgerClose = metrics.NewTimer({"ledger", "ledger", "close"});
+//     auto& scpExternalized = metrics.NewTimer({"scp", "timing",
+//     "externalized"}); auto& ledgerClose = metrics.NewTimer({"ledger",
+//     "ledger", "close"});
 
 //     LOG_INFO(DEFAULT_LOG, "");
 //     LOG_INFO(DEFAULT_LOG, "Starting high-throughput TX submission...");
@@ -1350,8 +1351,8 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc]")
 //     auto startTime = std::chrono::steady_clock::now();
 //     SecretKey destKey = SecretKey::pseudoRandomForTesting();
 
-//     // Submit TXs in batches, distributing across multiple nodes for parallelism
-//     for (int ledgerIdx = 0; ledgerIdx < ledgerCount; ledgerIdx++)
+//     // Submit TXs in batches, distributing across multiple nodes for
+//     parallelism for (int ledgerIdx = 0; ledgerIdx < ledgerCount; ledgerIdx++)
 //     {
 //         uint32_t currentLedger =
 //             nodes[0]->getLedgerManager().getLastClosedLedgerNum();
@@ -1365,9 +1366,11 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc]")
 //             // Round-robin across nodes for submission load distribution
 //             auto& submitNode = nodes[i % numNodes];
 
-//             auto source = txtest::getGenesisAccount(*submitNode, (txSubmitted + 1) % submitNode->getConfig().GENESIS_TEST_ACCOUNT_COUNT );
-//             auto tx =
-//                 source.tx({txtest::payment(destKey.getPublicKey(), 1000000)});
+//             auto source = txtest::getGenesisAccount(*submitNode, (txSubmitted
+//             + 1) % submitNode->getConfig().GENESIS_TEST_ACCOUNT_COUNT ); auto
+//             tx =
+//                 source.tx({txtest::payment(destKey.getPublicKey(),
+//                 1000000)});
 
 //             auto result = submitNode->getHerder().recvTransaction(tx, false);
 //             txSubmitted++;
@@ -1389,10 +1392,11 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc]")
 //                  ledgerIdx + 1, ledgerCount, batchSubmitted, batchPending,
 //                  txSubmitted, elapsed, tps);
 
-//         // Crank until next ledger (with generous timeout for 15-node consensus)
-//         simulation->crankUntil(
+//         // Crank until next ledger (with generous timeout for 15-node
+//         consensus) simulation->crankUntil(
 //             [&]() {
-//                 return nodes[0]->getLedgerManager().getLastClosedLedgerNum() >
+//                 return nodes[0]->getLedgerManager().getLastClosedLedgerNum()
+//                 >
 //                        currentLedger;
 //             },
 //             90 * simulation->getExpectedLedgerCloseTime(), false);
@@ -1424,7 +1428,6 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc]")
 
 //     LOG_INFO(DEFAULT_LOG, "Final ledger state: min={}, max={}, spread={}",
 //              minLedger, maxLedger, maxLedger - minLedger);
-
 
 //     // Count included TXs
 //     int64_t txIncluded = 0;
@@ -1470,18 +1473,19 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc]")
 //              "============================================================");
 
 //     // Assertions
-//     REQUIRE(txIncluded >= static_cast<int64_t>(txSubmitted));  // 80% inclusion minimum
+//     REQUIRE(txIncluded >= static_cast<int64_t>(txSubmitted));  // 80%
+//     inclusion minimum
 
-//     // Warn if SCP latency is concerning (but don't fail - this is informational)
-//     if (scpNominated.max() > 5000)
+//     // Warn if SCP latency is concerning (but don't fail - this is
+//     informational) if (scpNominated.max() > 5000)
 //     {
 //         WARN("SCP nomination max latency exceeded 5s: " << scpNominated.max()
 //                                                         << "ms");
 //     }
 
 //     LOG_INFO(DEFAULT_LOG,
-//              "✓ 15-node 2000 TPS stress test passed - {} TXs across {} ledgers",
-//              txIncluded, ledgerCount);
+//              "✓ 15-node 2000 TPS stress test passed - {} TXs across {}
+//              ledgers", txIncluded, ledgerCount);
 // }
 
 /**
@@ -1536,7 +1540,7 @@ TEST_CASE("Rust overlay 10-node network consensus", "[overlay-ipc]")
     // Each node knows 3 neighbors: prev, next, and one random peer
     // This ensures connectivity while testing Kademlia discovery
     std::vector<Application::pointer> nodes;
-    int basePort = 11630; // Start at 11630 to avoid conflicts
+    int basePort = 11630;     // Start at 11630 to avoid conflicts
     int baseHttpPort = 11700; // HTTP ports in separate range to avoid conflicts
 
     for (int i = 0; i < 10; i++)
@@ -1551,14 +1555,13 @@ TEST_CASE("Rust overlay 10-node network consensus", "[overlay-ipc]")
         int next = (i + 1) % 10;
         int cross = (i + 5) % 10;
 
-        cfg.KNOWN_PEERS.push_back(
-            fmt::format("127.0.0.1:{}", basePort + prev));
-        cfg.KNOWN_PEERS.push_back(
-            fmt::format("127.0.0.1:{}", basePort + next));
+        cfg.KNOWN_PEERS.push_back(fmt::format("127.0.0.1:{}", basePort + prev));
+        cfg.KNOWN_PEERS.push_back(fmt::format("127.0.0.1:{}", basePort + next));
         cfg.KNOWN_PEERS.push_back(
             fmt::format("127.0.0.1:{}", basePort + cross));
 
-        LOG_INFO(DEFAULT_LOG, "Node {}: port={}, http={}, known_peers=[{}, {}, {}]", i,
+        LOG_INFO(DEFAULT_LOG,
+                 "Node {}: port={}, http={}, known_peers=[{}, {}, {}]", i,
                  cfg.PEER_PORT, cfg.HTTP_PORT, basePort + prev, basePort + next,
                  basePort + cross);
 
@@ -1572,7 +1575,8 @@ TEST_CASE("Rust overlay 10-node network consensus", "[overlay-ipc]")
     auto startTime = std::chrono::steady_clock::now();
     simulation->startAllNodes();
 
-    // Give Rust overlay time for Kademlia bootstrap and GossipSub mesh formation
+    // Give Rust overlay time for Kademlia bootstrap and GossipSub mesh
+    // formation
     LOG_INFO(DEFAULT_LOG, "Waiting for overlay network to form...");
     for (int i = 0; i < 100; ++i)
     {
@@ -1597,10 +1601,13 @@ TEST_CASE("Rust overlay 10-node network consensus", "[overlay-ipc]")
     {
         auto n = nodes[i]->getLedgerManager().getLastClosedLedgerNum();
         LOG_INFO(DEFAULT_LOG, "Node {} at ledger {}", i, n);
-        if (n < min) min = n;
-        if (n > max) max = n;
+        if (n < min)
+            min = n;
+        if (n > max)
+            max = n;
     }
-    LOG_INFO(DEFAULT_LOG, "Ledger range: min={}, max={}, spread={}", min, max, max - min);
+    LOG_INFO(DEFAULT_LOG, "Ledger range: min={}, max={}, spread={}", min, max,
+             max - min);
 
     REQUIRE(simulation->haveAllExternalized(5, 10));
     LOG_INFO(DEFAULT_LOG, "✓ Network formed and consensus reached");

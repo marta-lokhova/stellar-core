@@ -309,7 +309,8 @@ HerderImpl::processExternalized(uint64 slotIndex, StellarValue const& value,
     std::vector<Hash> txHashes;
     if (externalizedSet)
     {
-        auto txFramesList = externalizedSet->createTransactionFrames(mApp.getNetworkID());
+        auto txFramesList =
+            externalizedSet->createTransactionFrames(mApp.getNetworkID());
         for (auto const& txPhase : txFramesList)
         {
             for (auto const& txFrame : txPhase)
@@ -617,12 +618,12 @@ HerderImpl::recvTransaction(TransactionFrameBasePtr tx, bool submittedFromSelf
 {
     ZoneScoped;
     CLOG_TRACE(Herder, "recv transaction {} for {}",
-                hexAbbrev(tx->getFullHash()),
-                KeyUtils::toShortString(tx->getSourceID()));
+               hexAbbrev(tx->getFullHash()),
+               KeyUtils::toShortString(tx->getSourceID()));
 
     auto const& env = tx->getEnvelope();
     mApp.getOverlayManager().broadcastTransaction(env, tx->getFullFee(),
-                                                    tx->getNumOperations());
+                                                  tx->getNumOperations());
     return TxSubmitStatus::TX_STATUS_PENDING;
 }
 

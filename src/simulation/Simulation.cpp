@@ -51,7 +51,8 @@ Simulation::~Simulation()
     //     {
     //         continue;
     //     }
-    //     crankUntil([node] { return node.second.mApp->getClock().isStopped(); },
+    //     crankUntil([node] { return node.second.mApp->getClock().isStopped();
+    //     },
     //                std::chrono::seconds(20), false);
     // }
 

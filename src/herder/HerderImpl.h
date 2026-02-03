@@ -6,9 +6,9 @@
 
 #include "herder/Herder.h"
 #include "herder/HerderSCPDriver.h"
+#include "herder/LedgerCloseData.h"
 #include "herder/PendingEnvelopes.h"
 #include "herder/QuorumIntersectionChecker.h"
-#include "herder/LedgerCloseData.h"
 #include "herder/Upgrades.h"
 #include "overlay/NetworkConstants.h"
 #include "util/Timer.h"
@@ -99,13 +99,12 @@ class HerderImpl : public Herder
     void emitEnvelope(SCPEnvelope const& envelope);
 
 #ifdef BUILD_TESTS
-    TxSubmitStatus
-    recvTransaction(TransactionFrameBasePtr tx, bool submittedFromSelf,
-                    bool isLoadgenTx = false) override;
+    TxSubmitStatus recvTransaction(TransactionFrameBasePtr tx,
+                                   bool submittedFromSelf,
+                                   bool isLoadgenTx = false) override;
 #else
-    TxSubmitStatus
-    recvTransaction(TransactionFrameBasePtr tx,
-                    bool submittedFromSelf) override;
+    TxSubmitStatus recvTransaction(TransactionFrameBasePtr tx,
+                                   bool submittedFromSelf) override;
 #endif
 
     EnvelopeStatus recvSCPEnvelope(SCPEnvelope const& envelope) override;

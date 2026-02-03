@@ -125,10 +125,10 @@ TEST_CASE("IPC payload size benchmark", "[overlay-ipc-rust][.][benchmark]")
 
     CLOG_INFO(Overlay, "");
     CLOG_INFO(Overlay, "============================================"
-                           "========================================");
+                       "========================================");
     CLOG_INFO(Overlay, "           IPC PAYLOAD SIZE BENCHMARK");
     CLOG_INFO(Overlay, "============================================"
-                           "========================================");
+                       "========================================");
     CLOG_INFO(Overlay, "");
 
     TmpDir tmpDir("ipc-benchmark");
@@ -154,12 +154,9 @@ TEST_CASE("IPC payload size benchmark", "[overlay-ipc-rust][.][benchmark]")
     };
 
     std::vector<TestCase> testCases = {
-        {1, 1000, "1 TX request"},
-        {10, 500, "10 TX request"},
-        {100, 100, "100 TX request"},
-        {1000, 50, "1000 TX request"},
-        {5000, 20, "5000 TX request"},
-        {10000, 10, "10000 TX request"},
+        {1, 1000, "1 TX request"},     {10, 500, "10 TX request"},
+        {100, 100, "100 TX request"},  {1000, 50, "1000 TX request"},
+        {5000, 20, "5000 TX request"}, {10000, 10, "10000 TX request"},
     };
 
     std::vector<BenchmarkResult> results;
@@ -173,29 +170,27 @@ TEST_CASE("IPC payload size benchmark", "[overlay-ipc-rust][.][benchmark]")
         results.push_back(result);
 
         CLOG_INFO(Overlay, "  Avg latency: {:.3f} ms", result.avgLatencyMs);
-        CLOG_INFO(Overlay, "  Throughput: {:.2f} MB/s",
-                  result.throughputMBps);
-        CLOG_INFO(Overlay, "  Min/Max: {:.3f} / {:.3f} ms",
-                  result.minLatencyMs, result.maxLatencyMs);
+        CLOG_INFO(Overlay, "  Throughput: {:.2f} MB/s", result.throughputMBps);
+        CLOG_INFO(Overlay, "  Min/Max: {:.3f} / {:.3f} ms", result.minLatencyMs,
+                  result.maxLatencyMs);
         CLOG_INFO(Overlay, "");
     }
 
     // Print summary table
     CLOG_INFO(Overlay, "");
     CLOG_INFO(Overlay, "============================================"
-                           "========================================");
+                       "========================================");
     CLOG_INFO(Overlay, "                       SUMMARY");
     CLOG_INFO(Overlay, "============================================"
-                           "========================================");
+                       "========================================");
     CLOG_INFO(Overlay, "");
 
-    CLOG_INFO(Overlay, "{:<12} {:>10} {:>12} {:>12} {:>12} {:>12}",
-              "Request", "Iterations", "Avg (ms)", "Min (ms)", "Max (ms)",
-              "Throughput");
-    CLOG_INFO(Overlay, "{:<12} {:>10} {:>12} {:>12} {:>12} {:>12}", "Size",
-              "", "", "", "", "(req/s)");
+    CLOG_INFO(Overlay, "{:<12} {:>10} {:>12} {:>12} {:>12} {:>12}", "Request",
+              "Iterations", "Avg (ms)", "Min (ms)", "Max (ms)", "Throughput");
+    CLOG_INFO(Overlay, "{:<12} {:>10} {:>12} {:>12} {:>12} {:>12}", "Size", "",
+              "", "", "", "(req/s)");
     CLOG_INFO(Overlay, "--------------------------------------------"
-                           "----------------------------------------");
+                       "----------------------------------------");
 
     for (size_t i = 0; i < results.size(); i++)
     {
@@ -208,15 +203,15 @@ TEST_CASE("IPC payload size benchmark", "[overlay-ipc-rust][.][benchmark]")
 
     CLOG_INFO(Overlay, "");
     CLOG_INFO(Overlay, "============================================"
-                           "========================================");
+                       "========================================");
 
     // Analysis: Check for performance cliffs
     CLOG_INFO(Overlay, "");
     CLOG_INFO(Overlay, "Performance Analysis:");
     for (size_t i = 1; i < results.size(); i++)
     {
-        double sizeRatio =
-            static_cast<double>(results[i].payloadSize) / results[i - 1].payloadSize;
+        double sizeRatio = static_cast<double>(results[i].payloadSize) /
+                           results[i - 1].payloadSize;
         double latencyRatio =
             results[i].avgLatencyMs / results[i - 1].avgLatencyMs;
 
@@ -249,8 +244,7 @@ TEST_CASE("IPC payload size benchmark", "[overlay-ipc-rust][.][benchmark]")
  * throughput. IPC calls are serialized with a mutex since the channel is
  * not thread-safe (concurrent writes corrupt messages).
  */
-TEST_CASE("IPC concurrent access benchmark",
-          "[overlay-ipc-rust][.][benchmark]")
+TEST_CASE("IPC concurrent access benchmark", "[overlay-ipc-rust][.][benchmark]")
 {
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
@@ -261,10 +255,10 @@ TEST_CASE("IPC concurrent access benchmark",
 
     CLOG_INFO(Overlay, "");
     CLOG_INFO(Overlay, "============================================"
-                           "========================================");
+                       "========================================");
     CLOG_INFO(Overlay, "        IPC CONCURRENT ACCESS BENCHMARK");
     CLOG_INFO(Overlay, "============================================"
-                           "========================================");
+                       "========================================");
 
     TmpDir tmpDir("ipc-benchmark");
     std::string socketPath = tmpDir.getName() + "/overlay.sock";
@@ -279,9 +273,8 @@ TEST_CASE("IPC concurrent access benchmark",
     size_t const callsPerThread = 100;
     size_t const payloadSize = 1024; // 1KB TXs
 
-    CLOG_INFO(Overlay,
-              "Testing {} threads, {} calls each, {} byte payloads", numThreads,
-              callsPerThread, payloadSize);
+    CLOG_INFO(Overlay, "Testing {} threads, {} calls each, {} byte payloads",
+              numThreads, callsPerThread, payloadSize);
 
     auto startTime = std::chrono::high_resolution_clock::now();
 
@@ -302,10 +295,9 @@ TEST_CASE("IPC concurrent access benchmark",
             }
 
             auto threadEnd = std::chrono::high_resolution_clock::now();
-            threadTimes[t] =
-                std::chrono::duration<double, std::milli>(threadEnd -
-                                                          threadStart)
-                    .count();
+            threadTimes[t] = std::chrono::duration<double, std::milli>(
+                                 threadEnd - threadStart)
+                                 .count();
         });
     }
 
@@ -327,8 +319,7 @@ TEST_CASE("IPC concurrent access benchmark",
 
     for (size_t i = 0; i < numThreads; i++)
     {
-        CLOG_INFO(Overlay, "  Thread {} time: {:.2f} ms", i,
-                  threadTimes[i]);
+        CLOG_INFO(Overlay, "  Thread {} time: {:.2f} ms", i, threadTimes[i]);
     }
 
     ipc.shutdown();

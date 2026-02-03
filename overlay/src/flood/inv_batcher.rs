@@ -50,7 +50,7 @@ impl PeerBatch {
             return false;
         }
         self.seen.insert(entry.hash);
-        
+
         if self.started_at.is_none() {
             self.started_at = Some(Instant::now());
         }
@@ -169,10 +169,7 @@ impl InvBatcher {
 
     /// Number of pending entries across all peers
     pub fn pending_count(&self) -> usize {
-        self.pending
-            .values()
-            .map(|b| b.batch.entries.len())
-            .sum()
+        self.pending.values().map(|b| b.batch.entries.len()).sum()
     }
 }
 
@@ -273,13 +270,13 @@ mod tests {
         let peer = make_peer(1);
 
         batcher.add(peer, make_entry(0x01, 100));
-        
+
         // Initially not expired
         assert!(batcher.expired_peers().is_empty());
 
         // Wait for expiry
         std::thread::sleep(Duration::from_millis(15));
-        
+
         let expired = batcher.expired_peers();
         assert_eq!(expired.len(), 1);
         assert_eq!(expired[0], peer);

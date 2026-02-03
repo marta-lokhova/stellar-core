@@ -1,6 +1,7 @@
 ﻿#include "PendingEnvelopes.h"
 #include "crypto/Hex.h"
 #include "crypto/SHA.h"
+#include "database/Database.h"
 #include "herder/HerderImpl.h"
 #include "herder/HerderPersistence.h"
 #include "herder/HerderUtils.h"
@@ -16,7 +17,6 @@
 #include "util/UnorderedSet.h"
 #include <Tracy.hpp>
 #include <xdrpp/marshal.h>
-#include "database/Database.h"
 
 using namespace std;
 

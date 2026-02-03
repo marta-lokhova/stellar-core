@@ -142,7 +142,7 @@ impl Overlay {
                     data,
                     hash,
                     source_account: [0u8; 32], // TODO: Parse from XDR
-                    sequence: 0,                // TODO: Parse from XDR
+                    sequence: 0,               // TODO: Parse from XDR
                     fee,
                     num_ops,
                     received_at: std::time::Instant::now(),

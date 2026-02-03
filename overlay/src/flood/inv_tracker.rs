@@ -36,13 +36,13 @@ impl InvTracker {
     /// Record that a peer has advertised a TX. Returns true if this is the first INV for this TX.
     pub fn record_source(&mut self, hash: [u8; 32], peer: PeerId) -> bool {
         let is_first = !self.sources.contains(&hash);
-        
+
         let sources = self.sources.get_or_insert_mut(hash, Vec::new);
         // Avoid duplicates
         if !sources.contains(&peer) {
             sources.push(peer);
         }
-        
+
         is_first
     }
 
@@ -60,15 +60,19 @@ impl InvTracker {
 
         let idx = *self.next_idx.get_or_insert(*hash, || 0);
         let peer = sources[idx % sources.len()];
-        
+
         // Advance for next call
         self.next_idx.put(*hash, idx + 1);
-        
+
         Some(peer)
     }
 
     /// Get the next peer, excluding specific peers (e.g., already tried and failed)
-    pub fn get_next_peer_excluding(&mut self, hash: &[u8; 32], exclude: &HashSet<PeerId>) -> Option<PeerId> {
+    pub fn get_next_peer_excluding(
+        &mut self,
+        hash: &[u8; 32],
+        exclude: &HashSet<PeerId>,
+    ) -> Option<PeerId> {
         let sources = self.sources.get(hash)?;
         if sources.is_empty() {
             return None;
@@ -90,7 +94,10 @@ impl InvTracker {
 
     /// Check if we know about this TX (have at least one source)
     pub fn has_sources(&mut self, hash: &[u8; 32]) -> bool {
-        self.sources.get(hash).map(|s| !s.is_empty()).unwrap_or(false)
+        self.sources
+            .get(hash)
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
     }
 
     /// Number of sources for a TX
@@ -303,12 +310,12 @@ mod tests {
         tracker.record_source(hash(1), PeerId::random());
         tracker.record_source(hash(2), PeerId::random());
         tracker.record_source(hash(3), PeerId::random());
-        
+
         assert_eq!(tracker.len(), 3);
 
         // Add 4th, should evict oldest (hash(1))
         tracker.record_source(hash(4), PeerId::random());
-        
+
         assert_eq!(tracker.len(), 3);
         assert!(!tracker.has_sources(&hash(1))); // Evicted
         assert!(tracker.has_sources(&hash(4))); // New one present

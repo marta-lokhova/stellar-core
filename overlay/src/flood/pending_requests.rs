@@ -159,11 +159,11 @@ impl PendingRequests {
             .filter(|(_, req)| req.peer == *peer)
             .map(|(hash, _)| *hash)
             .collect();
-        
+
         for hash in &affected {
             self.requests.remove(hash);
         }
-        
+
         affected
     }
 
@@ -210,7 +210,7 @@ mod tests {
     fn test_pending_request_new() {
         let peer = PeerId::random();
         let req = PendingRequest::new(peer);
-        
+
         assert_eq!(req.peer, peer);
         assert_eq!(req.attempts, 1);
         assert!(!req.is_timed_out(Duration::from_secs(1)));
@@ -221,7 +221,7 @@ mod tests {
         let peer = PeerId::random();
         let mut req = PendingRequest::new(peer);
         req.sent_at = Instant::now() - Duration::from_secs(2);
-        
+
         assert!(req.is_timed_out(Duration::from_secs(1)));
         assert!(!req.is_timed_out(Duration::from_secs(3)));
     }
@@ -231,7 +231,7 @@ mod tests {
         let peer = PeerId::random();
         let mut req = PendingRequest::new(peer);
         req.first_sent_at = Instant::now() - Duration::from_secs(31);
-        
+
         assert!(req.should_give_up(Duration::from_secs(30)));
     }
 
@@ -240,9 +240,9 @@ mod tests {
         let peer1 = PeerId::random();
         let peer2 = PeerId::random();
         let mut req = PendingRequest::new(peer1);
-        
+
         req.retry(peer2);
-        
+
         assert_eq!(req.peer, peer2);
         assert_eq!(req.attempts, 2);
     }
@@ -264,10 +264,8 @@ mod tests {
 
     #[test]
     fn test_pending_requests_timed_out() {
-        let mut pending = PendingRequests::with_timeouts(
-            Duration::from_millis(50),
-            Duration::from_secs(30),
-        );
+        let mut pending =
+            PendingRequests::with_timeouts(Duration::from_millis(50), Duration::from_secs(30));
         let peer = PeerId::random();
 
         pending.insert(hash(1), peer);
@@ -285,18 +283,15 @@ mod tests {
 
     #[test]
     fn test_pending_requests_process_timeouts() {
-        let mut pending = PendingRequests::with_timeouts(
-            Duration::from_millis(10),
-            Duration::from_millis(50),
-        );
+        let mut pending =
+            PendingRequests::with_timeouts(Duration::from_millis(10), Duration::from_millis(50));
         let peer = PeerId::random();
 
         pending.insert(hash(1), peer);
-        
+
         // Make it look old
-        pending.get_mut(&hash(1)).unwrap().sent_at = 
-            Instant::now() - Duration::from_millis(20);
-        pending.get_mut(&hash(1)).unwrap().first_sent_at = 
+        pending.get_mut(&hash(1)).unwrap().sent_at = Instant::now() - Duration::from_millis(20);
+        pending.get_mut(&hash(1)).unwrap().first_sent_at =
             Instant::now() - Duration::from_millis(20);
 
         // Should be in retry list, not give_up
@@ -305,7 +300,7 @@ mod tests {
         assert!(give_up.is_empty());
 
         // Make it even older
-        pending.get_mut(&hash(1)).unwrap().first_sent_at = 
+        pending.get_mut(&hash(1)).unwrap().first_sent_at =
             Instant::now() - Duration::from_millis(60);
 
         // Now should be in give_up list
@@ -333,10 +328,8 @@ mod tests {
 
     #[test]
     fn test_pending_requests_time_until_timeout() {
-        let mut pending = PendingRequests::with_timeouts(
-            Duration::from_millis(100),
-            Duration::from_secs(30),
-        );
+        let mut pending =
+            PendingRequests::with_timeouts(Duration::from_millis(100), Duration::from_secs(30));
 
         // No requests
         assert!(pending.time_until_next_timeout().is_none());
@@ -353,7 +346,7 @@ mod tests {
     #[test]
     fn test_pending_requests_len() {
         let mut pending = PendingRequests::new();
-        
+
         assert!(pending.is_empty());
         assert_eq!(pending.len(), 0);
 

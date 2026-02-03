@@ -246,7 +246,10 @@ mod tests {
             }
         }
 
-        assert_eq!(scp_state_requests, 1, "B should request SCP state once when connecting to A");
+        assert_eq!(
+            scp_state_requests, 1,
+            "B should request SCP state once when connecting to A"
+        );
 
         // Shutdown both
         ipc::send_message(&mut stream_a, ipc::SHUTDOWN, &[]).ok();

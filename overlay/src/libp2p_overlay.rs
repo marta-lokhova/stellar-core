@@ -12,16 +12,16 @@
 //! QUIC provides independent loss recovery per stream.
 
 use crate::flood::{
-    GetData, InvBatcher, InvBatch, InvEntry, InvTracker, PendingRequests, TxBuffer,
-    TxMessageType, TxStreamMessage, INV_BATCH_MAX_DELAY, GETDATA_PEER_TIMEOUT,
+    GetData, InvBatch, InvBatcher, InvEntry, InvTracker, PendingRequests, TxBuffer, TxMessageType,
+    TxStreamMessage, GETDATA_PEER_TIMEOUT, INV_BATCH_MAX_DELAY,
 };
 use futures::{AsyncReadExt, AsyncWriteExt, StreamExt};
 use libp2p::{
     identify::{Behaviour as Identify, Config as IdentifyConfig, Event as IdentifyEvent},
     identity::Keypair,
     kad::{
-        store::MemoryStore, Behaviour as Kademlia, Config as KademliaConfig, Event as KademliaEvent,
-        Mode as KademliaMode,
+        store::MemoryStore, Behaviour as Kademlia, Config as KademliaConfig,
+        Event as KademliaEvent, Mode as KademliaMode,
     },
     swarm::{NetworkBehaviour, SwarmEvent},
     Multiaddr, PeerId, Stream, StreamProtocol, Swarm, SwarmBuilder,
@@ -196,16 +196,22 @@ impl OverlayHandle {
     pub async fn bootstrap_kademlia(&self) {
         let _ = self.cmd_tx.send(OverlayCommand::BootstrapKademlia).await;
     }
-    
+
     pub async fn request_scp_state_from_all_peers(&self, ledger_seq: u32) {
-        let _ = self.cmd_tx.send(OverlayCommand::RequestScpState { ledger_seq }).await;
+        let _ = self
+            .cmd_tx
+            .send(OverlayCommand::RequestScpState { ledger_seq })
+            .await;
     }
-    
+
     pub async fn send_scp_to_peer(&self, peer_id: PeerId, envelope: &[u8]) -> io::Result<()> {
-        self.cmd_tx.send(OverlayCommand::SendScpToPeer {
-            peer_id,
-            envelope: envelope.to_vec(),
-        }).await.map_err(|_| io::Error::new(io::ErrorKind::Other, "Channel closed"))?;
+        self.cmd_tx
+            .send(OverlayCommand::SendScpToPeer {
+                peer_id,
+                envelope: envelope.to_vec(),
+            })
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Channel closed"))?;
         Ok(())
     }
 
@@ -246,7 +252,7 @@ struct SharedState {
     tx_dropped_count: AtomicU64,
     /// Stream control for reopening streams
     control: Control,
-    
+
     // ============ INV/GETDATA State ============
     /// Batches INV announcements before sending (100ms or 1000 INVs)
     inv_batcher: RwLock<InvBatcher>,
@@ -269,7 +275,7 @@ impl SharedState {
         // Default to legacy mode until INV/GETDATA receive handler is implemented
         Self::with_config(event_tx, tx_event_tx, control, false)
     }
-    
+
     fn with_config(
         event_tx: mpsc::UnboundedSender<OverlayEvent>,
         tx_event_tx: mpsc::Sender<OverlayEvent>,
@@ -317,7 +323,7 @@ pub struct StellarOverlay {
 }
 
 /// Create the overlay and return handle + event receivers
-/// 
+///
 /// Returns:
 /// - `OverlayHandle`: for sending commands to the overlay
 /// - `UnboundedReceiver<OverlayEvent>`: for SCP, TxSet events (critical path, never dropped)
@@ -357,7 +363,7 @@ pub fn create_overlay(
             // - Default periodic bootstrap: 5 minutes
             let kad_config = KademliaConfig::default();
             // Note: We'll set server mode after swarm creation since set_mode is on Behaviour
-            
+
             #[allow(deprecated)]
             let kademlia = Kademlia::with_config(
                 key.public().to_peer_id(),
@@ -386,7 +392,10 @@ pub fn create_overlay(
     // and peer discovery fails completely.
     // Server mode = respond to DHT queries = enable peer discovery
     let mut swarm = swarm;
-    swarm.behaviour_mut().kademlia.set_mode(Some(KademliaMode::Server));
+    swarm
+        .behaviour_mut()
+        .kademlia
+        .set_mode(Some(KademliaMode::Server));
     info!("Kademlia: Set to Server mode for DHT query handling");
 
     let control = swarm.behaviour().stream.new_control();
@@ -484,17 +493,27 @@ fn create_test_overlay(
                 "/stellar/1.0.0".to_string(),
                 key.public(),
             ));
-            StellarBehaviour { stream, kademlia, identify }
+            StellarBehaviour {
+                stream,
+                kademlia,
+                identify,
+            }
         })?
         .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(300)))
         .build();
 
     let mut swarm = swarm;
     if enable_kademlia {
-        swarm.behaviour_mut().kademlia.set_mode(Some(KademliaMode::Server));
+        swarm
+            .behaviour_mut()
+            .kademlia
+            .set_mode(Some(KademliaMode::Server));
     } else {
         // Client mode = don't respond to DHT queries = no peer discovery
-        swarm.behaviour_mut().kademlia.set_mode(Some(KademliaMode::Client));
+        swarm
+            .behaviour_mut()
+            .kademlia
+            .set_mode(Some(KademliaMode::Client));
     }
 
     let control = swarm.behaviour().stream.new_control();
@@ -502,9 +521,19 @@ fn create_test_overlay(
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let (tx_event_tx, tx_event_rx) = mpsc::channel(TX_EVENT_CHANNEL_CAPACITY);
 
-    let state = Arc::new(SharedState::with_config(event_tx, tx_event_tx, control.clone(), use_inv_getdata));
+    let state = Arc::new(SharedState::with_config(
+        event_tx,
+        tx_event_tx,
+        control.clone(),
+        use_inv_getdata,
+    ));
 
-    let overlay = StellarOverlay { swarm, control, state, cmd_rx };
+    let overlay = StellarOverlay {
+        swarm,
+        control,
+        state,
+        cmd_rx,
+    };
     let handle = OverlayHandle { cmd_tx };
 
     Ok((handle, event_rx, tx_event_rx, overlay))
@@ -512,7 +541,7 @@ fn create_test_overlay(
 
 impl StellarOverlay {
     /// Run the overlay event loop
-    /// 
+    ///
     /// `listen_ip` should be a specific IP (e.g., "127.0.0.1" for local tests)
     /// to avoid multi-homing issues where Identify advertises multiple addresses.
     pub async fn run(mut self, listen_ip: &str, listen_port: u16) {
@@ -538,7 +567,7 @@ impl StellarOverlay {
         tokio::spawn(handle_inbound_scp_streams(scp_incoming, state.clone()));
         tokio::spawn(handle_inbound_tx_streams(tx_incoming, state.clone()));
         tokio::spawn(handle_inbound_txset_streams(txset_incoming, state.clone()));
-        
+
         // Spawn INV/GETDATA housekeeping task (only if enabled)
         if self.state.use_inv_getdata {
             tokio::spawn(inv_getdata_housekeeping_task(state.clone()));
@@ -638,12 +667,15 @@ impl StellarOverlay {
                     pending.retain(|_hash, p| p != &peer_id);
                     let removed = before_len - pending.len();
                     if removed > 0 {
-                        debug!("Removed {} pending txset requests for disconnected peer {}", removed, peer_id);
+                        debug!(
+                            "Removed {} pending txset requests for disconnected peer {}",
+                            removed, peer_id
+                        );
                     }
                 }
                 // Notify main loop to clean up any pending requests for this peer
-                let _ = self.state.event_tx.send(OverlayEvent::PeerDisconnected { 
-                    peer_id: peer_id.clone() 
+                let _ = self.state.event_tx.send(OverlayEvent::PeerDisconnected {
+                    peer_id: peer_id.clone(),
                 });
             }
 
@@ -670,17 +702,20 @@ impl StellarOverlay {
     fn handle_identify_event(&mut self, event: IdentifyEvent) {
         if let IdentifyEvent::Received { peer_id, info, .. } = event {
             debug!("Identified peer {}: {:?}", peer_id, info.listen_addrs);
-            
+
             for addr in info.listen_addrs {
                 self.swarm
                     .behaviour_mut()
                     .kademlia
                     .add_address(&peer_id, addr.clone());
-                
+
                 // If not already connected, dial this Kademlia-discovered peer
                 // to add to GossipSub mesh for SCP message routing
                 if !self.swarm.is_connected(&peer_id) {
-                    info!("Auto-dialing Kademlia-discovered peer {} at {}", peer_id, addr);
+                    info!(
+                        "Auto-dialing Kademlia-discovered peer {} at {}",
+                        peer_id, addr
+                    );
                     if let Err(e) = self.swarm.dial(addr) {
                         warn!("Failed to dial discovered peer {}: {:?}", peer_id, e);
                     }
@@ -703,13 +738,13 @@ impl StellarOverlay {
                             "Kademlia: Bootstrap completed, {} peers in routing table",
                             bootstrap_result.num_remaining
                         );
-                        
+
                         // After bootstrap, count discovered peers for logging
                         let mut total_peers = 0;
                         for kbucket in self.swarm.behaviour_mut().kademlia.kbuckets() {
                             total_peers += kbucket.iter().count();
                         }
-                        
+
                         if total_peers > 0 {
                             info!("Kademlia: Routing table has {} total peers", total_peers);
                         }
@@ -722,7 +757,7 @@ impl StellarOverlay {
                             "Kademlia: Found {} closest peers",
                             get_closest_result.peers.len()
                         );
-                        
+
                         // Discovered new peers - they're already added to routing table
                         // When Identify protocol runs, addresses will be added and we can dial them
                         // TODO: Auto-dial discovered peers once we have their addresses
@@ -812,12 +847,19 @@ impl StellarOverlay {
                 }
             }
         }
-        
+
         // Request SCP state from newly connected peer synchronously
         // No spawned task, no sleep - streams are open, send immediately
         info!("Peer {} connected, sending SCP state request", peer_id);
         let ledger_seq: u32 = 0; // Request all recent state
-        if let Err(e) = send_to_peer_stream(&self.state, peer_id.clone(), StreamType::Scp, &ledger_seq.to_le_bytes()).await {
+        if let Err(e) = send_to_peer_stream(
+            &self.state,
+            peer_id.clone(),
+            StreamType::Scp,
+            &ledger_seq.to_le_bytes(),
+        )
+        .await
+        {
             debug!("Failed to request SCP state from peer {}: {:?}", peer_id, e);
         }
     }
@@ -861,7 +903,8 @@ impl StellarOverlay {
             let state = Arc::clone(&self.state);
             let envelope = envelope.to_vec();
             tokio::spawn(async move {
-                match send_to_peer_stream(&state, peer_id.clone(), StreamType::Scp, &envelope).await {
+                match send_to_peer_stream(&state, peer_id.clone(), StreamType::Scp, &envelope).await
+                {
                     Ok(_) => {
                         debug!(
                             "SCP_SEND_OK: Sent SCP {:02x?}... to {}",
@@ -891,7 +934,7 @@ impl StellarOverlay {
             self.broadcast_tx_legacy(tx).await;
         }
     }
-    
+
     /// Broadcast TX using INV/GETDATA protocol (bandwidth efficient)
     async fn broadcast_tx_inv(&mut self, tx: &[u8]) {
         let hash = blake2b_hash(tx);
@@ -987,7 +1030,9 @@ impl StellarOverlay {
             let state = Arc::clone(&self.state);
             let tx = tx.to_vec();
             tokio::spawn(async move {
-                if let Err(e) = send_to_peer_stream(&state, peer_id.clone(), StreamType::Tx, &tx).await {
+                if let Err(e) =
+                    send_to_peer_stream(&state, peer_id.clone(), StreamType::Tx, &tx).await
+                {
                     warn!("Failed to send TX to {}: {}", peer_id, e);
                 }
             });
@@ -1133,18 +1178,24 @@ impl StellarOverlay {
         let streams = self.state.peer_streams.read().await;
         let peers: Vec<_> = streams.keys().cloned().collect();
         drop(streams);
-        
-        info!("Requesting SCP state for ledger >= {} from {} peers", ledger_seq, peers.len());
-        
+
+        info!(
+            "Requesting SCP state for ledger >= {} from {} peers",
+            ledger_seq,
+            peers.len()
+        );
+
         // Send request to each peer (request is just the ledger seq as 4 bytes)
         let request = ledger_seq.to_le_bytes().to_vec();
         for peer_id in peers {
-            if let Err(e) = send_to_peer_stream(&self.state, peer_id, StreamType::Scp, &request).await {
+            if let Err(e) =
+                send_to_peer_stream(&self.state, peer_id, StreamType::Scp, &request).await
+            {
                 warn!("Failed to send SCP state request to {}: {:?}", peer_id, e);
             }
         }
     }
-    
+
     /// Send SCP envelope to a specific peer
     pub async fn send_scp_to_peer(&self, peer_id: PeerId, envelope: &[u8]) -> io::Result<()> {
         send_to_peer_stream(&self.state, peer_id, StreamType::Scp, envelope).await
@@ -1193,9 +1244,9 @@ async fn try_send_to_existing_stream(
     let mut stream_guard = stream_mutex.lock().await;
 
     // If stream not open, fail immediately without reopening
-    let stream = stream_guard.as_mut().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::NotConnected, "stream not open")
-    })?;
+    let stream = stream_guard
+        .as_mut()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "stream not open"))?;
 
     write_framed(stream, data).await
 }
@@ -1278,14 +1329,16 @@ async fn flush_inv_batch_to_peer(state: &Arc<SharedState>, peer: PeerId) {
         let mut batcher = state.inv_batcher.write().await;
         batcher.flush(&peer)
     };
-    
+
     if let Some(batch) = batch {
         let msg = TxStreamMessage::InvBatch(batch);
         let encoded = msg.encode();
-        
+
         let state = Arc::clone(state);
         tokio::spawn(async move {
-            if let Err(e) = send_to_peer_stream(&state, peer.clone(), StreamType::Tx, &encoded).await {
+            if let Err(e) =
+                send_to_peer_stream(&state, peer.clone(), StreamType::Tx, &encoded).await
+            {
                 warn!("Failed to send INV batch to {}: {}", peer, e);
             } else {
                 debug!("TX_INV_SENT: Sent INV batch to {}", peer);
@@ -1326,8 +1379,11 @@ async fn handle_inbound_scp_streams(mut incoming: IncomingStreams, state: Arc<Sh
                         if envelope.len() == 4 {
                             // This is an SCP state request (ledger seq)
                             let ledger_seq = u32::from_le_bytes(envelope[..4].try_into().unwrap());
-                            info!("SCP_STATE_REQ: Peer {} requests SCP state for ledger >= {}", peer_id, ledger_seq);
-                            
+                            info!(
+                                "SCP_STATE_REQ: Peer {} requests SCP state for ledger >= {}",
+                                peer_id, ledger_seq
+                            );
+
                             // Notify main loop via event channel
                             if let Err(e) = state.event_tx.send(OverlayEvent::ScpStateRequested {
                                 peer_id: peer_id.clone(),
@@ -1337,7 +1393,7 @@ async fn handle_inbound_scp_streams(mut incoming: IncomingStreams, state: Arc<Sh
                             }
                             continue;
                         }
-                        
+
                         let hash = blake2b_hash(&envelope);
 
                         // Dedup
@@ -1366,57 +1422,63 @@ async fn handle_inbound_scp_streams(mut incoming: IncomingStreams, state: Arc<Sh
                             envelope.len(),
                             peer_id
                         );
-                        
+
                         // Forward to Core
                         let envelope_clone = envelope.clone();
                         let _ = state.event_tx.send(OverlayEvent::ScpReceived {
                             envelope: envelope_clone,
                             from: peer_id.clone(),
                         });
-                        
+
                         // FLOOD: Determine peers to forward to (atomically mark as sent)
                         let peers_to_forward: Vec<PeerId> = {
                             // Hold both locks to ensure atomicity
                             let mut sent_to = state.scp_sent_to.write().await;
                             let streams = state.peer_streams.read().await;
-                            
+
                             // Get current sent set or empty
-                            let already_sent: std::collections::HashSet<PeerId> = sent_to
-                                .get(&hash)
-                                .cloned()
-                                .unwrap_or_default();
-                            
+                            let already_sent: std::collections::HashSet<PeerId> =
+                                sent_to.get(&hash).cloned().unwrap_or_default();
+
                             // Find peers we haven't sent to (excluding sender)
-                            let peers: Vec<_> = streams.keys()
+                            let peers: Vec<_> = streams
+                                .keys()
                                 .filter(|p| **p != peer_id && !already_sent.contains(p))
                                 .cloned()
                                 .collect();
-                            
+
                             // Update sent set with new peers + sender
                             let mut new_sent = already_sent;
                             new_sent.extend(peers.iter().cloned());
                             new_sent.insert(peer_id.clone());
                             sent_to.put(hash, new_sent);
-                            
+
                             peers
                         };
-                        
+
                         if peers_to_forward.is_empty() {
                             continue;
                         }
-                        
+
                         debug!(
                             "SCP_FLOOD: Forwarding SCP {:02x?}... to {} peers",
                             &hash[..4],
                             peers_to_forward.len()
                         );
-                        
+
                         // Spawn parallel send tasks - one per peer
                         for peer in peers_to_forward {
                             let state_forward = state.clone();
                             let envelope = envelope.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = try_send_to_existing_stream(&state_forward, peer.clone(), StreamType::Scp, &envelope).await {
+                                if let Err(e) = try_send_to_existing_stream(
+                                    &state_forward,
+                                    peer.clone(),
+                                    StreamType::Scp,
+                                    &envelope,
+                                )
+                                .await
+                                {
                                     debug!("SCP_FLOOD_SKIP: Failed to forward to {}: {}", peer, e);
                                 }
                             });
@@ -1481,7 +1543,10 @@ async fn handle_tx_stream_message(
             handle_tx_response(state, peer_id, tx_data).await;
         }
         Err(e) => {
-            warn!("TX_PARSE_ERR: Failed to parse message from {}: {}", peer_id, e);
+            warn!(
+                "TX_PARSE_ERR: Failed to parse message from {}: {}",
+                peer_id, e
+            );
         }
     }
 }
@@ -1545,7 +1610,9 @@ async fn handle_inv_batch(state: &Arc<SharedState>, peer_id: &PeerId, batch: Inv
         let state_clone = Arc::clone(state);
         let peer_clone = *peer_id;
         tokio::spawn(async move {
-            if let Err(e) = send_to_peer_stream(&state_clone, peer_clone, StreamType::Tx, &encoded).await {
+            if let Err(e) =
+                send_to_peer_stream(&state_clone, peer_clone, StreamType::Tx, &encoded).await
+            {
                 warn!("Failed to send GETDATA to {}: {}", peer_clone, e);
             }
         });
@@ -1580,14 +1647,20 @@ async fn handle_getdata(
             let state_clone = Arc::clone(state);
             let peer_clone = *peer_id;
             tokio::spawn(async move {
-                if let Err(e) = send_to_peer_stream(&state_clone, peer_clone, StreamType::Tx, &encoded).await {
+                if let Err(e) =
+                    send_to_peer_stream(&state_clone, peer_clone, StreamType::Tx, &encoded).await
+                {
                     warn!("Failed to send TX to {}: {}", peer_clone, e);
                 } else {
                     debug!("TX_SEND: Sent TX {:02x?}... to {}", &hash[..4], peer_clone);
                 }
             });
         } else {
-            trace!("TX_GETDATA_MISS: Don't have TX {:02x?}... for {}", &hash[..4], peer_id);
+            trace!(
+                "TX_GETDATA_MISS: Don't have TX {:02x?}... for {}",
+                &hash[..4],
+                peer_id
+            );
         }
     }
 }
@@ -1626,14 +1699,16 @@ async fn handle_tx_response(state: &Arc<SharedState>, peer_id: &PeerId, tx: Vec<
     );
 
     // Forward to Core via bounded TX channel
-    if let Err(_) = state.tx_event_tx.try_send(
-        OverlayEvent::TxReceived { tx: tx.clone(), from: peer_id.clone() }
-    ) {
+    if let Err(_) = state.tx_event_tx.try_send(OverlayEvent::TxReceived {
+        tx: tx.clone(),
+        from: peer_id.clone(),
+    }) {
         let dropped = state.tx_dropped_count.fetch_add(1, Ordering::Relaxed) + 1;
         if dropped % 1000 == 1 {
             warn!(
                 "TX_BACKPRESSURE: Dropped TX {:02x?}... (total dropped: {})",
-                &hash[..4], dropped
+                &hash[..4],
+                dropped
             );
         }
     }
@@ -1642,14 +1717,15 @@ async fn handle_tx_response(state: &Arc<SharedState>, peer_id: &PeerId, tx: Vec<
     let peers_to_announce: Vec<PeerId> = {
         let streams = state.peer_streams.read().await;
         let tracker = state.inv_tracker.read().await;
-        
+
         // Get peers who already know about this TX (INV'd us)
         let known_sources: std::collections::HashSet<PeerId> = tracker
             .peek_sources(&hash)
             .map(|v| v.iter().cloned().collect())
             .unwrap_or_default();
-        
-        streams.keys()
+
+        streams
+            .keys()
             .filter(|p| **p != *peer_id && !known_sources.contains(p))
             .cloned()
             .collect()
@@ -1704,54 +1780,57 @@ async fn handle_tx_legacy(state: &Arc<SharedState>, peer_id: &PeerId, tx: Vec<u8
         tx.len(),
         peer_id
     );
-    
+
     // Forward to Core via bounded TX channel (backpressure)
     let tx_clone = tx.clone();
-    if let Err(_) = state.tx_event_tx.try_send(
-        OverlayEvent::TxReceived { tx: tx_clone, from: peer_id.clone() }
-    ) {
+    if let Err(_) = state.tx_event_tx.try_send(OverlayEvent::TxReceived {
+        tx: tx_clone,
+        from: peer_id.clone(),
+    }) {
         let dropped = state.tx_dropped_count.fetch_add(1, Ordering::Relaxed) + 1;
         if dropped % 1000 == 1 {
             warn!(
                 "TX_BACKPRESSURE: Dropped TX {:02x?}... (total dropped: {})",
-                &hash[..4], dropped
+                &hash[..4],
+                dropped
             );
         }
     }
-    
+
     // FLOOD: Determine peers to forward to (atomically mark as sent)
     let peers_to_forward: Vec<PeerId> = {
         let mut sent_to = state.tx_sent_to.write().await;
         let streams = state.peer_streams.read().await;
-        
-        let already_sent: std::collections::HashSet<PeerId> = sent_to
-            .get(&hash)
-            .cloned()
-            .unwrap_or_default();
-        
-        let peers: Vec<_> = streams.keys()
+
+        let already_sent: std::collections::HashSet<PeerId> =
+            sent_to.get(&hash).cloned().unwrap_or_default();
+
+        let peers: Vec<_> = streams
+            .keys()
             .filter(|p| **p != *peer_id && !already_sent.contains(p))
             .cloned()
             .collect();
-        
+
         let mut new_sent = already_sent;
         new_sent.extend(peers.iter().cloned());
         new_sent.insert(peer_id.clone());
         sent_to.put(hash, new_sent);
-        
+
         peers
     };
-    
+
     if peers_to_forward.is_empty() {
         return;
     }
-    
+
     // Spawn parallel send tasks - one per peer
     for peer in peers_to_forward {
         let state_forward = state.clone();
         let tx = tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = try_send_to_existing_stream(&state_forward, peer.clone(), StreamType::Tx, &tx).await {
+            if let Err(e) =
+                try_send_to_existing_stream(&state_forward, peer.clone(), StreamType::Tx, &tx).await
+            {
                 trace!("TX_FLOOD_SKIP: Failed to forward to {}: {}", peer, e);
             }
         });
@@ -1822,36 +1901,36 @@ async fn handle_inbound_txset_streams(mut incoming: IncomingStreams, state: Arc<
 }
 
 /// INV/GETDATA housekeeping task.
-/// 
+///
 /// Periodically:
 /// 1. Flushes INV batches that have timed out (100ms)
 /// 2. Checks GETDATA timeouts and retries to other peers
 async fn inv_getdata_housekeeping_task(state: Arc<SharedState>) {
-    use crate::flood::{INV_BATCH_MAX_DELAY, GETDATA_PEER_TIMEOUT};
-    
+    use crate::flood::{GETDATA_PEER_TIMEOUT, INV_BATCH_MAX_DELAY};
+
     // Run every 50ms (half the batch timeout for responsiveness)
     let mut interval = tokio::time::interval(Duration::from_millis(50));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    
+
     loop {
         interval.tick().await;
-        
+
         // 1. Flush expired INV batches
         let expired_peers = {
             let batcher = state.inv_batcher.read().await;
             batcher.expired_peers()
         };
-        
+
         for peer_id in expired_peers {
             flush_inv_batch_to_peer(&state, peer_id).await;
         }
-        
+
         // 2. Handle GETDATA timeouts
         let (to_retry, gave_up) = {
             let mut pending = state.pending_getdata.write().await;
             pending.process_timeouts()
         };
-        
+
         // Log give-ups
         for hash in &gave_up {
             warn!(
@@ -1859,21 +1938,21 @@ async fn inv_getdata_housekeeping_task(state: Arc<SharedState>) {
                 &hash[..4]
             );
         }
-        
+
         // Retry to next peer for timed-out requests
         for hash in to_retry {
             let next_peer = {
                 let mut tracker = state.inv_tracker.write().await;
                 tracker.get_next_peer(&hash)
             };
-            
+
             if let Some(peer) = next_peer {
                 debug!(
                     "GETDATA_RETRY: Retrying TX {:02x?}... to peer {}",
                     &hash[..4],
                     peer
                 );
-                
+
                 // Update pending request with new peer
                 {
                     let mut pending = state.pending_getdata.write().await;
@@ -1881,21 +1960,21 @@ async fn inv_getdata_housekeeping_task(state: Arc<SharedState>) {
                         req.retry(peer.clone());
                     }
                 }
-                
+
                 // Send GETDATA
                 let getdata = GetData { hashes: vec![hash] };
                 let msg = TxStreamMessage::GetData(getdata);
                 let encoded = msg.encode();
-                
-                if let Err(e) = try_send_to_existing_stream(&state, peer.clone(), StreamType::Tx, &encoded).await {
+
+                if let Err(e) =
+                    try_send_to_existing_stream(&state, peer.clone(), StreamType::Tx, &encoded)
+                        .await
+                {
                     debug!("Failed to send GETDATA retry to {}: {:?}", peer, e);
                 }
             } else {
                 // No more peers to try
-                debug!(
-                    "GETDATA_RETRY: No more peers for TX {:02x?}...",
-                    &hash[..4]
-                );
+                debug!("GETDATA_RETRY: No more peers for TX {:02x?}...", &hash[..4]);
             }
         }
     }
@@ -2828,16 +2907,13 @@ mod tests {
         // CRITICAL ASSERTION 1: ALL SCP messages must be received (never dropped)
         assert_eq!(
             scp_received, scp_msg_count,
-            "ALL SCP messages must be received (critical path). Got {}/{}", 
+            "ALL SCP messages must be received (critical path). Got {}/{}",
             scp_received, scp_msg_count
         );
 
         // ASSERTION 2: TXs may be dropped under backpressure - this is acceptable
         // We expect SOME TXs to be received (channel isn't completely broken)
-        assert!(
-            tx_received > 0,
-            "At least some TXs should be received"
-        );
+        assert!(tx_received > 0, "At least some TXs should be received");
 
         // ASSERTION 3: TX count should be bounded by channel capacity + what was processed
         // If backpressure is working, we shouldn't receive more than we can handle
@@ -3442,7 +3518,10 @@ async fn test_listen_on_configured_ip() {
             _ = tokio::time::sleep(Duration::from_millis(10)) => {}
         }
     }
-    assert!(connected, "Should connect when dialing configured listen IP");
+    assert!(
+        connected,
+        "Should connect when dialing configured listen IP"
+    );
 
     handle1.shutdown().await;
     handle2.shutdown().await;
@@ -3492,7 +3571,9 @@ async fn test_scp_broadcast_does_not_block_event_loop() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Connect
-    let addr1: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1", port1).parse().unwrap();
+    let addr1: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1", port1)
+        .parse()
+        .unwrap();
     handle2.dial(addr1).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -3526,7 +3607,7 @@ async fn test_scp_broadcast_does_not_block_event_loop() {
 #[tokio::test]
 async fn test_concurrent_scp_and_txset_writes_to_same_peer() {
     use std::sync::atomic::{AtomicBool, Ordering};
-    
+
     let keypair1 = Keypair::generate_ed25519();
     let keypair2 = Keypair::generate_ed25519();
     let peer2_id = PeerId::from_public_key(&keypair2.public());
@@ -3559,10 +3640,12 @@ async fn test_concurrent_scp_and_txset_writes_to_same_peer() {
     let large_txset = vec![0xBB; 512 * 1024]; // 512KB TxSet
     let handle1_txset = handle1.clone();
     let txset_started_clone = txset_started.clone();
-    
+
     let txset_task = tokio::spawn(async move {
         txset_started_clone.store(true, Ordering::SeqCst);
-        handle1_txset.send_txset(txset_hash, large_txset, peer2_id).await;
+        handle1_txset
+            .send_txset(txset_hash, large_txset, peer2_id)
+            .await;
     });
 
     // Wait for TxSet send to start
@@ -3627,14 +3710,14 @@ async fn test_pending_txset_cleanup_on_disconnect() {
     let keypair2 = Keypair::generate_ed25519();
 
     let peer1_id = PeerId::from_public_key(&keypair1.public());
-    
+
     let (handle1, mut events1, _tx_events1, overlay1) = create_overlay(keypair1).unwrap();
     let (handle2, mut events2, _tx_events2, overlay2) = create_overlay(keypair2).unwrap();
 
     // Start both overlays
     let listen_port1 = 22001;
     let listen_port2 = 22002;
-    
+
     tokio::spawn(async move { overlay1.run("127.0.0.1", listen_port1).await });
     tokio::spawn(async move { overlay2.run("127.0.0.1", listen_port2).await });
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -3687,7 +3770,9 @@ async fn test_pending_txset_cleanup_on_disconnect() {
     // Now have node2 respond with the TxSet
     // This verifies the pending cleanup works when response is received
     let txset_data = vec![0xAB; 1024];
-    handle2.send_txset(txset_hash, txset_data.clone(), peer1_id).await;
+    handle2
+        .send_txset(txset_hash, txset_data.clone(), peer1_id)
+        .await;
 
     // Verify node1 receives the TxSet response
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
@@ -3741,8 +3826,10 @@ async fn test_inv_getdata_tx_propagation() {
     let keypair2 = Keypair::generate_ed25519();
 
     // Create overlays with INV/GETDATA enabled
-    let (handle1, _events1, mut tx_events1, overlay1) = create_overlay_with_inv_getdata(keypair1.clone()).unwrap();
-    let (handle2, _events2, mut tx_events2, overlay2) = create_overlay_with_inv_getdata(keypair2).unwrap();
+    let (handle1, _events1, mut tx_events1, overlay1) =
+        create_overlay_with_inv_getdata(keypair1.clone()).unwrap();
+    let (handle2, _events2, mut tx_events2, overlay2) =
+        create_overlay_with_inv_getdata(keypair2).unwrap();
 
     let peer1_id = PeerId::from_public_key(&keypair1.public());
 
@@ -3760,9 +3847,12 @@ async fn test_inv_getdata_tx_propagation() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Node2 dials Node1
-    let addr: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1/p2p/{}", listen_port, peer1_id)
-        .parse()
-        .unwrap();
+    let addr: Multiaddr = format!(
+        "/ip4/127.0.0.1/udp/{}/quic-v1/p2p/{}",
+        listen_port, peer1_id
+    )
+    .parse()
+    .unwrap();
     handle2.dial(addr).await;
 
     // Wait for connection to establish and streams to open
@@ -3792,14 +3882,17 @@ async fn test_inv_getdata_tx_propagation() {
         }
     }
 
-    assert!(tx_received, "Node2 should receive TX via INV/GETDATA protocol");
+    assert!(
+        tx_received,
+        "Node2 should receive TX via INV/GETDATA protocol"
+    );
 
     // Suppress warning
     drop(tx_events1);
 
     handle1.shutdown().await;
     handle2.shutdown().await;
-    
+
     let _ = tokio::time::timeout(Duration::from_secs(1), overlay1_task).await;
     let _ = tokio::time::timeout(Duration::from_secs(1), overlay2_task).await;
 }
@@ -3812,15 +3905,18 @@ async fn test_inv_getdata_three_node_relay() {
     let keypair3 = Keypair::generate_ed25519();
 
     // Create overlays with INV/GETDATA enabled but NO Kademlia (controlled topology)
-    let (handle1, _events1, _tx_events1, overlay1) = create_overlay_no_kademlia(keypair1.clone()).unwrap();
-    let (handle2, _events2, mut tx_events2, overlay2) = create_overlay_no_kademlia(keypair2.clone()).unwrap();
-    let (handle3, _events3, mut tx_events3, overlay3) = create_overlay_no_kademlia(keypair3).unwrap();
+    let (handle1, _events1, _tx_events1, overlay1) =
+        create_overlay_no_kademlia(keypair1.clone()).unwrap();
+    let (handle2, _events2, mut tx_events2, overlay2) =
+        create_overlay_no_kademlia(keypair2.clone()).unwrap();
+    let (handle3, _events3, mut tx_events3, overlay3) =
+        create_overlay_no_kademlia(keypair3).unwrap();
 
     let peer1_id = PeerId::from_public_key(&keypair1.public());
     let peer2_id = PeerId::from_public_key(&keypair2.public());
 
     let base_port = 19261;
-    
+
     let overlay1_task = tokio::spawn(async move {
         overlay1.run("127.0.0.1", base_port).await;
     });
@@ -3841,14 +3937,18 @@ async fn test_inv_getdata_three_node_relay() {
         .parse()
         .unwrap();
     handle2.dial(addr1).await;
-    
+
     // Wait for Node1-Node2 connection
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Node3 dials Node2
-    let addr2: Multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic-v1/p2p/{}", base_port + 1, peer2_id)
-        .parse()
-        .unwrap();
+    let addr2: Multiaddr = format!(
+        "/ip4/127.0.0.1/udp/{}/quic-v1/p2p/{}",
+        base_port + 1,
+        peer2_id
+    )
+    .parse()
+    .unwrap();
     handle3.dial(addr2).await;
 
     // Wait for Node2-Node3 connection
@@ -3896,12 +3996,15 @@ async fn test_inv_getdata_three_node_relay() {
         }
     }
 
-    assert!(tx_received, "Node3 should receive TX relayed through Node2 via INV/GETDATA");
+    assert!(
+        tx_received,
+        "Node3 should receive TX relayed through Node2 via INV/GETDATA"
+    );
 
     handle1.shutdown().await;
     handle2.shutdown().await;
     handle3.shutdown().await;
-    
+
     let _ = tokio::time::timeout(Duration::from_secs(1), overlay1_task).await;
     let _ = tokio::time::timeout(Duration::from_secs(1), overlay2_task).await;
     let _ = tokio::time::timeout(Duration::from_secs(1), overlay3_task).await;

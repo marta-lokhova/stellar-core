@@ -76,7 +76,9 @@ pub struct InvBatch {
 impl InvBatch {
     /// Create a new empty batch
     pub fn new() -> Self {
-        InvBatch { entries: Vec::new() }
+        InvBatch {
+            entries: Vec::new(),
+        }
     }
 
     /// Add an entry to the batch
@@ -114,7 +116,10 @@ impl InvBatch {
         if count > INV_BATCH_MAX_SIZE {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("INV_BATCH count {} exceeds max {}", count, INV_BATCH_MAX_SIZE),
+                format!(
+                    "INV_BATCH count {} exceeds max {}",
+                    count, INV_BATCH_MAX_SIZE
+                ),
             ));
         }
 
@@ -260,10 +265,7 @@ impl TxStreamMessage {
     /// Decode message (including type prefix)
     pub fn decode(data: &[u8]) -> io::Result<Self> {
         if data.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Empty message",
-            ));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Empty message"));
         }
 
         let msg_type = TxMessageType::from_byte(data[0]).ok_or_else(|| {
@@ -476,7 +478,10 @@ mod tests {
     #[test]
     fn test_message_type_from_byte() {
         assert_eq!(TxMessageType::from_byte(0x01), Some(TxMessageType::Tx));
-        assert_eq!(TxMessageType::from_byte(0x02), Some(TxMessageType::InvBatch));
+        assert_eq!(
+            TxMessageType::from_byte(0x02),
+            Some(TxMessageType::InvBatch)
+        );
         assert_eq!(TxMessageType::from_byte(0x03), Some(TxMessageType::GetData));
         assert_eq!(TxMessageType::from_byte(0x00), None);
         assert_eq!(TxMessageType::from_byte(0xFF), None);
@@ -492,7 +497,10 @@ mod tests {
     fn test_decode_unknown_type_fails() {
         let result = TxStreamMessage::decode(&[0xFF, 0x01, 0x02]);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unknown message type"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unknown message type"));
     }
 
     #[test]

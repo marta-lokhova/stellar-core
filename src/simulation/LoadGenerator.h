@@ -330,8 +330,7 @@ class LoadGenerator
     std::pair<SorobanResources, uint32_t> sorobanRandomUploadResources();
     void maybeHandleFailedTx(TransactionFrameBaseConstPtr tx,
                              TxGenerator::TestAccountPtr sourceAccount,
-                             TxSubmitStatus status,
-                             TransactionResultCode code);
+                             TxSubmitStatus status, TransactionResultCode code);
 
     void logProgress(std::chrono::nanoseconds submitTimer,
                      GeneratedLoadConfig const& cfg) const;

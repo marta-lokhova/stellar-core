@@ -850,8 +850,7 @@ LoadGenerator::submitTx(GeneratedLoadConfig const& cfg,
     {
 
         if (cfg.mode != LoadGenMode::PAY_PREGENERATED && cfg.skipLowFeeTxs &&
-            (status ==
-                 TxSubmitStatus::TX_STATUS_TRY_AGAIN_LATER ||
+            (status == TxSubmitStatus::TX_STATUS_TRY_AGAIN_LATER ||
              (status == TxSubmitStatus::TX_STATUS_ERROR &&
               code == txINSUFFICIENT_FEE)))
         {
@@ -1051,8 +1050,7 @@ LoadGenerator::maybeHandleFailedTx(TransactionFrameBaseConstPtr tx,
 {
     // Note that if transaction is a DUPLICATE, its sequence number is
     // incremented on the next call to execute.
-    if (status == TxSubmitStatus::TX_STATUS_ERROR &&
-        code == txBAD_SEQ)
+    if (status == TxSubmitStatus::TX_STATUS_ERROR && code == txBAD_SEQ)
     {
         if (!mTxGenerator.loadAccount(sourceAccount))
         {

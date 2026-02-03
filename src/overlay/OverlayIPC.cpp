@@ -275,9 +275,10 @@ OverlayIPC::handleMessage(IPCMessage const& msg)
             uint32_t ledgerSeq;
             std::memcpy(&requestId, msg.payload.data(), 8);
             std::memcpy(&ledgerSeq, msg.payload.data() + 8, 4);
-            CLOG_DEBUG(Overlay,
-                       "Peer requesting SCP state for ledger >= {} (request_id={})",
-                       ledgerSeq, requestId);
+            CLOG_DEBUG(
+                Overlay,
+                "Peer requesting SCP state for ledger >= {} (request_id={})",
+                ledgerSeq, requestId);
 
             auto envelopes = mOnScpStateRequest(ledgerSeq);
             sendScpStateResponse(requestId, envelopes);
