@@ -20,7 +20,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{broadcast, mpsc, RwLock};
 use tracing::{debug, error, info, warn};
 
 use config::Config;
@@ -291,15 +291,31 @@ impl App {
                     from
                 );
 
-                // Extract TX set hashes and record which peer has them
+                // Extract TX set hashes and proactively fetch them
                 let txset_hashes = extract_txset_hashes_from_scp(&envelope);
                 for txhash in &txset_hashes {
+                    // Record peer as source for this TX set
                     debug!(
                         "Recording peer {} as source for TX set {:02x?}...",
                         from,
                         &txhash[..4]
                     );
                     self.libp2p_handle.record_txset_source(*txhash, from).await;
+
+                    // Proactively fetch if not already cached
+                    // (libp2p layer deduplicates if fetch already in progress)
+                    let is_cached = {
+                        let cache = self.tx_set_cache.read().await;
+                        cache.get(txhash).is_some()
+                    };
+                    if !is_cached {
+                        info!(
+                            "TXSET_AUTO_FETCH: Proactively fetching TX set {:02x?}... referenced in SCP from {}",
+                            &txhash[..4],
+                            from
+                        );
+                        self.libp2p_handle.fetch_txset(*txhash).await;
+                    }
                 }
 
                 // Forward to Core
@@ -335,36 +351,32 @@ impl App {
                     from
                 );
 
-                // Check if Core is waiting for this TX set
-                let was_pending = {
-                    let mut pending = self.pending_core_txset_requests.write().await;
-                    pending.remove(&hash)
-                };
-
-                if was_pending {
-                    // Core is waiting - send it immediately
-                    info!(
-                        "TXSET_TO_CORE: Sending fetched TxSet {:02x?}... ({} bytes) to Core",
-                        &hash[..4],
-                        data.len()
-                    );
-                    if let Err(e) = self
-                        .core_ipc
-                        .sender
-                        .send_tx_set_available(hash, data.clone())
-                    {
-                        error!("Failed to send TX set to Core: {}", e);
-                    }
+                // IMPORTANT: Cache the TxSet FIRST, before pushing to Core
+                // This ensures the TxSet is available when SCP processing resumes
+                // and Core subsequently broadcasts the SCP to other peers
+                {
+                    let mut cache = self.tx_set_cache.write().await;
+                    cache.insert(CachedTxSet {
+                        hash,
+                        xdr: data.clone(),
+                        ledger_seq: 0,
+                        tx_hashes: vec![],
+                    });
                 }
 
-                // Also cache the TxSet for future requests
-                let mut cache = self.tx_set_cache.write().await;
-                cache.insert(CachedTxSet {
-                    hash,
-                    xdr: data,
-                    ledger_seq: 0,
-                    tx_hashes: vec![],
-                });
+                // Always push TX set to Core (Core handles dedup)
+                info!(
+                    "TXSET_TO_CORE: Pushing TxSet {:02x?}... ({} bytes) to Core",
+                    &hash[..4],
+                    data.len()
+                );
+                if let Err(e) = self
+                    .core_ipc
+                    .sender
+                    .send_tx_set_available(hash, data.clone())
+                {
+                    error!("Failed to push TX set to Core: {}", e);
+                }
             }
             LibP2pOverlayEvent::TxSetRequested { hash, from } => {
                 info!("Peer {} requesting TxSet {:02x?}...", from, &hash[..4]);
@@ -691,12 +703,10 @@ impl App {
                         let _ = task.await;
                     }
 
-                    // Also clean up TX set cache (in case we had cached it)
-                    let cache = Arc::clone(&self.tx_set_cache);
-                    tokio::spawn(async move {
-                        let mut cache = cache.write().await;
-                        cache.remove(&tx_set_hash);
-                    });
+                    // NOTE: Don't remove TX set from cache on externalization!
+                    // Other nodes may still need to fetch it for catch-up.
+                    // The evict_before() call in LedgerClosed handler will clean
+                    // up old TX sets (keeping last 5 ledgers).
                 }
             }
 

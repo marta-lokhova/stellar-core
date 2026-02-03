@@ -44,10 +44,12 @@ impl PeerBatch {
         }
     }
 
-    fn add(&mut self, entry: InvEntry) -> bool {
+    /// Add entry and return full batch to send if at capacity.
+    /// Always accepts the entry.
+    fn add(&mut self, entry: InvEntry, max_size: usize) -> Option<InvBatch> {
         // Dedup within batch
         if self.seen.contains(&entry.hash) {
-            return false;
+            return None;
         }
         self.seen.insert(entry.hash);
 
@@ -55,11 +57,13 @@ impl PeerBatch {
             self.started_at = Some(Instant::now());
         }
         self.batch.push(entry);
-        true
-    }
 
-    fn is_full(&self, max_size: usize) -> bool {
-        self.batch.entries.len() >= max_size
+        // Return batch if full
+        if self.batch.entries.len() >= max_size {
+            Some(self.take())
+        } else {
+            None
+        }
     }
 
     fn is_expired(&self, max_delay: Duration) -> bool {
@@ -97,22 +101,10 @@ impl InvBatcher {
         }
     }
 
-    /// Add an INV entry for a peer. Returns true if batch should be flushed now.
-    pub fn add(&mut self, peer: PeerId, entry: InvEntry) -> bool {
+    /// Add an INV entry for a peer. Returns batch to send if full.
+    pub fn add(&mut self, peer: PeerId, entry: InvEntry) -> Option<InvBatch> {
         let batch = self.pending.entry(peer).or_insert_with(PeerBatch::new);
-        batch.add(entry);
-        batch.is_full(self.max_batch_size)
-    }
-
-    /// Add INV entries for multiple peers at once
-    pub fn add_to_peers(&mut self, peers: &[PeerId], entry: InvEntry) -> Vec<PeerId> {
-        let mut ready = Vec::new();
-        for peer in peers {
-            if self.add(*peer, entry.clone()) {
-                ready.push(*peer);
-            }
-        }
-        ready
+        batch.add(entry, self.max_batch_size)
     }
 
     /// Check which peers have expired batches
@@ -199,8 +191,8 @@ mod tests {
         let mut batcher = InvBatcher::new();
         let peer = make_peer(1);
 
-        let ready = batcher.add(peer, make_entry(0x01, 100));
-        assert!(!ready); // Not at capacity
+        let batch = batcher.add(peer, make_entry(0x01, 100));
+        assert!(batch.is_none()); // Not at capacity
 
         let batch = batcher.flush(&peer).unwrap();
         assert_eq!(batch.entries.len(), 1);
@@ -212,18 +204,19 @@ mod tests {
         let mut batcher = InvBatcher::with_config(10, Duration::from_secs(60));
         let peer = make_peer(1);
 
-        // Add 9 entries - should not trigger flush
+        // Add 9 entries - should not return batch
         for i in 0..9 {
-            let ready = batcher.add(peer, make_entry(i, i as i64));
-            assert!(!ready);
+            let batch = batcher.add(peer, make_entry(i, i as i64));
+            assert!(batch.is_none());
         }
 
-        // 10th entry should trigger flush
-        let ready = batcher.add(peer, make_entry(9, 9));
-        assert!(ready);
+        // 10th entry should return the full batch
+        let batch = batcher.add(peer, make_entry(9, 9));
+        assert!(batch.is_some());
+        assert_eq!(batch.unwrap().entries.len(), 10);
 
-        let batch = batcher.flush(&peer).unwrap();
-        assert_eq!(batch.entries.len(), 10);
+        // After returning batch, flush should be empty
+        assert!(batcher.flush(&peer).is_none());
     }
 
     #[test]
@@ -305,19 +298,18 @@ mod tests {
     }
 
     #[test]
-    fn test_inv_batcher_add_to_peers() {
+    fn test_inv_batcher_add_fills_and_returns() {
         let mut batcher = InvBatcher::with_config(2, Duration::from_secs(60));
-        let peers: Vec<_> = (0..5).map(|_| PeerId::random()).collect();
+        let peer = PeerId::random();
 
-        // Add entry to all peers
-        let entry = make_entry(0x01, 100);
-        let ready = batcher.add_to_peers(&peers, entry.clone());
-        assert!(ready.is_empty()); // None at capacity yet
+        // Add entry - not full yet
+        let batch = batcher.add(peer, make_entry(0x01, 100));
+        assert!(batch.is_none());
 
-        // Add another - should trigger for all
-        let entry2 = make_entry(0x02, 200);
-        let ready = batcher.add_to_peers(&peers, entry2);
-        assert_eq!(ready.len(), 5); // All peers at capacity
+        // Add another - returns full batch
+        let batch = batcher.add(peer, make_entry(0x02, 200));
+        assert!(batch.is_some());
+        assert_eq!(batch.unwrap().entries.len(), 2);
     }
 
     #[test]

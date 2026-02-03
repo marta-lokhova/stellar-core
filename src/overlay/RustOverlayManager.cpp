@@ -139,9 +139,6 @@ void
 RustOverlayManager::broadcastTransaction(TransactionEnvelope const& tx,
                                          int64_t fee, uint32_t numOps)
 {
-    CLOG_INFO(Overlay,
-              "RustOverlayManager::broadcastTransaction fee={} numOps={}", fee,
-              numOps);
     if (mOverlayIPC && !mShuttingDown)
     {
         mOverlayIPC->submitTransaction(tx, fee, numOps);

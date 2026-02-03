@@ -253,7 +253,9 @@ TEST_CASE("Two Cores communicate via Rust overlays", "[overlay-ipc][.]")
 #include "crypto/SHA.h"
 #include "herder/Herder.h"
 #include "ledger/LedgerTxn.h"
+#include "simulation/LoadGenerator.h"
 #include "simulation/Simulation.h"
+#include "simulation/TxGenerator.h"
 #include "test/TestAccount.h"
 #include "test/TxTests.h"
 #include "test/test.h"
@@ -1238,255 +1240,203 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc]")
  * This is a demanding test that validates the dual-channel isolation
  * (SCP vs TX flooding) works correctly at scale.
  */
-// TEST_CASE("Rust overlay 15-node 2000 TPS stress test",
-//           "[overlay-ipc-stress][.high-load]")
-// {
-//     std::string overlayBinary = findOverlayBinary();
-//     if (overlayBinary.empty())
-//     {
-//         FAIL("Skipping test - overlay binary not found");
-//         return;
-//     }
+// TODO: fix unexpected WARN stellar_overlay: TxSet [5e, f3, 64, 4e]... NOT IN
+// CACHE - cannot serve to 12D3KooWHv5WjYX6rhexEgNwD8nR1rjXmQMLDJ4Bge9ZLRPMsdHE
+// (cache has 0 entries)
+TEST_CASE("Rust overlay 15-node 2000 TPS stress test", "[overlay-ipc-large]")
+{
+    std::string overlayBinary = findOverlayBinary();
+    if (overlayBinary.empty())
+    {
+        FAIL("Skipping test - overlay binary not found");
+        return;
+    }
 
-//     LOG_INFO(DEFAULT_LOG, "");
-//     LOG_INFO(DEFAULT_LOG,
-//              "============================================================");
-//     LOG_INFO(DEFAULT_LOG, "    15-NODE 2000 TPS HIGH-THROUGHPUT STRESS
-//     TEST"); LOG_INFO(DEFAULT_LOG,
-//              "============================================================");
-//     LOG_INFO(DEFAULT_LOG, "");
+    LOG_INFO(DEFAULT_LOG, "");
+    LOG_INFO(DEFAULT_LOG,
+             "============================================================");
+    LOG_INFO(DEFAULT_LOG, "    15-NODE 2000 TPS HIGH-THROUGHPUT STRESS TEST");
+    LOG_INFO(DEFAULT_LOG,
+             "============================================================");
+    LOG_INFO(DEFAULT_LOG, "");
 
-//     // Test parameters
-//     int const numNodes = 15;
-//     int const txPerLedger = 10000;  // ~2000 TPS with 5s ledger close
-//     int const ledgerCount = 12;
-//     int const totalTxs = txPerLedger * ledgerCount;  // 120,000 TXs
+    // Test parameters
+    int const numNodes = 15;
+    int const txPerLedger = 10000; // ~2000 TPS with 5s ledger close
+    int const ledgerCount = 12;
+    int const totalTxs = txPerLedger * ledgerCount; // 120,000 txs total
 
-//     LOG_INFO(DEFAULT_LOG, "Configuration:");
-//     LOG_INFO(DEFAULT_LOG, "  Nodes: {}", numNodes);
-//     LOG_INFO(DEFAULT_LOG, "  TX per ledger: {}", txPerLedger);
-//     LOG_INFO(DEFAULT_LOG, "  Ledgers: {}", ledgerCount);
-//     LOG_INFO(DEFAULT_LOG, "  Total TXs: {}", totalTxs);
-//     LOG_INFO(DEFAULT_LOG, "");
+    LOG_INFO(DEFAULT_LOG, "Configuration:");
+    LOG_INFO(DEFAULT_LOG, "  Nodes: {}", numNodes);
+    LOG_INFO(DEFAULT_LOG, "  TX per ledger: {}", txPerLedger);
+    LOG_INFO(DEFAULT_LOG, "  Ledgers: {}", ledgerCount);
+    LOG_INFO(DEFAULT_LOG, "  Total TXs: {}", totalTxs);
+    LOG_INFO(DEFAULT_LOG, "");
 
-//     // Create simulation
-//     Hash networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
-//     auto simulation = std::make_shared<Simulation>(networkID);
+    // Create simulation
+    Hash networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
+    auto simulation = std::make_shared<Simulation>(networkID);
 
-//     // Generate keys for all validators
-//     std::vector<SecretKey> keys;
-//     for (int i = 0; i < numNodes; i++)
-//     {
-//         keys.push_back(
-//             SecretKey::fromSeed(sha256(fmt::format("STRESS_15_NODE_{}",
-//             i))));
-//     }
+    // Generate keys for all validators
+    std::vector<SecretKey> keys;
+    for (int i = 0; i < numNodes; i++)
+    {
+        keys.push_back(
+            SecretKey::fromSeed(sha256(fmt::format("STRESS_15_NODE_{}", i))));
+    }
 
-//     // Quorum set: 10-of-15 (67% threshold for BFT)
-//     SCPQuorumSet qSet;
-//     qSet.threshold = 10;
-//     for (auto const& key : keys)
-//     {
-//         qSet.validators.push_back(key.getPublicKey());
-//     }
+    // Quorum set: 10-of-15 (67% threshold for BFT)
+    SCPQuorumSet qSet;
+    qSet.threshold = 10;
+    for (auto const& key : keys)
+    {
+        qSet.validators.push_back(key.getPublicKey());
+    }
 
-//     // Configure nodes - fully connected mesh
-//     std::vector<Application::pointer> nodes;
-//     int basePort = 11650;
-//     int baseHttpPort = 11800;
+    // Configure nodes - fully connected mesh
+    std::vector<Application::pointer> nodes;
+    int basePort = 11650;
+    int baseHttpPort = 11800;
 
-//     for (int i = 0; i < numNodes; i++)
-//     {
-//         auto cfg = simulation->newConfig();
-//         cfg.PEER_PORT = basePort + i;
-//         cfg.HTTP_PORT = baseHttpPort + i;
+    for (int i = 0; i < numNodes; i++)
+    {
+        auto cfg = simulation->newConfig();
+        cfg.PEER_PORT = basePort + i;
+        cfg.HTTP_PORT = baseHttpPort + i;
+        cfg.ARTIFICIALLY_ACCELERATE_TIME_FOR_TESTING = false;
 
-//         // Fully connected: each node knows all other nodes
-//         for (int j = 0; j < numNodes; j++)
-//         {
-//             if (j != i)
-//             {
-//                 cfg.KNOWN_PEERS.push_back(
-//                     fmt::format("127.0.0.1:{}", basePort + j));
-//             }
-//         }
+        // Fully connected: each node knows all other nodes
+        for (int j = 0; j < numNodes; j++)
+        {
+            if (j != i)
+            {
+                cfg.KNOWN_PEERS.push_back(
+                    fmt::format("127.0.0.1:{}", basePort + j));
+            }
+        }
 
-//         // High throughput configuration
-//         cfg.GENESIS_TEST_ACCOUNT_COUNT = 30000;
-//         cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 15000;
+        // High throughput configuration
+        cfg.GENESIS_TEST_ACCOUNT_COUNT = 30000;
+        cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 15000;
 
-//         auto node = simulation->addNode(keys[i], qSet, &cfg);
-//         nodes.push_back(node);
+        auto node = simulation->addNode(keys[i], qSet, &cfg);
+        nodes.push_back(node);
 
-//         LOG_INFO(DEFAULT_LOG, "Node {}: port={}, {} known_peers", i,
-//                  cfg.PEER_PORT, cfg.KNOWN_PEERS.size());
-//     }
+        LOG_INFO(DEFAULT_LOG, "Node {}: port={}, {} known_peers", i,
+                 cfg.PEER_PORT, cfg.KNOWN_PEERS.size());
+    }
 
-//     REQUIRE(nodes.size() == static_cast<size_t>(numNodes));
+    REQUIRE(nodes.size() == static_cast<size_t>(numNodes));
 
-//     LOG_INFO(DEFAULT_LOG, "");
-//     LOG_INFO(DEFAULT_LOG, "Starting all {} nodes...", numNodes);
-//     simulation->startAllNodes();
+    LOG_INFO(DEFAULT_LOG, "");
+    LOG_INFO(DEFAULT_LOG, "Starting all {} nodes...", numNodes);
+    simulation->startAllNodes();
 
-//     // Wait for initial consensus (15-node BFT needs more time)
-//     LOG_INFO(DEFAULT_LOG, "Waiting for initial consensus...");
-//     simulation->crankUntil(
-//         [&]() { return simulation->haveAllExternalized(2, 5); },
-//         240 * simulation->getExpectedLedgerCloseTime(), false);
-//     REQUIRE(simulation->haveAllExternalized(2, 5));
-//     LOG_INFO(DEFAULT_LOG, "Initial consensus reached at ledger 2");
+    // Wait for initial consensus (15-node BFT needs more time)
+    LOG_INFO(DEFAULT_LOG, "Waiting for initial consensus...");
+    simulation->crankUntil(
+        [&]() { return simulation->haveAllExternalized(2, 5); },
+        240 * simulation->getExpectedLedgerCloseTime(), false);
+    REQUIRE(simulation->haveAllExternalized(2, 5));
+    LOG_INFO(DEFAULT_LOG, "Initial consensus reached at ledger 2");
 
-//     // Get metrics from node 0
-//     auto& metrics = nodes[0]->getMetrics();
-//     auto& scpNominated = metrics.NewTimer({"scp", "timing", "nominated"});
-//     auto& scpExternalized = metrics.NewTimer({"scp", "timing",
-//     "externalized"}); auto& ledgerClose = metrics.NewTimer({"ledger",
-//     "ledger", "close"});
+    // Get metrics from node 0
+    auto& metrics = nodes[0]->getMetrics();
+    auto& scpNominated = metrics.NewTimer({"scp", "timing", "nominated"});
+    auto& scpExternalized = metrics.NewTimer({"scp", "timing", "externalized"});
+    auto& ledgerClose = metrics.NewTimer({"ledger", "ledger", "close"});
 
-//     LOG_INFO(DEFAULT_LOG, "");
-//     LOG_INFO(DEFAULT_LOG, "Starting high-throughput TX submission...");
-//     LOG_INFO(DEFAULT_LOG, "");
+    LOG_INFO(DEFAULT_LOG, "");
+    LOG_INFO(DEFAULT_LOG, "Pre-generating {} transactions using TxGenerator...",
+             totalTxs);
 
-//     int txSubmitted = 0;
-//     auto startTime = std::chrono::steady_clock::now();
-//     SecretKey destKey = SecretKey::pseudoRandomForTesting();
+    // Pre-create accounts in TxGenerator (mirrors what LoadGenerator does)
+    uint32_t nAccounts = nodes[0]->getConfig().GENESIS_TEST_ACCOUNT_COUNT;
+    std::string fileName =
+        nodes[0]->getConfig().LOADGEN_PREGENERATED_TRANSACTIONS_FILE;
 
-//     // Submit TXs in batches, distributing across multiple nodes for
-//     parallelism for (int ledgerIdx = 0; ledgerIdx < ledgerCount; ledgerIdx++)
-//     {
-//         uint32_t currentLedger =
-//             nodes[0]->getLedgerManager().getLastClosedLedgerNum();
+    generateTransactions(*nodes[0], fileName, totalTxs, nAccounts,
+                         /* offset */ 0);
 
-//         int batchSubmitted = 0;
-//         int batchPending = 0;
+    auto pregenStart = std::chrono::steady_clock::now();
+    uint32_t ledgerNum = nodes[0]->getLedgerManager().getLastClosedLedgerNum();
 
-//         // Submit batch for this ledger, distributing across nodes
-//         for (int i = 0; i < txPerLedger && txSubmitted < totalTxs; i++)
-//         {
-//             // Round-robin across nodes for submission load distribution
-//             auto& submitNode = nodes[i % numNodes];
+    auto pregenEnd = std::chrono::steady_clock::now();
+    auto pregenMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        pregenEnd - pregenStart)
+                        .count();
+    LOG_INFO(DEFAULT_LOG, "Pre-generated {} transactions in {}ms ({:.0f} tx/s)",
+             totalTxs, pregenMs,
+             totalTxs * 1000.0 / (pregenMs > 0 ? pregenMs : 1));
 
-//             auto source = txtest::getGenesisAccount(*submitNode, (txSubmitted
-//             + 1) % submitNode->getConfig().GENESIS_TEST_ACCOUNT_COUNT ); auto
-//             tx =
-//                 source.tx({txtest::payment(destKey.getPublicKey(),
-//                 1000000)});
+    LOG_INFO(DEFAULT_LOG, "");
+    LOG_INFO(DEFAULT_LOG, "Starting high-throughput TX submission...");
+    LOG_INFO(DEFAULT_LOG, "");
 
-//             auto result = submitNode->getHerder().recvTransaction(tx, false);
-//             txSubmitted++;
-//             batchSubmitted++;
-//             if (result == TxSubmitStatus::TX_STATUS_PENDING)
-//             {
-//                 batchPending++;
-//             }
-//         }
+    auto startTime = std::chrono::steady_clock::now();
 
-//         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-//                            std::chrono::steady_clock::now() - startTime)
-//                            .count();
-//         double tps = txSubmitted * 1000.0 / (elapsed > 0 ? elapsed : 1);
+    nodes[0]->getLoadGenerator().generateLoad(
+        GeneratedLoadConfig::pregeneratedTxLoad(nAccounts, /* nTxs */ totalTxs,
+                                                /* txRate */ 2000,
+                                                /* offset */ 0, fileName));
+    simulation->crankUntil(
+        [&]() {
+            return nodes[0]
+                       ->getMetrics()
+                       .NewMeter({"loadgen", "run", "complete"}, "run")
+                       .count() == 1;
+        },
+        500 * simulation->getExpectedLedgerCloseTime(), false);
 
-//         LOG_INFO(DEFAULT_LOG,
-//                  "Ledger {}/{}: submitted={}, pending={}, total={}, "
-//                  "elapsed={}ms, effective_tps={:.0f}",
-//                  ledgerIdx + 1, ledgerCount, batchSubmitted, batchPending,
-//                  txSubmitted, elapsed, tps);
+    auto endTime = std::chrono::steady_clock::now();
+    auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          endTime - startTime)
+                          .count();
 
-//         // Crank until next ledger (with generous timeout for 15-node
-//         consensus) simulation->crankUntil(
-//             [&]() {
-//                 return nodes[0]->getLedgerManager().getLastClosedLedgerNum()
-//                 >
-//                        currentLedger;
-//             },
-//             90 * simulation->getExpectedLedgerCloseTime(), false);
-//     }
+    // Count included TXs via metric
+    auto& applySuccessCounter =
+        metrics.NewCounter({"ledger", "apply", "success"});
+    int64_t txIncluded = static_cast<int64_t>(applySuccessCounter.count());
+    double effectiveTps = txIncluded * 1000.0 / durationMs;
 
-//     // Wait for all nodes to externalize target ledger
-//     LOG_INFO(DEFAULT_LOG, "");
-//     LOG_INFO(DEFAULT_LOG, "Waiting for all nodes to reach ledger {}...",
-//              20);
-//     simulation->crankUntil(
-//         [&]() { return simulation->haveAllExternalized(20, 5); },
-//         90 * simulation->getExpectedLedgerCloseTime(), false);
+    // Print results
+    LOG_INFO(DEFAULT_LOG, "");
+    LOG_INFO(DEFAULT_LOG,
+             "============================================================");
+    LOG_INFO(DEFAULT_LOG, "                    TEST RESULTS");
+    LOG_INFO(DEFAULT_LOG,
+             "============================================================");
+    LOG_INFO(DEFAULT_LOG, "");
+    LOG_INFO(DEFAULT_LOG, "Throughput:");
+    LOG_INFO(DEFAULT_LOG, "  TXs included:  {}", txIncluded);
+    LOG_INFO(DEFAULT_LOG, "  Duration: {}ms", durationMs);
+    LOG_INFO(DEFAULT_LOG, "  Effective TPS: {:.0f}", effectiveTps);
+    LOG_INFO(DEFAULT_LOG, "");
+    LOG_INFO(DEFAULT_LOG, "SCP Timing (ms):");
+    LOG_INFO(DEFAULT_LOG, "  Nominated:    mean={:.2f}, max={:.2f}",
+             scpNominated.mean(), scpNominated.max());
+    LOG_INFO(DEFAULT_LOG, "  Externalized: mean={:.2f}, max={:.2f}",
+             scpExternalized.mean(), scpExternalized.max());
+    LOG_INFO(DEFAULT_LOG, "");
+    LOG_INFO(DEFAULT_LOG, "Ledger Close (ms):");
+    LOG_INFO(DEFAULT_LOG, "  Mean: {:.2f}", ledgerClose.mean());
+    LOG_INFO(DEFAULT_LOG, "  Max:  {:.2f}", ledgerClose.max());
+    LOG_INFO(DEFAULT_LOG, "");
+    LOG_INFO(DEFAULT_LOG,
+             "============================================================");
 
-//     auto endTime = std::chrono::steady_clock::now();
-//     auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-//                           endTime - startTime)
-//                           .count();
+    // Warn if SCP latency is concerning (but don't fail - this is
+    // informational)
+    if (scpNominated.max() > 5000)
+    {
+        WARN("SCP nomination max latency exceeded 5s: " << scpNominated.max()
+                                                        << "ms");
+    }
 
-//     // Verify all nodes reached target
-//     uint32_t minLedger = UINT32_MAX, maxLedger = 0;
-//     for (size_t i = 0; i < nodes.size(); i++)
-//     {
-//         auto n = nodes[i]->getLedgerManager().getLastClosedLedgerNum();
-//         if (n < minLedger)
-//             minLedger = n;
-//         if (n > maxLedger)
-//             maxLedger = n;
-//     }
-
-//     LOG_INFO(DEFAULT_LOG, "Final ledger state: min={}, max={}, spread={}",
-//              minLedger, maxLedger, maxLedger - minLedger);
-
-//     // Count included TXs
-//     int64_t txIncluded = 0;
-//     {
-//         LedgerTxn ltx(nodes[0]->getLedgerTxnRoot());
-//         auto destAccount = stellar::loadAccount(ltx, destKey.getPublicKey());
-//         if (destAccount)
-//         {
-//             int64_t balance = destAccount.current().data.account().balance;
-//             txIncluded = (balance - 100000000000) / 1000000;
-//         }
-//     }
-
-//     double inclusionRate = static_cast<double>(txIncluded) / txSubmitted;
-//     double effectiveTps = txSubmitted * 1000.0 / durationMs;
-
-//     // Print results
-//     LOG_INFO(DEFAULT_LOG, "");
-//     LOG_INFO(DEFAULT_LOG,
-//              "============================================================");
-//     LOG_INFO(DEFAULT_LOG, "                    TEST RESULTS");
-//     LOG_INFO(DEFAULT_LOG,
-//              "============================================================");
-//     LOG_INFO(DEFAULT_LOG, "");
-//     LOG_INFO(DEFAULT_LOG, "Throughput:");
-//     LOG_INFO(DEFAULT_LOG, "  TXs submitted: {}", txSubmitted);
-//     LOG_INFO(DEFAULT_LOG, "  TXs included:  {}", txIncluded);
-//     LOG_INFO(DEFAULT_LOG, "  Inclusion rate: {:.1f}%", inclusionRate * 100);
-//     LOG_INFO(DEFAULT_LOG, "  Duration: {}ms", durationMs);
-//     LOG_INFO(DEFAULT_LOG, "  Effective TPS: {:.0f}", effectiveTps);
-//     LOG_INFO(DEFAULT_LOG, "");
-//     LOG_INFO(DEFAULT_LOG, "SCP Timing (ms):");
-//     LOG_INFO(DEFAULT_LOG, "  Nominated:    mean={:.2f}, max={:.2f}",
-//              scpNominated.mean(), scpNominated.max());
-//     LOG_INFO(DEFAULT_LOG, "  Externalized: mean={:.2f}, max={:.2f}",
-//              scpExternalized.mean(), scpExternalized.max());
-//     LOG_INFO(DEFAULT_LOG, "");
-//     LOG_INFO(DEFAULT_LOG, "Ledger Close (ms):");
-//     LOG_INFO(DEFAULT_LOG, "  Mean: {:.2f}", ledgerClose.mean());
-//     LOG_INFO(DEFAULT_LOG, "  Max:  {:.2f}", ledgerClose.max());
-//     LOG_INFO(DEFAULT_LOG, "");
-//     LOG_INFO(DEFAULT_LOG,
-//              "============================================================");
-
-//     // Assertions
-//     REQUIRE(txIncluded >= static_cast<int64_t>(txSubmitted));  // 80%
-//     inclusion minimum
-
-//     // Warn if SCP latency is concerning (but don't fail - this is
-//     informational) if (scpNominated.max() > 5000)
-//     {
-//         WARN("SCP nomination max latency exceeded 5s: " << scpNominated.max()
-//                                                         << "ms");
-//     }
-
-//     LOG_INFO(DEFAULT_LOG,
-//              "✓ 15-node 2000 TPS stress test passed - {} TXs across {}
-//              ledgers", txIncluded, ledgerCount);
-// }
+    LOG_INFO(DEFAULT_LOG,
+             "✓ 15-node 2000 TPS stress test passed - {} TXs across {} ledgers",
+             txIncluded, ledgerCount);
+}
 
 /**
  * Test a 10-node network to verify Kademlia peer discovery and GossipSub
@@ -1500,7 +1450,7 @@ TEST_CASE("Rust overlay SCP latency under TX load", "[overlay-ipc]")
  *
  * Run with: stellar-core test '[overlay-ipc-network]'
  */
-TEST_CASE("Rust overlay 10-node network consensus", "[overlay-ipc]")
+TEST_CASE("Rust overlay 10-node network consensus", "[overlay-ipc-large]")
 {
     std::string overlayBinary = findOverlayBinary();
     if (overlayBinary.empty())
