@@ -1562,3 +1562,154 @@ TEST_CASE("Rust overlay 10-node network consensus", "[overlay-ipc-large]")
     REQUIRE(simulation->haveAllExternalized(5, 10));
     LOG_INFO(DEFAULT_LOG, "✓ Network formed and consensus reached");
 }
+
+/**
+ * Test that Rust overlay correctly handles TX sets at protocol 19 (pre-Soroban).
+ *
+ * Protocol < 20: Uses TransactionSet (non-generalized)
+ * Protocol >= 20: Uses GeneralizedTransactionSet
+ *
+ * At protocol 19, TX sets are NOT cached to Rust overlay since it only
+ * supports GeneralizedTransactionSet.
+ */
+TEST_CASE("Rust overlay pre-Soroban TX set handling",
+          "[overlay-ipc-rust][simulation][!hide][.]")
+{
+    // Network at protocol 19 (pre-Soroban, non-generalized TX sets)
+    Hash networkID = sha256("Test network passphrase for pre-Soroban");
+
+    Simulation::pointer simulation = std::make_shared<Simulation>(networkID);
+
+    // Create 3-node network
+    SIMULATION_CREATE_NODE(0);
+    SIMULATION_CREATE_NODE(1);
+    SIMULATION_CREATE_NODE(2);
+
+    SCPQuorumSet qSet;
+    qSet.threshold = 2;
+    qSet.validators.push_back(v0NodeID);
+    qSet.validators.push_back(v1NodeID);
+    qSet.validators.push_back(v2NodeID);
+
+    // Configure nodes with explicit KNOWN_PEERS and ports
+    int basePort = 11800;
+    int baseHttpPort = 11900;
+
+    std::vector<SecretKey> keys = {v0SecretKey, v1SecretKey, v2SecretKey};
+
+    for (size_t i = 0; i < keys.size(); i++)
+    {
+        auto cfg = simulation->newConfig();
+        cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION = 19; // Pre-Soroban
+        cfg.ARTIFICIALLY_ACCELERATE_TIME_FOR_TESTING = true;
+        cfg.ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING = true;
+        cfg.PEER_PORT = basePort + static_cast<int>(i);
+        cfg.HTTP_PORT = baseHttpPort + static_cast<int>(i);
+
+        // Each node knows all other nodes
+        for (size_t j = 0; j < keys.size(); j++)
+        {
+            if (i != j)
+            {
+                cfg.KNOWN_PEERS.push_back(
+                    fmt::format("127.0.0.1:{}", basePort + j));
+            }
+        }
+
+        simulation->addNode(keys[i], qSet, &cfg);
+    }
+
+    simulation->startAllNodes();
+
+    // Wait for consensus - this exercises TX set building at protocol 19
+    // The fix ensures we don't crash when building non-generalized TX sets
+    simulation->crankUntil(
+        [&]() { return simulation->haveAllExternalized(5, 2); },
+        60 * simulation->getExpectedLedgerCloseTime(), false);
+
+    auto nodes = simulation->getNodes();
+    REQUIRE(nodes.size() == 3);
+
+    // Verify we're at protocol 19
+    auto lcl = nodes[0]->getLedgerManager().getLastClosedLedgerHeader();
+    LOG_INFO(DEFAULT_LOG, "Protocol version: {}", lcl.header.ledgerVersion);
+    REQUIRE(lcl.header.ledgerVersion == 19);
+
+    REQUIRE(simulation->haveAllExternalized(5, 2));
+    LOG_INFO(DEFAULT_LOG,
+             "✓ Pre-Soroban consensus works with Rust overlay");
+}
+
+/**
+ * Test that Rust overlay correctly handles TX sets at protocol 25 (Soroban).
+ *
+ * Protocol >= 20: Uses GeneralizedTransactionSet
+ * TX sets should be cached to Rust overlay.
+ */
+TEST_CASE("Rust overlay Soroban TX set handling",
+          "[overlay-ipc-rust][simulation][!hide][.]")
+{
+    // Network at protocol 25 (Soroban, generalized TX sets)
+    Hash networkID = sha256("Test network passphrase for Soroban");
+
+    Simulation::pointer simulation = std::make_shared<Simulation>(networkID);
+
+    // Create 3-node network
+    SIMULATION_CREATE_NODE(0);
+    SIMULATION_CREATE_NODE(1);
+    SIMULATION_CREATE_NODE(2);
+
+    SCPQuorumSet qSet;
+    qSet.threshold = 2;
+    qSet.validators.push_back(v0NodeID);
+    qSet.validators.push_back(v1NodeID);
+    qSet.validators.push_back(v2NodeID);
+
+    // Configure nodes with explicit KNOWN_PEERS and ports
+    int basePort = 11850;
+    int baseHttpPort = 11950;
+
+    std::vector<SecretKey> keys = {v0SecretKey, v1SecretKey, v2SecretKey};
+
+    for (size_t i = 0; i < keys.size(); i++)
+    {
+        auto cfg = simulation->newConfig();
+        cfg.TESTING_UPGRADE_LEDGER_PROTOCOL_VERSION = 25; // Soroban
+        cfg.ARTIFICIALLY_ACCELERATE_TIME_FOR_TESTING = true;
+        cfg.ARTIFICIALLY_GENERATE_LOAD_FOR_TESTING = true;
+        cfg.PEER_PORT = basePort + static_cast<int>(i);
+        cfg.HTTP_PORT = baseHttpPort + static_cast<int>(i);
+
+        // Each node knows all other nodes
+        for (size_t j = 0; j < keys.size(); j++)
+        {
+            if (i != j)
+            {
+                cfg.KNOWN_PEERS.push_back(
+                    fmt::format("127.0.0.1:{}", basePort + j));
+            }
+        }
+
+        simulation->addNode(keys[i], qSet, &cfg);
+    }
+
+    simulation->startAllNodes();
+
+    // Wait for consensus - this exercises TX set building at protocol 25
+    // The TX sets should be cached to Rust overlay as GeneralizedTransactionSet
+    simulation->crankUntil(
+        [&]() { return simulation->haveAllExternalized(5, 2); },
+        60 * simulation->getExpectedLedgerCloseTime(), false);
+
+    auto nodes = simulation->getNodes();
+    REQUIRE(nodes.size() == 3);
+
+    // Verify we're at protocol 25
+    auto lcl = nodes[0]->getLedgerManager().getLastClosedLedgerHeader();
+    LOG_INFO(DEFAULT_LOG, "Protocol version: {}", lcl.header.ledgerVersion);
+    REQUIRE(lcl.header.ledgerVersion == 25);
+
+    REQUIRE(simulation->haveAllExternalized(5, 2));
+    LOG_INFO(DEFAULT_LOG,
+             "✓ Soroban consensus works with Rust overlay TX set caching");
+}

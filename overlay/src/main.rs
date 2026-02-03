@@ -832,31 +832,14 @@ impl App {
                             }
                         }
 
-                        // After dialing known peers, bootstrap Kademlia for peer discovery
-                        // This allows nodes to discover peers beyond KNOWN_PEERS
-                        if peer_count > 0 {
-                            let handle = self.libp2p_handle.clone();
-                            tokio::spawn(async move {
-                                // Give initial connections time to establish
-                                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                                info!("Initiating Kademlia bootstrap to discover additional peers");
-                                handle.bootstrap_kademlia().await;
+                        // Kademlia bootstrap is now triggered automatically when the first peer
+                        // is identified (in handle_identify_event). This ensures the routing
+                        // table has at least one peer before attempting bootstrap, avoiding
+                        // "No known peers" errors in slow network environments like k8s.
 
-                                // TODO: Add periodic re-bootstrap for network maintenance
-                                // Kademlia routing tables become stale as peers join/leave
-                                // Re-bootstrapping every 5-10 minutes keeps routing fresh
-                                /*
-                                let mut interval = tokio::time::interval(
-                                    tokio::time::Duration::from_secs(300) // 5 minutes
-                                );
-                                loop {
-                                    interval.tick().await;
-                                    info!("Periodic Kademlia re-bootstrap");
-                                    handle.bootstrap_kademlia().await;
-                                }
-                                */
-                            });
-                        }
+                        // TODO: Consider adding periodic re-bootstrap for network maintenance
+                        // Kademlia routing tables become stale as peers join/leave
+                        // Re-bootstrapping every 5-10 minutes keeps routing fresh
                     }
                 }
             }

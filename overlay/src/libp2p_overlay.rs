@@ -307,6 +307,8 @@ pub struct StellarOverlay {
     control: Control,
     state: Arc<SharedState>,
     cmd_rx: mpsc::Receiver<OverlayCommand>,
+    /// Track whether Kademlia bootstrap has been triggered (only do it once)
+    kademlia_bootstrap_triggered: bool,
 }
 
 /// Create the overlay and return handle + event receivers
@@ -400,6 +402,7 @@ pub fn create_overlay(
         control,
         state,
         cmd_rx,
+        kademlia_bootstrap_triggered: false,
     };
 
     let handle = OverlayHandle { cmd_tx };
@@ -514,6 +517,7 @@ fn create_test_overlay(
         control,
         state,
         cmd_rx,
+        kademlia_bootstrap_triggered: false,
     };
     let handle = OverlayHandle { cmd_tx };
 
@@ -699,6 +703,18 @@ impl StellarOverlay {
                         warn!("Failed to dial discovered peer {}: {:?}", peer_id, e);
                     }
                     break; // Only dial once with first address
+                }
+            }
+
+            // Trigger Kademlia bootstrap on first identified peer
+            // This ensures the routing table has at least one peer before bootstrapping
+            if !self.kademlia_bootstrap_triggered {
+                self.kademlia_bootstrap_triggered = true;
+                info!("Kademlia: First peer identified, initiating bootstrap");
+                if let Err(e) = self.swarm.behaviour_mut().kademlia.bootstrap() {
+                    warn!("Kademlia: Bootstrap failed to start: {:?}", e);
+                } else {
+                    info!("Kademlia: Bootstrap initiated successfully");
                 }
             }
         }
