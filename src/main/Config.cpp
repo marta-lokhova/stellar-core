@@ -8,8 +8,8 @@
 #include "bucket/LiveBucketList.h"
 #include "crypto/KeyUtils.h"
 #include "herder/Herder.h"
-#include "ledger/LedgerManager.h"
 #include "history/HistoryArchive.h"
+#include "ledger/LedgerManager.h"
 #include "main/StellarCoreVersion.h"
 #include "overlay/NetworkConstants.h"
 #include "scp/LocalNode.h"
@@ -239,8 +239,8 @@ Config::Config() : NODE_SEED(SecretKey::random())
 
     // Rust overlay defaults
     OVERLAY_BINARY_PATH =
-        "../target/release/stellar-overlay"; // Relative to src/
-    OVERLAY_SOCKET_PATH = "";                // Generated automatically if empty
+        ""; // Empty uses PATH lookup, set to custom path if needed
+    OVERLAY_SOCKET_PATH = ""; // Generated automatically if empty
 
     LOG_COLOR = false;
 
