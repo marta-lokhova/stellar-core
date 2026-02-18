@@ -280,8 +280,9 @@ OverlayIPC::handleMessage(IPCMessage const& msg)
                 "Peer requesting SCP state for ledger >= {} (request_id={})",
                 ledgerSeq, requestId);
 
-            auto envelopes = mOnScpStateRequest(ledgerSeq);
-            sendScpStateResponse(requestId, envelopes);
+            // Delegate to callback — it will collect state on the main
+            // thread and call sendScpStateResponse from there.
+            mOnScpStateRequest(requestId, ledgerSeq);
         }
         break;
     }

@@ -27,7 +27,7 @@ use libp2p::{
     Multiaddr, PeerId, Stream, StreamProtocol, Swarm, SwarmBuilder,
 };
 use libp2p_stream::{Behaviour as StreamBehaviour, Control, IncomingStreams};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -262,6 +262,8 @@ struct SharedState {
     pending_getdata: RwLock<PendingRequests>,
     /// TX buffer for responding to GETDATA requests
     tx_buffer: RwLock<TxBuffer>,
+    /// Set of inbound peer IDs (for enforcing max_inbound_peers limit)
+    inbound_peers: RwLock<HashSet<PeerId>>,
 }
 
 impl SharedState {
@@ -297,6 +299,7 @@ impl SharedState {
             inv_tracker: RwLock::new(InvTracker::new()),
             pending_getdata: RwLock::new(PendingRequests::new()),
             tx_buffer: RwLock::new(TxBuffer::new()),
+            inbound_peers: RwLock::new(HashSet::new()),
         }
     }
 }
@@ -309,6 +312,8 @@ pub struct StellarOverlay {
     cmd_rx: mpsc::Receiver<OverlayCommand>,
     /// Track whether Kademlia bootstrap has been triggered (only do it once)
     kademlia_bootstrap_triggered: bool,
+    /// Maximum number of inbound connections allowed (0 = outbound-only)
+    max_inbound_peers: usize,
 }
 
 /// Create the overlay and return handle + event receivers
@@ -403,6 +408,7 @@ pub fn create_overlay(
         state,
         cmd_rx,
         kademlia_bootstrap_triggered: false,
+        max_inbound_peers: 64, // Default from Config
     };
 
     let handle = OverlayHandle { cmd_tx };
@@ -423,7 +429,7 @@ pub fn create_overlay_with_kademlia(
     ),
     Box<dyn std::error::Error + Send + Sync>,
 > {
-    create_test_overlay(keypair, true)
+    create_test_overlay(keypair, true, 64)
 }
 
 /// Create overlay with no Kademlia (for topology-controlled tests)
@@ -439,7 +445,7 @@ pub fn create_overlay_no_kademlia(
     ),
     Box<dyn std::error::Error + Send + Sync>,
 > {
-    create_test_overlay(keypair, false)
+    create_test_overlay(keypair, false, 64)
 }
 
 /// Create test overlay with configurable options
@@ -447,6 +453,7 @@ pub fn create_overlay_no_kademlia(
 fn create_test_overlay(
     keypair: Keypair,
     enable_kademlia: bool,
+    max_inbound_peers: usize,
 ) -> Result<
     (
         OverlayHandle,
@@ -518,6 +525,7 @@ fn create_test_overlay(
         state,
         cmd_rx,
         kademlia_bootstrap_triggered: false,
+        max_inbound_peers,
     };
     let handle = OverlayHandle { cmd_tx };
 
@@ -624,8 +632,30 @@ impl StellarOverlay {
                 info!("Listening on {}", address);
             }
 
-            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                info!("Connected to peer {}", peer_id);
+            SwarmEvent::ConnectionEstablished {
+                peer_id, endpoint, ..
+            } => {
+                let is_inbound = endpoint.is_listener();
+                info!(
+                    "Connected to peer {} ({})",
+                    peer_id,
+                    if is_inbound { "inbound" } else { "outbound" }
+                );
+
+                // Enforce inbound connection limit
+                if is_inbound {
+                    let mut inbound = self.state.inbound_peers.write().await;
+                    if inbound.len() >= self.max_inbound_peers {
+                        warn!(
+                            "Rejecting inbound peer {}: at max_inbound_peers limit ({})",
+                            peer_id, self.max_inbound_peers
+                        );
+                        drop(inbound);
+                        let _ = self.swarm.disconnect_peer_id(peer_id);
+                        return;
+                    }
+                    inbound.insert(peer_id);
+                }
 
                 // Create peer streams entry
                 {
@@ -642,6 +672,11 @@ impl StellarOverlay {
                 {
                     let mut streams = self.state.peer_streams.write().await;
                     streams.remove(&peer_id);
+                }
+                // Remove from inbound tracking
+                {
+                    let mut inbound = self.state.inbound_peers.write().await;
+                    inbound.remove(&peer_id);
                 }
                 // Clean up pending txset requests for this peer so they can be retried from another peer
                 {
@@ -3957,3 +3992,76 @@ async fn test_inv_getdata_three_node_relay() {
     let _ = tokio::time::timeout(Duration::from_secs(1), overlay2_task).await;
     let _ = tokio::time::timeout(Duration::from_secs(1), overlay3_task).await;
 }
+
+    /// V-001: Verify that inbound connections exceeding max_inbound_peers are rejected.
+    #[tokio::test]
+    async fn test_max_inbound_peers_enforced() {
+        // Create "server" overlay with max_inbound_peers = 1
+        let keypair1 = Keypair::generate_ed25519();
+        let (handle1, mut events1, _tx1, overlay1) =
+            create_test_overlay(keypair1, false, 1).unwrap();
+
+        let listen_port = 20001;
+        let overlay1_task = tokio::spawn(async move {
+            overlay1.run("127.0.0.1", listen_port).await;
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let server_addr: Multiaddr =
+            format!("/ip4/127.0.0.1/udp/{}/quic-v1", listen_port)
+                .parse()
+                .unwrap();
+
+        // Connect peer2 (inbound to server) — should be accepted
+        let keypair2 = Keypair::generate_ed25519();
+        let (handle2, _events2, _tx2, overlay2) =
+            create_test_overlay(keypair2, false, 64).unwrap();
+        let overlay2_task = tokio::spawn(async move {
+            overlay2.run("127.0.0.1", 20002).await;
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        handle2.dial(server_addr.clone()).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Connect peer3 (second inbound to server) — should be rejected
+        let keypair3 = Keypair::generate_ed25519();
+        let peer3_id = keypair3.public().to_peer_id();
+        let (handle3, _events3, _tx3, overlay3) =
+            create_test_overlay(keypair3, false, 64).unwrap();
+        let overlay3_task = tokio::spawn(async move {
+            overlay3.run("127.0.0.1", 20003).await;
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        handle3.dial(server_addr.clone()).await;
+
+        // Wait for connection attempt + rejection
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Expect a PeerDisconnected event for peer3 on the server
+        let mut peer3_disconnected = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_millis(100), events1.recv()).await {
+                Ok(Some(OverlayEvent::PeerDisconnected { peer_id }))
+                    if peer_id == peer3_id =>
+                {
+                    peer3_disconnected = true;
+                    break;
+                }
+                Ok(Some(_)) => continue,
+                _ => break,
+            }
+        }
+
+        assert!(
+            peer3_disconnected,
+            "Server should disconnect peer3 (exceeds max_inbound_peers=1)"
+        );
+
+        handle1.shutdown().await;
+        handle2.shutdown().await;
+        handle3.shutdown().await;
+        let _ = tokio::time::timeout(Duration::from_secs(1), overlay1_task).await;
+        let _ = tokio::time::timeout(Duration::from_secs(1), overlay2_task).await;
+        let _ = tokio::time::timeout(Duration::from_secs(1), overlay3_task).await;
+    }

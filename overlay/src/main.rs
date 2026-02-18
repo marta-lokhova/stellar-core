@@ -24,7 +24,7 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 use tracing::{debug, error, info, warn};
 
 use config::Config;
-use flood::{build_tx_set_xdr, hash_tx_set, CachedTxSet, Hash256, TxSetCache};
+use flood::{build_tx_set_xdr, hash_tx_set, parse_tx_metadata, CachedTxSet, Hash256, TxSetCache};
 use integrated::{CoreCommand, Overlay, OverlayHandle};
 use ipc::{CoreIpc, Message, MessageType};
 use libp2p::identity::Keypair as Libp2pKeypair;
@@ -334,14 +334,16 @@ impl App {
             }
             LibP2pOverlayEvent::TxReceived { tx, from } => {
                 debug!("Received TX via QUIC from {}: {} bytes", from, tx.len());
-                // Add to mempool
-                // TODO: Parse XDR to extract fee and ops instead of hardcoding fee=0, ops=1
-                // This causes network-flooded TXs to have wrong priority in mempool
-                // and breaks fee-based eviction. Need to:
-                // 1. Parse TransactionEnvelope XDR to get tx.fee and operation count
-                // 2. Extract source account and sequence number
-                // 3. Consider signature validation to prevent spam
-                self.overlay_handle.submit_tx(tx, 0, 1);
+                // Parse XDR to extract fee and operation count for correct
+                // mempool priority ordering (V-009 fix).
+                let (fee, num_ops) = match parse_tx_metadata(&tx) {
+                    Some(meta) => (meta.fee, meta.num_ops.max(1)),
+                    None => {
+                        warn!("Failed to parse TX XDR from {}: {} bytes, using defaults", from, tx.len());
+                        (0u64, 1u32)
+                    }
+                };
+                self.overlay_handle.submit_tx(tx, fee, num_ops);
             }
             LibP2pOverlayEvent::TxSetReceived { hash, data, from } => {
                 info!(
@@ -812,24 +814,68 @@ impl App {
                         );
 
                         // Connect libp2p QUIC to all known/preferred peers
-                        let all_peers: Vec<_> =
-                            known.into_iter().chain(preferred.into_iter()).collect();
+                        // Deduplicate since known and preferred often overlap
+                        let mut seen = std::collections::HashSet::new();
+                        let all_peers: Vec<_> = known
+                            .into_iter()
+                            .chain(preferred.into_iter())
+                            .filter(|p| seen.insert(p.clone()))
+                            .collect();
                         let peer_count = all_peers.len();
 
                         for addr_str in all_peers {
-                            if let Ok(addr) = addr_str.parse::<SocketAddr>() {
-                                // QUIC uses UDP, port + 1000
-                                let libp2p_port = addr.port() + 1000;
-                                let libp2p_addr: libp2p::Multiaddr =
-                                    format!("/ip4/{}/udp/{}/quic-v1", addr.ip(), libp2p_port)
-                                        .parse()
-                                        .unwrap();
+                            // Resolve peer address: supports both "ip:port" and bare hostnames
+                            let resolve_host = addr_str.clone();
+                            let port = listen_port;
+                            let handle = self.libp2p_handle.clone();
+                            tokio::spawn(async move {
+                                // Try parsing as SocketAddr first (e.g. "1.2.3.4:11625")
+                                let sock_addr = if let Ok(addr) = resolve_host.parse::<SocketAddr>()
+                                {
+                                    Some(addr)
+                                } else {
+                                    // Bare hostname: append listen_port and resolve DNS
+                                    let host_with_port = format!("{}:{}", resolve_host, port);
+                                    let resolved: Option<SocketAddr> =
+                                        match tokio::net::lookup_host(host_with_port.as_str()).await
+                                        {
+                                            Ok(addrs) => {
+                                                let first = addrs.into_iter().next();
+                                                if let Some(ref addr) = first {
+                                                    info!(
+                                                        "Resolved peer {} -> {}",
+                                                        resolve_host, addr
+                                                    );
+                                                }
+                                                first
+                                            }
+                                            Err(e) => {
+                                                warn!(
+                                                    "Failed to resolve peer {}: {}",
+                                                    resolve_host, e
+                                                );
+                                                None
+                                            }
+                                        };
+                                    if resolved.is_none() {
+                                        warn!(
+                                            "DNS returned no addresses for {}",
+                                            resolve_host
+                                        );
+                                    }
+                                    resolved
+                                };
 
-                                let handle = self.libp2p_handle.clone();
-                                tokio::spawn(async move {
+                                if let Some(addr) = sock_addr {
+                                    // QUIC uses UDP, port + 1000
+                                    let libp2p_port = addr.port() + 1000;
+                                    let libp2p_addr: libp2p::Multiaddr =
+                                        format!("/ip4/{}/udp/{}/quic-v1", addr.ip(), libp2p_port)
+                                            .parse()
+                                            .unwrap();
                                     handle.dial(libp2p_addr).await;
-                                });
-                            }
+                                }
+                            });
                         }
 
                         // Kademlia bootstrap is now triggered automatically when the first peer

@@ -8,6 +8,7 @@ mod inv_tracker;
 mod mempool;
 mod pending_requests;
 mod tx_buffer;
+mod tx_xdr;
 mod txset;
 
 pub use inv_batcher::{InvBatcher, INV_BATCH_MAX_DELAY};
@@ -21,4 +22,5 @@ pub use pending_requests::{
     PendingRequest, PendingRequests, GETDATA_PEER_TIMEOUT, GETDATA_TOTAL_TIMEOUT,
 };
 pub use tx_buffer::{TxBuffer, TX_BUFFER_CAPACITY, TX_BUFFER_MAX_AGE};
+pub use tx_xdr::{parse_tx_metadata, TxMetadata};
 pub use txset::{build_tx_set_xdr, hash_tx_set, CachedTxSet, Hash256, TxSetCache};

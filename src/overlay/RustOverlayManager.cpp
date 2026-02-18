@@ -55,10 +55,19 @@ RustOverlayManager::start()
             "RustOverlayManager: SCPReceived");
     });
 
-    mOverlayIPC->setOnScpStateRequest([this](uint32_t ledgerSeq) {
-        // Called from IPC reader thread - collect SCP state synchronously
-        return mApp.getHerder().getSCPStateForPeer(ledgerSeq);
-    });
+    mOverlayIPC->setOnScpStateRequest(
+        [this](uint64_t requestId, uint32_t ledgerSeq) {
+            // Post to main thread to safely access Herder state.
+            // sendScpStateResponse uses mSendMutex so it's safe from any
+            // thread.
+            mApp.postOnMainThread(
+                [this, requestId, ledgerSeq]() {
+                    auto envelopes =
+                        mApp.getHerder().getSCPStateForPeer(ledgerSeq);
+                    mOverlayIPC->sendScpStateResponse(requestId, envelopes);
+                },
+                "RustOverlayManager: ScpStateRequest");
+        });
 
     mOverlayIPC->setOnTxSetReceived(
         [this](Hash const& hash, GeneralizedTransactionSet const& txSet) {

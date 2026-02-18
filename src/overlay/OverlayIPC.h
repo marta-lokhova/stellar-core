@@ -37,9 +37,10 @@ class OverlayIPC
     /// Callback when SCP envelope received from network
     using SCPReceivedCallback = std::function<void(SCPEnvelope const&)>;
 
-    /// Callback when peer requests SCP state - returns envelopes to send
+    /// Callback when peer requests SCP state — receives (requestId, ledgerSeq)
+    /// The callback is responsible for collecting state and sending the response.
     using ScpStateRequestCallback =
-        std::function<std::vector<SCPEnvelope>(uint32_t ledgerSeq)>;
+        std::function<void(uint64_t requestId, uint32_t ledgerSeq)>;
 
     /// Callback when TX set received from peers (async fetch response)
     using TxSetReceivedCallback = std::function<void(
@@ -180,6 +181,11 @@ class OverlayIPC
         return mSocketPath;
     }
 
+    /// Send SCP state response to overlay with request ID for correlation.
+    /// Thread-safe (protected by mSendMutex).
+    void sendScpStateResponse(uint64_t requestId,
+                              std::vector<SCPEnvelope> const& envelopes);
+
   private:
     /// Spawn the overlay process
     bool spawnOverlay();
@@ -189,10 +195,6 @@ class OverlayIPC
 
     /// Handle a received IPC message
     void handleMessage(IPCMessage const& msg);
-
-    /// Send SCP state response to overlay with request ID for correlation
-    void sendScpStateResponse(uint64_t requestId,
-                              std::vector<SCPEnvelope> const& envelopes);
 
     std::string mSocketPath;
     std::string mOverlayBinaryPath;
