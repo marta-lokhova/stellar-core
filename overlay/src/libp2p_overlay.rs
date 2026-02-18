@@ -660,6 +660,19 @@ impl StellarOverlay {
                 let _ = self.state.event_tx.send(OverlayEvent::PeerDisconnected {
                     peer_id: peer_id.clone(),
                 });
+                // Clean up INV/GETDATA state for disconnected peer
+                {
+                    let mut tracker = self.state.inv_tracker.write().await;
+                    tracker.remove_peer(&peer_id);
+                }
+                {
+                    let mut batcher = self.state.inv_batcher.write().await;
+                    batcher.remove_peer(&peer_id);
+                }
+                {
+                    let mut pending = self.state.pending_getdata.write().await;
+                    pending.remove_peer(&peer_id);
+                }
             }
 
             SwarmEvent::Behaviour(StellarBehaviourEvent::Identify(event)) => {
@@ -1777,7 +1790,12 @@ async fn inv_getdata_housekeeping_task(state: Arc<SharedState>) {
         // 2. Handle GETDATA timeouts
         let (to_retry, gave_up) = {
             let mut pending = state.pending_getdata.write().await;
-            pending.process_timeouts()
+            let result = pending.process_timeouts();
+            // Remove gave-up entries to prevent unbounded HashMap growth
+            for hash in &result.1 {
+                pending.remove(hash);
+            }
+            result
         };
 
         // Log give-ups

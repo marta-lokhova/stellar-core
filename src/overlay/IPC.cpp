@@ -132,7 +132,31 @@ receiveMessage(int socket)
 
     // Read payload
     IPCMessage msg;
-    msg.type = static_cast<IPCMessageType>(type);
+
+    // Validate message type before casting
+    switch (type)
+    {
+    case static_cast<uint32_t>(IPCMessageType::BROADCAST_SCP):
+    case static_cast<uint32_t>(IPCMessageType::GET_TOP_TXS):
+    case static_cast<uint32_t>(IPCMessageType::REQUEST_SCP_STATE):
+    case static_cast<uint32_t>(IPCMessageType::LEDGER_CLOSED):
+    case static_cast<uint32_t>(IPCMessageType::TX_SET_EXTERNALIZED):
+    case static_cast<uint32_t>(IPCMessageType::SCP_STATE_RESPONSE):
+    case static_cast<uint32_t>(IPCMessageType::SHUTDOWN):
+    case static_cast<uint32_t>(IPCMessageType::SET_PEER_CONFIG):
+    case static_cast<uint32_t>(IPCMessageType::SUBMIT_TX):
+    case static_cast<uint32_t>(IPCMessageType::REQUEST_TX_SET):
+    case static_cast<uint32_t>(IPCMessageType::CACHE_TX_SET):
+    case static_cast<uint32_t>(IPCMessageType::SCP_RECEIVED):
+    case static_cast<uint32_t>(IPCMessageType::TOP_TXS_RESPONSE):
+    case static_cast<uint32_t>(IPCMessageType::PEER_REQUESTS_SCP_STATE):
+    case static_cast<uint32_t>(IPCMessageType::TX_SET_AVAILABLE):
+    case static_cast<uint32_t>(IPCMessageType::QUORUM_SET_AVAILABLE):
+        msg.type = static_cast<IPCMessageType>(type);
+        break;
+    default:
+        return std::nullopt;
+    }
     if (payloadLen > 0)
     {
         msg.payload.resize(payloadLen);

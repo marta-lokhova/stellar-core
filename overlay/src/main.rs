@@ -179,6 +179,8 @@ struct App {
     pending_scp_state_requests: Arc<RwLock<HashMap<u64, PeerId>>>,
     /// Counter for generating unique SCP state request IDs
     next_scp_request_id: Arc<AtomicU64>,
+    /// Flag to request graceful shutdown from the event loop
+    should_shutdown: bool,
 }
 
 impl App {
@@ -237,6 +239,7 @@ impl App {
             pending_core_txset_requests: Arc::new(RwLock::new(HashSet::new())),
             pending_scp_state_requests: Arc::new(RwLock::new(HashMap::new())),
             next_scp_request_id: Arc::new(AtomicU64::new(1)),
+            should_shutdown: false,
         })
     }
 
@@ -245,6 +248,10 @@ impl App {
         info!("Overlay started, processing Core messages");
 
         loop {
+            if self.should_shutdown {
+                info!("Graceful shutdown initiated");
+                break;
+            }
             tokio::select! {
                 // Receive message from Core
                 msg = self.core_ipc.receiver.recv() => {
@@ -416,6 +423,14 @@ impl App {
                 );
 
                 // Store mapping from request_id to peer_id
+                // Cap to prevent memory exhaustion from rapid SCP state request spam
+                {
+                    let pending = self.pending_scp_state_requests.read().await;
+                    if pending.len() >= 1000 {
+                        warn!("Too many pending SCP state requests ({}), dropping", pending.len());
+                        return;
+                    }
+                }
                 self.pending_scp_state_requests
                     .write()
                     .await
@@ -458,8 +473,9 @@ impl App {
         match msg.msg_type {
             MessageType::Shutdown => {
                 info!("Shutdown requested by Core");
-                // Exit the process
-                std::process::exit(0);
+                // Set should_shutdown so the main loop exits gracefully,
+                // allowing proper cleanup (QUIC close, Drop, flush).
+                self.should_shutdown = true;
             }
 
             MessageType::BroadcastScp => {
@@ -606,9 +622,14 @@ impl App {
                 let num_ops = u32::from_le_bytes(msg.payload[8..12].try_into().unwrap());
                 let tx_data = msg.payload[12..].to_vec();
 
+                // Clamp negative fees to 0 to prevent u64 wrapping causing
+                // priority inversion in the mempool's BTreeSet ordering
+                let fee_u64 = if fee < 0 { 0u64 } else { fee as u64 };
+                let num_ops_safe = std::cmp::max(num_ops, 1);
+
                 // Add to mempool
                 self.overlay_handle
-                    .submit_tx(tx_data.clone(), fee as u64, num_ops);
+                    .submit_tx(tx_data.clone(), fee_u64, num_ops_safe);
 
                 // Broadcast TX via libp2p QUIC (dedicated stream)
                 let handle = self.libp2p_handle.clone();

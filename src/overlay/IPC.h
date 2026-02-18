@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -161,7 +162,7 @@ class IPCChannel
     explicit IPCChannel(int socket);
 
     int mSocket;
-    bool mConnected;
+    std::atomic<bool> mConnected;
 };
 
 /**

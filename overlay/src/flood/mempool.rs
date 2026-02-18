@@ -61,8 +61,9 @@ impl Ord for FeePriority {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Higher fee per op = higher priority
         // fee1/ops1 > fee2/ops2 iff fee1*ops2 > fee2*ops1
-        let left = self.fee * (other.num_ops as u64);
-        let right = other.fee * (self.num_ops as u64);
+        // Use u128 to prevent overflow when fee is large and num_ops > 1
+        let left = (self.fee as u128) * (other.num_ops as u128);
+        let right = (other.fee as u128) * (self.num_ops as u128);
 
         match left.cmp(&right).reverse() {
             // reverse for descending order
