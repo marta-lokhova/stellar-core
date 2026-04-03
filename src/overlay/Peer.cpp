@@ -1125,6 +1125,23 @@ Peer::recvAuthenticatedMessage(AuthenticatedMessage&& msg)
                                                   envelope.statement));
     }
 
+    // Process SEND_MORE_EXTENDED directly on the overlay thread to avoid
+    // the main thread round-trip. This tightens the flow control pipeline:
+    // capacity is released and queued messages are drained immediately,
+    // without waiting for the main thread event loop.
+    if (useBackgroundThread() && !threadIsMain() &&
+        msgTracker->getMessage().type() == SEND_MORE_EXTENDED)
+    {
+        // Release capacity (mutex-protected in FlowControl)
+        mFlowControl->maybeReleaseCapacity(msgTracker->getMessage());
+        // Immediately drain any queued flood messages
+        for (auto const& m : mFlowControl->getNextBatchToSend())
+        {
+            sendAuthenticatedMessage(m.mMessage, m.mTimeEmplaced);
+        }
+        return true;
+    }
+
     // Subtle: move `msgTracker` shared_ptr into the lambda, to ensure
     // its destructor is invoked from main thread only. Note that we can't use
     // unique_ptr here, because std::function requires its callable

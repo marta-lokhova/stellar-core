@@ -71,7 +71,7 @@ void
 FlowControl::maybeReleaseCapacity(StellarMessage const& msg)
 {
     ZoneScoped;
-    releaseAssert(threadIsMain());
+    // Can be called from either main or overlay thread (protected by mutex)
     MutexLocker guard(mFlowControlMutex);
 
     if (msg.type() == SEND_MORE_EXTENDED)
