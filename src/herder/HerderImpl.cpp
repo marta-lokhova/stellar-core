@@ -606,9 +606,12 @@ HerderImpl::emitEnvelope(SCPEnvelope const& envelope)
                envelope.statement.pledges.type(), slotIndex,
                mApp.getStateHuman());
 
-    persistSCPState(slotIndex);
-
+    // Broadcast first, persist second. The SCP envelope should reach peers
+    // as fast as possible for consensus latency. Persistence is only needed
+    // for crash recovery and can happen after the broadcast.
     broadcast(envelope);
+
+    persistSCPState(slotIndex);
 }
 
 TransactionQueue::AddResult
