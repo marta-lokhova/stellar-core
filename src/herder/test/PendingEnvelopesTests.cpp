@@ -400,6 +400,20 @@ TEST_CASE("PendingEnvelopes recvSCPEnvelope", "[herder]")
                 Herder::ENVELOPE_STATUS_DISCARDED);
     }
 
+    SECTION("process envelope when tx set was received before envelope")
+    {
+        // Simulate a proactively pushed tx set: the tx set arrives before
+        // any SCP envelope referencing it, so nobody is fetching it yet.
+        // The tx set should be cached and the envelope should become READY
+        // once the quorum set is also available.
+        REQUIRE(!pendingEnvelopes.recvTxSet(p.second->getContentsHash(),
+                                            p.second));
+        pendingEnvelopes.addSCPQuorumSet(saneQSetHash, saneQSet);
+
+        REQUIRE(pendingEnvelopes.recvSCPEnvelope(saneEnvelope) ==
+                Herder::ENVELOPE_STATUS_READY);
+    }
+
     SECTION("can receive malformed tx set")
     {
         GeneralizedTransactionSet malformedXdrSet(1);

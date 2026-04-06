@@ -247,6 +247,10 @@ PendingEnvelopes::recvTxSet(Hash const& hash, TxSetXDRFrameConstPtr txset)
     auto lastSeenSlotIndex = mTxSetFetcher.getLastSeenSlotIndex(hash);
     if (lastSeenSlotIndex == 0)
     {
+        // Nobody is fetching this tx set yet. Cache it so that when an SCP
+        // envelope referencing it arrives, it is already available (this
+        // happens with proactively pushed tx sets).
+        putTxSet(hash, 0, txset);
         return false;
     }
 
