@@ -278,6 +278,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     PEER_FLOOD_READING_CAPACITY_BYTES = 0;
     FLOW_CONTROL_SEND_MORE_BATCH_SIZE_BYTES = 0;
     OUTBOUND_TX_QUEUE_BYTE_LIMIT = 1024 * 1024 * 3;
+    ITEM_FETCH_INITIAL_DELAY_MS = 50;
 
     // WORKER_THREADS: setting this too low risks a form of priority inversion
     // where a long-running background task occupies all worker threads and
@@ -1071,6 +1072,10 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                 {"OUTBOUND_TX_QUEUE_BYTE_LIMIT",
                  [&]() {
                      OUTBOUND_TX_QUEUE_BYTE_LIMIT = readInt<uint32_t>(item, 1);
+                 }},
+                {"ITEM_FETCH_INITIAL_DELAY_MS",
+                 [&]() {
+                     ITEM_FETCH_INITIAL_DELAY_MS = readInt<uint32_t>(item, 0);
                  }},
 #ifdef BUILD_TESTS
                 {"TRANSACTION_QUEUE_SIZE_MULTIPLIER_FOR_TESTING",

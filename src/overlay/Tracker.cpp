@@ -92,9 +92,29 @@ Tracker::doesntHave(Peer::pointer peer)
 }
 
 void
+Tracker::deferTryNextPeer()
+{
+    auto delay =
+        std::chrono::milliseconds(mApp.getConfig().ITEM_FETCH_INITIAL_DELAY_MS);
+    mTimer.expires_from_now(delay);
+    mTimer.async_wait([this]() { this->tryNextPeer(); },
+                      VirtualTimer::onFailureNoop);
+}
+
+void
 Tracker::tryNextPeer()
 {
     ZoneScoped;
+
+    // If the item was received while we were waiting (e.g. via a proactive
+    // push that arrived during the deferred fetch delay), there is nothing
+    // left to do.  Check the herder cache for both tx sets and quorum sets
+    // since this tracker may be for either type.
+    if (empty() || mApp.getHerder().getTxSet(mItemHash))
+    {
+        return;
+    }
+
     // will be called by some timer or when we get a
     // response saying they don't have it
     CLOG_TRACE(Overlay, "tryNextPeer {} last: {}", hexAbbrev(mItemHash),

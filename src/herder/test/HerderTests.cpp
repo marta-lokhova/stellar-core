@@ -8120,3 +8120,124 @@ TEST_CASE("far-future slots cleanup", "[herder]")
     // Check that far-future slots have been removed
     REQUIRE(herder0.getSCP().getHighestKnownSlotIndex() < FAR_FUTURE_BASE);
 }
+
+TEST_CASE("proactive tx set push eliminates fetching", "[herder][acceptance]")
+{
+    // In a fully connected symmetric quorum, leaders proactively push their
+    // tx sets before broadcasting the NOMINATE envelope, and the fetch path
+    // defers the first GET_TX_SET request by a short delay.  Together these
+    // ensure that peers already have the tx set when they process the
+    // NOMINATE, so no GET_TX_SET round-trips are needed.
+    //
+    // We use load generation to produce non-empty blocks, so the tx set
+    // hashes are unique per leader and cannot be independently constructed
+    // by other nodes.
+    auto networkID = sha256(getTestConfig().NETWORK_PASSPHRASE);
+    auto simulation =
+        Topologies::core(4, 1, Simulation::OVER_TCP, networkID, [](int i) {
+            auto cfg = getTestConfig(i, Config::TESTDB_DEFAULT);
+            cfg.TESTING_UPGRADE_MAX_TX_SET_SIZE = 100;
+            cfg.GENESIS_TEST_ACCOUNT_COUNT = 30;
+            return cfg;
+        });
+
+    simulation->startAllNodes();
+    auto nodes = simulation->getNodes();
+
+    // Let the network stabilize through the first few ledgers where some
+    // fetching may occur during initial quorum discovery.
+    uint32_t const warmupLedger = 5;
+    simulation->crankUntil(
+        [&]() { return simulation->haveAllExternalized(warmupLedger, 1); },
+        20 * simulation->getExpectedLedgerCloseTime(), false);
+
+    // Snapshot metrics after warmup.
+    std::vector<uint64_t> baselineGetTxSet(nodes.size());
+    std::vector<uint64_t> baselineSendTxSet(nodes.size());
+    std::vector<uint64_t> baselineRecvTxSet(nodes.size());
+    for (size_t i = 0; i < nodes.size(); i++)
+    {
+        auto& om = nodes[i]->getOverlayManager().getOverlayMetrics();
+        baselineGetTxSet[i] = om.mSendGetTxSetMeter.count();
+        baselineSendTxSet[i] = om.mSendTxSetMeter.count();
+        baselineRecvTxSet[i] = om.mRecvTxSetTimer.count();
+    }
+
+    // Start load generation from one node so blocks contain transactions.
+    uint32_t const nAccounts = 20;
+    uint32_t const nTxs = 50;
+    uint32_t const txRate = 1;
+    auto& loadGen = nodes[0]->getLoadGenerator();
+    auto& loadGenDone =
+        nodes[0]->getMetrics().NewMeter({"loadgen", "run", "complete"}, "run");
+    auto loadGenCount = loadGenDone.count();
+    loadGen.generateLoad(
+        GeneratedLoadConfig::txLoad(LoadGenMode::PAY, nAccounts, nTxs, txRate));
+
+    // Crank until load generation finishes (all txs applied).
+    simulation->crankUntil([&]() { return loadGenDone.count() > loadGenCount; },
+                           200 * simulation->getExpectedLedgerCloseTime(),
+                           false);
+
+    auto& loadGenFailed =
+        nodes[0]->getMetrics().NewMeter({"loadgen", "run", "failed"}, "run");
+    REQUIRE(loadGenFailed.count() == 0);
+
+    for (auto const& node : nodes)
+    {
+        REQUIRE(node->getLedgerManager().getLastClosedLedgerNum() >
+                warmupLedger);
+    }
+
+    // Number of ledgers closed after warmup (use the minimum across nodes
+    // to be conservative).
+    uint32_t minLedgersClosed = std::numeric_limits<uint32_t>::max();
+    for (auto const& node : nodes)
+    {
+        uint32_t closed =
+            node->getLedgerManager().getLastClosedLedgerNum() - warmupLedger;
+        minLedgersClosed = std::min(minLedgersClosed, closed);
+    }
+    REQUIRE(minLedgersClosed > 0);
+
+    // Collect per-node deltas in metrics since the warmup snapshot.
+    uint64_t deltaGetTxSet = 0;
+    uint64_t deltaSendTxSet = 0;
+    uint64_t deltaRecvTxSet = 0;
+    for (size_t i = 0; i < nodes.size(); i++)
+    {
+        auto& om = nodes[i]->getOverlayManager().getOverlayMetrics();
+        auto nodeGet = om.mSendGetTxSetMeter.count() - baselineGetTxSet[i];
+        auto nodeSend = om.mSendTxSetMeter.count() - baselineSendTxSet[i];
+        auto nodeRecv = om.mRecvTxSetTimer.count() - baselineRecvTxSet[i];
+
+        deltaGetTxSet += nodeGet;
+        deltaSendTxSet += nodeSend;
+        deltaRecvTxSet += nodeRecv;
+
+        // Each node should receive at most one tx set per slot (from
+        // whichever leader proposed it).  If the same tx set were
+        // broadcast multiple times per slot we would see nodeRecv >>
+        // minLedgersClosed.
+        CLOG_INFO(Herder,
+                  "Node {} post-warmup: GET_TX_SET={}, TX_SET sent={}, "
+                  "TX_SET recv={}, ledgers={}",
+                  i, nodeGet, nodeSend, nodeRecv, minLedgersClosed);
+        REQUIRE(nodeRecv <= minLedgersClosed);
+    }
+
+    CLOG_INFO(Herder,
+              "Aggregate post-warmup: GET_TX_SET={}, TX_SET sent={}, "
+              "TX_SET recv={}, ledgers={}",
+              deltaGetTxSet, deltaSendTxSet, deltaRecvTxSet, minLedgersClosed);
+
+    // No node should have needed to fetch a tx set — leaders push them
+    // proactively, and the deferred fetch gives the push time to arrive.
+    REQUIRE(deltaGetTxSet == 0);
+
+    // Leaders should have proactively sent tx sets.
+    REQUIRE(deltaSendTxSet > 0);
+
+    // All nodes should have received tx sets from leaders.
+    REQUIRE(deltaRecvTxSet > 0);
+}

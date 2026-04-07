@@ -144,6 +144,11 @@ class Tracker
     void tryNextPeer();
 
     /**
+     * Schedule tryNextPeer after the configured initial delay.
+     */
+    void deferTryNextPeer();
+
+    /**
      * Return biggest slot index seen since last reset.
      */
     uint64

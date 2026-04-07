@@ -32,7 +32,12 @@ ItemFetcher::fetch(Hash const& itemHash, SCPEnvelope const& envelope)
         mTrackers[itemHash] = tracker;
 
         tracker->listen(envelope);
-        tracker->tryNextPeer();
+        // Defer the first fetch attempt by a short delay.
+        // This gives proactively pushed data (e.g. tx sets sent by leaders
+        // before their NOMINATE) a chance to be processed first, avoiding
+        // a redundant round-trip.  The empty() check in tryNextPeer will
+        // skip the fetch if the item arrived during the delay.
+        tracker->deferTryNextPeer();
     }
     else
     {

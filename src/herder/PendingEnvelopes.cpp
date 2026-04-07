@@ -249,8 +249,11 @@ PendingEnvelopes::recvTxSet(Hash const& hash, TxSetXDRFrameConstPtr txset)
     {
         // Nobody is fetching this tx set yet. Cache it so that when an SCP
         // envelope referencing it arrives, it is already available (this
-        // happens with proactively pushed tx sets).
-        putTxSet(hash, 0, txset);
+        // happens with proactively pushed tx sets). Use the next expected
+        // slot so the entry is properly evicted with other stale data
+        // (slot 0 entries are exempt from eviction).
+        uint64 nextSlot = mHerder.trackingConsensusLedgerIndex() + 1;
+        putTxSet(hash, nextSlot, txset);
         return false;
     }
 

@@ -489,6 +489,12 @@ class Config : public std::enable_shared_from_this<Config>
     // Byte limit for outbound transaction queue.
     uint32_t OUTBOUND_TX_QUEUE_BYTE_LIMIT;
 
+    // Milliseconds to wait before sending the first GET_TX_SET request when
+    // a needed tx set is missing. This gives proactively pushed tx sets
+    // (sent by leaders before their NOMINATE) time to arrive, avoiding
+    // a redundant fetch round-trip.  Set to 0 to fetch immediately.
+    uint32_t ITEM_FETCH_INITIAL_DELAY_MS;
+
     // Multiplier for classic transaction queue size (only configurable in test
     // builds)
     uint32_t TRANSACTION_QUEUE_SIZE_MULTIPLIER;

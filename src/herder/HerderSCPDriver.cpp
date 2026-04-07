@@ -986,23 +986,6 @@ HerderSCPDriver::nominate(uint64_t slotIndex, StellarValue const& value,
                hexAbbrev(proposedSet->previousLedgerHash()),
                hexAbbrev(valueHash), slotIndex);
 
-    // Proactively push the txset to all peers before nominating so they
-    // don't need to fetch it (saves one RTT per nomination)
-    {
-        auto txSetMsg = std::make_shared<StellarMessage>();
-        if (proposedSet->isGeneralizedTxSet())
-        {
-            txSetMsg->type(GENERALIZED_TX_SET);
-            proposedSet->toXDR(txSetMsg->generalizedTxSet());
-        }
-        else
-        {
-            txSetMsg->type(TX_SET);
-            proposedSet->toXDR(txSetMsg->txSet());
-        }
-        mApp.getOverlayManager().broadcastMessage(txSetMsg);
-    }
-
     auto prevValue = xdr::xdr_to_opaque(previousValue);
     mSCP.nominate(slotIndex, mCurrentValue, prevValue);
 }
@@ -1023,6 +1006,28 @@ HerderSCPDriver::nominatingValue(uint64_t slotIndex, Value const& value)
 {
     CLOG_DEBUG(Herder, "nominatingValue i:{} v: {}", slotIndex,
                getValueString(value));
+
+    StellarValue sv;
+    if (toStellarValue(value, sv))
+    {
+        auto txSet = mApp.getHerder().getTxSet(sv.txSetHash);
+        auto const& n = sv.ext.lcValueSignature().nodeID;
+        if (txSet && (mSCP.getLocalNodeID() == n))
+        {
+            auto txSetMsg = std::make_shared<StellarMessage>();
+            if (txSet->isGeneralizedTxSet())
+            {
+                txSetMsg->type(GENERALIZED_TX_SET);
+                txSet->toXDR(txSetMsg->generalizedTxSet());
+            }
+            else
+            {
+                txSetMsg->type(TX_SET);
+                txSet->toXDR(txSetMsg->txSet());
+            }
+            mApp.getOverlayManager().broadcastMessage(txSetMsg);
+        }
+    }
 }
 
 void
