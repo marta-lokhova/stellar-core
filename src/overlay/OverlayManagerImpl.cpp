@@ -1119,8 +1119,8 @@ OverlayManager::createTxBatch()
 bool
 OverlayManager::isFloodMessage(StellarMessage const& msg)
 {
-    bool isFlood = msg.type() == SCP_MESSAGE || msg.type() == TRANSACTION ||
-                   msg.type() == FLOOD_DEMAND || msg.type() == FLOOD_ADVERT;
+    bool isFlood = msg.type() == TRANSACTION || msg.type() == FLOOD_DEMAND ||
+                   msg.type() == FLOOD_ADVERT;
 #ifdef BUILD_TESTS
     isFlood = isFlood || (msg.type() == TX_SET &&
                           msg.txSet().previousLedgerHash ==

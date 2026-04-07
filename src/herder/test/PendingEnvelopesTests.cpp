@@ -406,8 +406,8 @@ TEST_CASE("PendingEnvelopes recvSCPEnvelope", "[herder]")
         // any SCP envelope referencing it, so nobody is fetching it yet.
         // The tx set should be cached and the envelope should become READY
         // once the quorum set is also available.
-        REQUIRE(!pendingEnvelopes.recvTxSet(p.second->getContentsHash(),
-                                            p.second));
+        REQUIRE(
+            !pendingEnvelopes.recvTxSet(p.second->getContentsHash(), p.second));
         pendingEnvelopes.addSCPQuorumSet(saneQSetHash, saneQSet);
 
         REQUIRE(pendingEnvelopes.recvSCPEnvelope(saneEnvelope) ==
