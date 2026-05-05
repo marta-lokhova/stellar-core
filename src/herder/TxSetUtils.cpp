@@ -201,6 +201,12 @@ TxSetUtils::getInvalidTxListWithErrors(
             upperBoundCloseTimeOffset, diagnostics, validationLedgerSeq);
         if (!txResult->isSuccess())
         {
+            CLOG_INFO(
+                Herder, "Got bad txSet: invalid tx: {}",
+                xdrToCerealString(tx->getEnvelope(), "TransactionEnvelope"));
+            CLOG_INFO(
+                Herder, "Validation error code: {}",
+                xdrToCerealString(txResult->getXDR(), "TransactionResult"));
             invalidTxs.emplace_back(tx);
             seenInvalidTxs.emplace(tx->getFullHash());
             errorCode = TxSetValidationResult::TX_VALIDATION_FAILED;
@@ -278,10 +284,13 @@ TxSetUtils::trimInvalid(TxFrameList const& txs, Application& app,
                         uint64_t upperBoundCloseTimeOffset,
                         TxFrameList& invalidTxs)
 {
-    invalidTxs = getInvalidTxListWithErrors(txs, app, accountFeeMap,
-                                            lowerBoundCloseTimeOffset,
-                                            upperBoundCloseTimeOffset)
-                     .first;
+    auto result = getInvalidTxListWithErrors(txs, app, accountFeeMap,
+                                             lowerBoundCloseTimeOffset,
+                                             upperBoundCloseTimeOffset);
+    invalidTxs = std::move(result.first);
+    auto errorCode = result.second;
+    CLOG_INFO(Herder, "Found {} invalid txs in txSet with error code {}",
+              invalidTxs.size(), static_cast<size_t>(errorCode));
     return removeTxs(txs, invalidTxs);
 }
 
