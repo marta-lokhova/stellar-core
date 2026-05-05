@@ -55,6 +55,47 @@ std::array<char const*,
     TX_STATUS_STRING = std::array{"PENDING", "DUPLICATE", "ERROR",
                                   "TRY_AGAIN_LATER", "FILTERED"};
 
+static char const*
+addResultCodeName(TransactionQueue::AddResultCode code)
+{
+    auto const index = static_cast<size_t>(code);
+    releaseAssert(index < TX_STATUS_STRING.size());
+    return TX_STATUS_STRING[index];
+}
+
+static char const*
+txResultCodeName(TransactionResultCode code)
+{
+    return xdr::xdr_traits<TransactionResultCode>::enum_name(code);
+}
+
+static void
+logTryAddFailure(TransactionFrameBase const& tx,
+                 TransactionQueue::AddResultCode code,
+                 std::string const& reason, bool includeFeeInfo = true)
+{
+    auto feeInfo =
+        includeFeeInfo
+            ? fmt::format(FMT_STRING(", feeBid={}, inclusionFee={}"),
+                          tx.getFullFee(), tx.getInclusionFee())
+            : std::string{};
+    CLOG_INFO(Tx,
+              "Mempool rejected transaction {} (status={}, source={}, "
+              "feeSource={}, seq={}{}): {}",
+              hexAbbrev(tx.getFullHash()), addResultCodeName(code),
+              KeyUtils::toStrKey(tx.getSourceID()),
+              KeyUtils::toStrKey(tx.getFeeSourceID()), tx.getSeqNum(), feeInfo,
+              reason);
+}
+
+static TransactionQueue::AddResult
+rejectTryAdd(TransactionFrameBase const& tx, TransactionQueue::AddResult result,
+             std::string const& reason, bool includeFeeInfo = true)
+{
+    logTryAddFailure(tx, result.code, reason, includeFeeInfo);
+    return result;
+}
+
 TransactionQueue::AddResult::AddResult(AddResultCode addCode)
     : code(addCode), txResult()
 {
@@ -330,30 +371,46 @@ TransactionQueue::canAdd(
         if (!mApp.getRunInOverlayOnlyMode())
 #endif
         {
-            return AddResult(
-                TransactionQueue::AddResultCode::ADD_STATUS_TRY_AGAIN_LATER);
+            return rejectTryAdd(
+                *tx,
+                AddResult(TransactionQueue::AddResultCode::
+                              ADD_STATUS_TRY_AGAIN_LATER),
+                "transaction hash is temporarily banned");
         }
     }
     if (isFiltered(tx))
     {
-        return AddResult(TransactionQueue::AddResultCode::ADD_STATUS_FILTERED);
+        return rejectTryAdd(
+            *tx,
+            AddResult(TransactionQueue::AddResultCode::ADD_STATUS_FILTERED),
+            "transaction contains an operation type filtered by configuration");
     }
     if (!tx->validateSorobanTxForFlooding(mKeysToFilter))
     {
         mQueueMetrics->mTxsFilteredDueToFootprintKeys.inc();
-        return AddResult(TransactionQueue::AddResultCode::ADD_STATUS_FILTERED);
+        return rejectTryAdd(
+            *tx,
+            AddResult(TransactionQueue::AddResultCode::ADD_STATUS_FILTERED),
+            "Soroban transaction footprint contains a filtered ledger key");
     }
     if (!force && !tx->validateAccountFilterForFlooding(mFilteredAccounts))
     {
         mQueueMetrics->mTxsFilteredDueToAccountKeys.inc();
-        return AddResult(TransactionQueue::AddResultCode::ADD_STATUS_FILTERED);
+        return rejectTryAdd(
+            *tx,
+            AddResult(TransactionQueue::AddResultCode::ADD_STATUS_FILTERED),
+            "transaction touches an account filtered by configuration");
     }
 
     int64_t newFullFee = tx->getFullFee();
     if (newFullFee < 0 || tx->getInclusionFee() < 0)
     {
-        return AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR, *tx,
-                         txMALFORMED);
+        return rejectTryAdd(
+            *tx,
+            AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR, *tx,
+                      txMALFORMED),
+            fmt::format(FMT_STRING("fee fields must be non-negative (result={})"),
+                        txResultCodeName(txMALFORMED)));
     }
 
     stateIter = mAccountStates.find(tx->getSourceID());
@@ -375,8 +432,11 @@ TransactionQueue::canAdd(
             // Check if the tx is a duplicate
             if (isDuplicateTx(currentTx, tx))
             {
-                return AddResult(
-                    TransactionQueue::AddResultCode::ADD_STATUS_DUPLICATE);
+                return rejectTryAdd(
+                    *tx,
+                    AddResult(TransactionQueue::AddResultCode::
+                                  ADD_STATUS_DUPLICATE),
+                    "same transaction is already pending");
             }
 
             // Any transaction older than the current one is invalid
@@ -384,9 +444,16 @@ TransactionQueue::canAdd(
             {
                 // If the transaction is older than the one in the queue, we
                 // reject it
-                return AddResult(
-                    TransactionQueue::AddResultCode::ADD_STATUS_ERROR, *tx,
-                    txBAD_SEQ);
+                return rejectTryAdd(
+                    *tx,
+                    AddResult(
+                        TransactionQueue::AddResultCode::ADD_STATUS_ERROR, *tx,
+                        txBAD_SEQ),
+                    fmt::format(FMT_STRING("sequence number is lower than the "
+                                           "pending transaction (pendingSeq={}, "
+                                           "result={})"),
+                                currentTx->getSeqNum(),
+                                txResultCodeName(txBAD_SEQ)));
             }
 
             // Before rejecting Soroban transactions due to source account
@@ -399,9 +466,14 @@ TransactionQueue::canAdd(
                             .getLastClosedSorobanNetworkConfig(),
                         ledgerVersion, diagnosticEvents))
                 {
-                    return AddResult(AddResultCode::ADD_STATUS_ERROR, *tx,
-                                     txSOROBAN_INVALID,
-                                     diagnosticEvents.finalize());
+                    return rejectTryAdd(
+                        *tx,
+                        AddResult(AddResultCode::ADD_STATUS_ERROR, *tx,
+                                  txSOROBAN_INVALID,
+                                  diagnosticEvents.finalize()),
+                        fmt::format(FMT_STRING("Soroban resources are invalid "
+                                               "(result={})"),
+                                    txResultCodeName(txSOROBAN_INVALID)));
                 }
             }
 
@@ -409,16 +481,25 @@ TransactionQueue::canAdd(
             {
                 // If there's already a transaction in the queue, we reject
                 // any new transaction
-                return AddResult(TransactionQueue::AddResultCode::
-                                     ADD_STATUS_TRY_AGAIN_LATER);
+                return rejectTryAdd(
+                    *tx,
+                    AddResult(TransactionQueue::AddResultCode::
+                                  ADD_STATUS_TRY_AGAIN_LATER),
+                    "source account already has a pending transaction");
             }
             else
             {
                 if (tx->getSeqNum() != currentTx->getSeqNum())
                 {
                     // New fee-bump transaction is rejected
-                    return AddResult(TransactionQueue::AddResultCode::
-                                         ADD_STATUS_TRY_AGAIN_LATER);
+                    return rejectTryAdd(
+                        *tx,
+                        AddResult(TransactionQueue::AddResultCode::
+                                      ADD_STATUS_TRY_AGAIN_LATER),
+                        fmt::format(FMT_STRING("fee-bump sequence number does "
+                                               "not match pending transaction "
+                                               "(pendingSeq={})"),
+                                    currentTx->getSeqNum()));
                 }
 
                 int64_t minFee;
@@ -426,9 +507,16 @@ TransactionQueue::canAdd(
                 {
                     auto txResult = tx->createTxErrorResult(txINSUFFICIENT_FEE);
                     txResult->setInsufficientFeeErrorWithFeeCharged(minFee);
-                    return AddResult(
-                        TransactionQueue::AddResultCode::ADD_STATUS_ERROR,
-                        std::move(txResult));
+                    return rejectTryAdd(
+                        *tx,
+                        AddResult(
+                            TransactionQueue::AddResultCode::ADD_STATUS_ERROR,
+                            std::move(txResult)),
+                        fmt::format(FMT_STRING("fee-bump replacement bid is "
+                                               "too low (minFeeBid={}, "
+                                               "result={})"),
+                                    minFee,
+                                    txResultCodeName(txINSUFFICIENT_FEE)));
                 }
 
                 if (currentTx->getFeeSourceID() == tx->getFeeSourceID())
@@ -460,11 +548,21 @@ TransactionQueue::canAdd(
         {
             auto txResult = tx->createValidationSuccessResult();
             txResult->setInsufficientFeeErrorWithFeeCharged(canAddRes.second);
-            return AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR,
-                             std::move(txResult));
+            return rejectTryAdd(
+                *tx,
+                AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR,
+                          std::move(txResult)),
+                fmt::format(FMT_STRING("transaction fee is too low for current "
+                                       "queue capacity (minFeeBid={}, "
+                                       "result={})"),
+                            canAddRes.second,
+                            txResultCodeName(txINSUFFICIENT_FEE)));
         }
-        return AddResult(
-            TransactionQueue::AddResultCode::ADD_STATUS_TRY_AGAIN_LATER);
+        return rejectTryAdd(
+            *tx,
+            AddResult(TransactionQueue::AddResultCode::
+                          ADD_STATUS_TRY_AGAIN_LATER),
+            "transaction does not currently fit queue capacity");
     }
 
     auto closeTime = mApp.getLedgerManager()
@@ -491,9 +589,15 @@ TransactionQueue::canAdd(
             validationLedgerSeq);
         if (!validationResult->isSuccess())
         {
-            return AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR,
-                             std::move(validationResult),
-                             diagnosticEvents.finalize());
+            auto const resultCode = validationResult->getResultCode();
+            return rejectTryAdd(
+                *tx,
+                AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR,
+                          std::move(validationResult),
+                          diagnosticEvents.finalize()),
+                fmt::format(FMT_STRING("transaction failed overlay validation "
+                                       "(result={})"),
+                            txResultCodeName(resultCode)));
         }
     }
 
@@ -510,13 +614,22 @@ TransactionQueue::canAdd(
         int64_t totalFees = feeStateIter == mAccountStates.end()
                                 ? 0
                                 : feeStateIter->second.mTotalFees;
-        if (getAvailableBalance(ledgerView.getLedgerHeader().current(),
-                                feeSource.current()) -
+        auto const availableBalance = getAvailableBalance(
+            ledgerView.getLedgerHeader().current(), feeSource.current());
+        if (availableBalance -
                 newFullFee <
             totalFees)
         {
-            return AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR,
-                             *tx, txINSUFFICIENT_BALANCE);
+            return rejectTryAdd(
+                *tx,
+                AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR,
+                          *tx, txINSUFFICIENT_BALANCE),
+                fmt::format(FMT_STRING("fee source available balance cannot "
+                                       "cover queued fee bids plus incoming "
+                                       "fee (availableBalance={}, "
+                                       "queuedFeeBids={}, result={})"),
+                            availableBalance, totalFees,
+                            txResultCodeName(txINSUFFICIENT_BALANCE)));
         }
     }
 
@@ -527,14 +640,25 @@ TransactionQueue::canAdd(
                                    "Soroban transactions are not allowed to "
                                    "use memo or muxed source account");
 
-        return AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR, *tx,
-                         txSOROBAN_INVALID, diagnosticEvents.finalize());
+        return rejectTryAdd(
+            *tx,
+            AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR, *tx,
+                      txSOROBAN_INVALID, diagnosticEvents.finalize()),
+            fmt::format(FMT_STRING("pre-v25 Soroban invoke transaction uses a "
+                                   "memo or muxed source account (result={})"),
+                        txResultCodeName(txSOROBAN_INVALID)));
     }
 
     if (!tx->validateHostFn())
     {
-        return AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR, *tx,
-                         txSOROBAN_INVALID, diagnosticEvents.finalize());
+        return rejectTryAdd(
+            *tx,
+            AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR, *tx,
+                      txSOROBAN_INVALID, diagnosticEvents.finalize()),
+            fmt::format(FMT_STRING("Soroban host function create-contract "
+                                   "preimage and executable types are "
+                                   "inconsistent (result={})"),
+                        txResultCodeName(txSOROBAN_INVALID)));
     }
 
     return AddResult(TransactionQueue::AddResultCode::ADD_STATUS_PENDING,
@@ -690,8 +814,13 @@ TransactionQueue::tryAdd(TransactionFrameBasePtr tx, bool submittedFromSelf,
 
     if (!tx->XDRProvidesValidFee())
     {
-        return AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR, *tx,
-                         txMALFORMED);
+        return rejectTryAdd(
+            *tx,
+            AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR, *tx,
+                      txMALFORMED),
+            fmt::format(FMT_STRING("fee fields are invalid (result={})"),
+                        txResultCodeName(txMALFORMED)),
+            /*includeFeeInfo=*/false);
     }
 
     AccountStates::iterator stateIter;
