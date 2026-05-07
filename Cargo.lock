@@ -3152,6 +3152,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "siphasher"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3363,7 +3369,7 @@ dependencies = [
  "soroban-env-macros 26.0.0",
  "soroban-wasmi",
  "static_assertions",
- "stellar-xdr 26.0.0",
+ "stellar-xdr 26.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "wasmparser",
 ]
 
@@ -3760,7 +3766,7 @@ dependencies = [
  "quote",
  "serde",
  "serde_json",
- "stellar-xdr 26.0.0",
+ "stellar-xdr 26.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "syn 2.0.119",
 ]
 
@@ -3911,7 +3917,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "stellar-xdr 26.0.0",
+ "siphasher",
+ "stellar-xdr 26.0.0 (git+https://github.com/drebelsky/rs-stellar-xdr?rev=aa2125e023d5acf213618081e2a87b358b18dd6f)",
  "tempfile",
  "tokio",
  "toml",
@@ -4045,6 +4052,19 @@ checksum = "fea3195594b044ea3a5b05906f81d945480825f00db4e3ae7d77526bf546ff3a"
 dependencies = [
  "base64 0.22.1",
  "cfg_eval",
+ "crate-git-revision 0.0.6",
+ "escape-bytes",
+ "ethnum",
+ "hex",
+ "sha2",
+ "stellar-strkey 0.0.13",
+]
+
+[[package]]
+name = "stellar-xdr"
+version = "26.0.0"
+source = "git+https://github.com/drebelsky/rs-stellar-xdr?rev=aa2125e023d5acf213618081e2a87b358b18dd6f#aa2125e023d5acf213618081e2a87b358b18dd6f"
+dependencies = [
  "crate-git-revision 0.0.6",
  "escape-bytes",
  "ethnum",

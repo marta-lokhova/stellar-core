@@ -113,6 +113,11 @@ impl Mempool {
         }
     }
 
+    /// Get iterator of transactions by hash, entry
+    pub fn by_hash(&self) -> std::collections::hash_map::Iter<TxHash, TxEntry> {
+        self.by_hash.iter()
+    }
+
     /// Add a transaction to the mempool.
     ///
     /// Returns true if the transaction was added (not a duplicate).
@@ -237,8 +242,7 @@ impl Mempool {
 }
 
 /// Compute transaction hash from raw bytes.
-#[cfg(test)]
-fn compute_tx_hash(data: &[u8]) -> TxHash {
+pub fn compute_tx_hash(data: &[u8]) -> TxHash {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(data);

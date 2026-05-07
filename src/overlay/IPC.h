@@ -40,6 +40,10 @@ enum class IPCMessageType : uint32_t
     /// Request current SCP state (peer asked via GET_SCP_STATE)
     REQUEST_SCP_STATE = 3,
 
+    /// Broadcast a compact representation of the current TX set to all peers
+    /// Payload [txSetHash:32]
+    BROADCAST_COMPACT_SET = 9,
+
     // ═══ Core → Overlay (Non-Critical) ═══
 
     /// Ledger closed, here's the new state
@@ -75,6 +79,11 @@ enum class IPCMessageType : uint32_t
     /// Request overlay metrics snapshot (empty payload)
     /// Response: OVERLAY_METRICS_RESPONSE with JSON payload
     REQUEST_OVERLAY_METRICS = 13,
+
+    /// Set the compact flow to always request at least this percentage of
+    /// transactions from the peer.
+    /// Payload: [percentage:u32]
+    COMPACT_FORCE_REQUEST_TXS_PCT = 14,
 
     // ═══ Overlay → Core (Critical Path) ═══
 

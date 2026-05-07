@@ -5,17 +5,26 @@
 //! - Transaction mempool (fee-ordered, with dedup)
 //! - Core command handling for mempool operations
 
+use siphasher::sip::SipHasher24;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, RwLock};
+use std::{collections::HashMap, hash::Hasher};
+use tokio::sync::{mpsc, oneshot, RwLock};
 use tracing::{debug, info};
 
 use crate::flood::Mempool;
 use crate::xdr::parse_supported_transaction;
 
 /// Commands from Core to Overlay
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum CoreCommand {
+    /// Lookup transactions by hash (for compact set building)
+    LookupTxsByHash {
+        hashes: Vec<u8>,
+        key: [u8; 16],
+        reply: oneshot::Sender<Vec<Vec<u8>>>,
+    },
+
     /// Submit a transaction for flooding
     SubmitTx {
         data: Vec<u8>,
@@ -105,6 +114,37 @@ impl Overlay {
                 mempool.insert(entry);
             }
 
+            CoreCommand::LookupTxsByHash { hashes, key, reply } => {
+                let mut indices = HashMap::<[u8; 6], usize>::new();
+                for (i, hash) in hashes.chunks(6).enumerate() {
+                    if hash.len() != 6 {
+                        panic!(
+                            "Invalid hash length in LookupTxsByHash: expected 6 bytes, got {}",
+                            hash.len()
+                        );
+                    }
+                    let mut arr = [0u8; 6];
+                    arr.copy_from_slice(hash);
+                    indices.insert(arr, i);
+                }
+
+                let mut result: Vec<Vec<u8>> = Vec::with_capacity(indices.len());
+                result.resize(indices.len(), Vec::new());
+                let mempool = self.mempool.read().await;
+                for (tx_hash, tx_entry) in mempool.by_hash() {
+                    let mut hasher = SipHasher24::new_with_key(&key);
+                    hasher.write(tx_hash);
+                    let digest = hasher.finish().to_be_bytes();
+                    let short_hash = &digest[2..8];
+                    if let Some(&index) = indices.get(short_hash) {
+                        result[index] = tx_entry.data.clone();
+                    }
+                }
+                drop(mempool);
+
+                reply.send(result).unwrap();
+            }
+
             CoreCommand::GetTopTxs { count, reply } => {
                 let mempool = self.mempool.read().await;
                 let top_hashes = mempool.top_by_fee(count);
@@ -150,6 +190,19 @@ impl OverlayHandle {
     /// Create a new handle.
     pub fn new(cmd_tx: mpsc::UnboundedSender<CoreCommand>) -> Self {
         Self { cmd_tx }
+    }
+
+    /// Get transactions referenced by compact set
+    pub async fn get_txs_by_hashes(&self, hashes: Vec<u8>, key: [u8; 16]) -> Vec<Vec<u8>> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(CoreCommand::LookupTxsByHash {
+                hashes,
+                key,
+                reply: tx,
+            })
+            .unwrap();
+        rx.await.unwrap()
     }
 
     /// Submit a transaction.

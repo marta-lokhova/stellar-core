@@ -16,12 +16,15 @@ pub mod libp2p_overlay;
 mod metrics;
 mod xdr;
 
+use siphasher::sip::SipHasher24;
 use std::collections::{HashMap, HashSet};
+use std::hash::Hasher;
 use std::net::SocketAddr;
+use std::num::NonZero;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{debug, error, info, warn};
 
@@ -35,6 +38,12 @@ use libp2p_overlay::{
     create_overlay, OverlayEvent as LibP2pOverlayEvent, OverlayHandle as LibP2pOverlayHandle,
 };
 use metrics::OverlayMetrics;
+use stellar_xdr::{
+    BytesM, CompactTxSet, CompactTxSetMessage, CompactTxSetMessageType,
+    GeneralizedTransactionSet, Hash, Limits, ParallelTxsComponent, ReadXdr, TransactionEnvelope,
+    TransactionPhase, TransactionSetV1, TxSetComponent, TxSetComponentTxsMaybeDiscountedFee,
+    WriteXdr,
+};
 
 /// Command-line arguments
 struct Args {
@@ -399,12 +408,221 @@ fn cache_tx_set_xdr(
     });
 }
 
+#[derive(Debug, Default)]
+struct CompactTxSetData {
+    txs: Vec<Vec<u8>>,
+    xdr: Vec<u8>,
+}
+
+fn gen_compact_tx_set(txset_hash: Hash, txset_xdr: Vec<u8>) -> CompactTxSetData {
+    let GeneralizedTransactionSet::V1(txset) =
+        GeneralizedTransactionSet::from_xdr(&txset_xdr, Limits::none())
+            .expect("Failed to parse TX set XDR for caching");
+
+    let mut base_fee = None;
+    let mut tx_hashes = Vec::new();
+    let mut txs = Vec::new();
+    let key: &[u8; 16] = txset_hash.0[..16].try_into().unwrap();
+
+    for phase in txset.phases.iter() {
+        match phase {
+            TransactionPhase::V0(components) => match components.as_slice() {
+                [] => {}
+                [TxSetComponent::TxsetCompTxsMaybeDiscountedFee(txset_comp)] => {
+                    base_fee = txset_comp.base_fee;
+                    for tx in &txset_comp.txs {
+                        let tx_xdr = tx
+                            .to_xdr(Limits::none())
+                            .expect("Failed to convert TxEnvelope to XDR");
+                        let tx_hash = flood::compute_tx_hash(&tx_xdr);
+                        let mut hasher = SipHasher24::new_with_key(key);
+                        hasher.write(&tx_hash);
+                        let digest = hasher.finish().to_be_bytes();
+                        tx_hashes.extend_from_slice(&digest[2..8]);
+                        txs.push(tx_xdr);
+                    }
+                }
+                _ => {
+                    panic!("Unexpected number of components in TX set")
+                }
+            },
+            TransactionPhase::V1(parallel) => {
+                if !parallel.execution_stages.is_empty() {
+                    panic!("Unexpected execution stages in TX set");
+                }
+            }
+        }
+    }
+
+    let compact_set = CompactTxSet {
+        tx_set_hash: txset_hash.clone(),
+        previous_ledger_hash: txset.previous_ledger_hash,
+        base_fee,
+        txs: BytesM::try_from(tx_hashes).expect("Failed to convert tx_hashes to BytesM"),
+    };
+
+    let compact_xdr = CompactTxSetMessage::Set(compact_set)
+        .to_xdr(Limits::none())
+        .expect("Failed to serialize CompactTxSetMessage to XDR");
+
+    CompactTxSetData {
+        txs,
+        xdr: compact_xdr,
+    }
+}
+
+fn decode_varint(data: &[u8], offset: &mut usize) -> usize {
+    let first_byte = data[*offset];
+    *offset += 1;
+
+    match first_byte {
+        0xFD => {
+            let num = u16::from_le_bytes(data[*offset..*offset + 2].try_into().unwrap());
+            *offset += 2;
+            num as usize
+        }
+        0xFE => {
+            let num = u32::from_le_bytes(data[*offset..*offset + 4].try_into().unwrap());
+            *offset += 4;
+            num as usize
+        }
+        0xFF => {
+            panic!("Should never need 8-byte indices for a tx set");
+        }
+        _ => first_byte as usize,
+    }
+}
+
+fn parse_differential_indices(indices: &[u8]) -> Vec<usize> {
+    // Each index is a variable-length integer (bitcoin VarInt size) representing the gap (-1) from the previous index
+    // E.g., [1, 2, 10] would be represented as [1, 0, 7]
+    // This is for a prototype, so we leave the panics on malformed input
+    let mut offset = 0;
+    let mut current_index = decode_varint(indices, &mut offset);
+    let mut result = vec![current_index];
+    while offset < indices.len() {
+        current_index += decode_varint(indices, &mut offset) + 1;
+        result.push(current_index);
+    }
+
+    result
+}
+
+fn encode_varint(value: usize, buffer: &mut Vec<u8>) {
+    if value < 0xFD {
+        buffer.push(value as u8);
+    } else if value <= 0xFFFF {
+        buffer.push(0xFD);
+        buffer.extend_from_slice(&(value as u16).to_le_bytes());
+    } else if value <= 0xFFFFFFFF {
+        buffer.push(0xFE);
+        buffer.extend_from_slice(&(value as u32).to_le_bytes());
+    } else {
+        panic!("Value too large for varint encoding");
+    }
+}
+
+fn create_differential_indices(indices: Vec<usize>) -> Vec<u8> {
+    // Create a variable-length encoding of the gaps between indices
+    let mut result = Vec::new();
+    encode_varint(indices[0], &mut result);
+    let mut prev_index = indices[0];
+
+    for index in indices.into_iter().skip(1) {
+        let gap = index - prev_index - 1;
+        encode_varint(gap, &mut result);
+        prev_index = index;
+    }
+
+    result
+}
+
+fn reconstruct_tx_set(
+    request: PendingCompactTxSet,
+    from: PeerId,
+    send_txset: mpsc::UnboundedSender<([u8; 32], Vec<u8>, PeerId)>,
+    metrics: Arc<OverlayMetrics>,
+) {
+    let txs: Vec<_> = request
+        .txs
+        .into_iter()
+        .map(|tx| -> TransactionEnvelope { tx.expect("Failed to get all TXs for compact set") })
+        .collect();
+
+    let phase0 = if txs.len() == 0 {
+        TransactionPhase::V0([].try_into().unwrap())
+    } else {
+        TransactionPhase::V0(
+            [TxSetComponent::TxsetCompTxsMaybeDiscountedFee(
+                TxSetComponentTxsMaybeDiscountedFee {
+                    base_fee: request.tx_set.base_fee,
+                    txs: txs.try_into().expect("Too many TXs in set for V0 format"),
+                },
+            )]
+            .try_into()
+            .unwrap(),
+        )
+    };
+
+    let phase1 = TransactionPhase::V1(ParallelTxsComponent::default());
+
+    let full_tx_set = GeneralizedTransactionSet::V1(TransactionSetV1 {
+        previous_ledger_hash: request.tx_set.previous_ledger_hash,
+        phases: [phase0, phase1]
+            .try_into()
+            .expect("Failed to create phases array for TX set"),
+    });
+
+    let full_xdr = full_tx_set
+        .to_xdr(Limits::none())
+        .expect("Failed to serialize full TX set to XDR");
+
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(&full_xdr);
+    let full_hash = hasher.finalize();
+    if full_hash.as_slice() != request.tx_set.tx_set_hash.0 {
+        panic!(
+            "Hash mismatch for full TX set: expected {:02x?}, got {:02x?} {:02x?}",
+            &request.tx_set.tx_set_hash.0,
+            &full_hash[..],
+            &full_xdr
+        );
+    }
+
+    let fetch_us = request.request_time.elapsed().as_micros() as u64;
+    metrics
+        .fetch_txset_sum_us
+        .fetch_add(fetch_us, Ordering::Relaxed);
+    metrics.fetch_txset_count.fetch_add(1, Ordering::Relaxed);
+
+    metrics
+        .reconstructed_size
+        .fetch_add(full_xdr.len() as u64, Ordering::Relaxed);
+    metrics.reconstructed_count.fetch_add(1, Ordering::Relaxed);
+
+    send_txset
+        .send((request.tx_set.tx_set_hash.0, full_xdr, from))
+        .expect("Failed to send full TX set to main task after receiving SetTxs");
+}
+
+struct PendingCompactTxSet {
+    tx_set: CompactTxSet,
+    txs: Vec<Option<TransactionEnvelope>>,
+    request_time: Instant,
+}
+
 /// Application state
 struct App {
     core_ipc: CoreIpc,
     overlay_handle: OverlayHandle,
     /// Cache for built TX sets
-    tx_set_cache: TxSetCache,
+    tx_set_cache: Arc<RwLock<TxSetCache>>,
+    /// percentage of compact txs to always request
+    compact_force_request_txs_pct: AtomicU32,
+    /// Cache for compact tx sets
+    // std::sync::Mutex is sufficient here since we don't do asynchronous work with the lock held
+    compact_set_cache: Arc<std::sync::Mutex<lru::LruCache<Hash256, Arc<Vec<Vec<u8>>>>>>,
     /// Current ledger sequence
     current_ledger_seq: u32,
     /// libp2p overlay handle (QUIC-based SCP + TX)
@@ -413,6 +631,13 @@ struct App {
     libp2p_events: mpsc::UnboundedReceiver<LibP2pOverlayEvent>,
     /// libp2p TX events (bounded, may drop under backpressure)
     tx_events: mpsc::Receiver<LibP2pOverlayEvent>,
+    /// Received tx sets that we're still waiting to push to Core
+    received_tx_sets: mpsc::UnboundedReceiver<([u8; 32], Vec<u8>, PeerId)>,
+    send_tx_set_to_core: mpsc::UnboundedSender<([u8; 32], Vec<u8>, PeerId)>,
+
+    /// TX sets that Core has requested but we're still fetching from peers
+    pending_compact_txsets: Arc<std::sync::Mutex<lru::LruCache<Hash, PendingCompactTxSet>>>,
+
     /// Pending SCP state requests: maps request_id to requesting peer
     /// When Core responds with ScpStateResponse containing request_id, we look up the peer
     pending_scp_state_requests: Arc<RwLock<HashMap<u64, PeerId>>>,
@@ -445,6 +670,39 @@ struct ConfiguredPeers {
 }
 
 impl App {
+    async fn receive_tx_set(&mut self, hash: [u8; 32], data: Vec<u8>, from: PeerId) {
+        info!(
+            "TXSET_RECV: Received TxSet {:02x?}... ({} bytes) from {}",
+            &hash[..4],
+            data.len(),
+            from
+        );
+
+        // IMPORTANT: Cache the TxSet FIRST, before pushing to Core
+        // This ensures the TxSet is available when SCP processing resumes
+        // and Core subsequently broadcasts the SCP to other peers
+        cache_tx_set_xdr(
+            &mut *self.tx_set_cache.write().await,
+            self.current_ledger_seq,
+            hash,
+            data.clone(),
+        );
+
+        // Always push TX set to Core (Core handles dedup)
+        info!(
+            "TXSET_TO_CORE: Pushing TxSet {:02x?}... ({} bytes) to Core",
+            &hash[..4],
+            data.len()
+        );
+        if let Err(e) = self
+            .core_ipc
+            .sender
+            .send_tx_set_available(hash, data.clone())
+        {
+            error!("Failed to push TX set to Core: {}", e);
+        }
+    }
+
     async fn new(config: Config, listen_mode: bool) -> Result<Self, Box<dyn std::error::Error>> {
         // Connect to Core (or listen for connection)
         let core_ipc = if listen_mode {
@@ -491,14 +749,20 @@ impl App {
             config.libp2p_listen_ip, libp2p_port
         );
 
+        let (txset_tx, txset_rx) = mpsc::unbounded_channel();
+
         Ok(Self {
             core_ipc,
             overlay_handle,
-            tx_set_cache: TxSetCache::new(100),
+            tx_set_cache: Arc::new(RwLock::new(TxSetCache::new(100))),
             current_ledger_seq: 0,
             libp2p_handle,
             libp2p_events: libp2p_event_rx,
             tx_events: tx_event_rx,
+            received_tx_sets: txset_rx,
+            send_tx_set_to_core: txset_tx,
+            // 30 should be a safe upper bound for the prototype
+            pending_compact_txsets: Arc::new(lru::LruCache::new(NonZero::new(30).unwrap()).into()),
             pending_scp_state_requests: Arc::new(RwLock::new(HashMap::new())),
             next_scp_request_id: Arc::new(AtomicU64::new(1)),
             local_addrs,
@@ -510,6 +774,9 @@ impl App {
             known_peers: Arc::new(RwLock::new(HashMap::new())),
             peer_hostnames: Arc::new(RwLock::new(HashMap::new())),
             metrics,
+            // Since this is only for compact sets we're hosting, 10 should be more than enough
+            compact_set_cache: Arc::new(lru::LruCache::new(NonZero::new(10).unwrap()).into()),
+            compact_force_request_txs_pct: AtomicU32::new(0),
         })
     }
 
@@ -539,6 +806,10 @@ impl App {
                             break;
                         }
                     }
+                }
+
+                Some((hash, data, from)) = self.received_tx_sets.recv() => {
+                    self.receive_tx_set(hash, data, from).await;
                 }
 
                 // Receive events from libp2p QUIC overlay (SCP + TxSet - critical)
@@ -677,37 +948,15 @@ impl App {
                     from
                 );
 
-                // Extract TX set hashes and proactively fetch them. Snapshot the
-                // cache-hit check on the main loop, then move the libp2p cmd_tx
-                // awaits into a spawned task so the loop never blocks on the
-                // bounded command channel.
+                // Extract TX set hashes referenced by the SCP message (logging only —
+                // TX sets arrive via compact dissemination, no explicit fetch needed)
                 let txset_hashes = extract_txset_hashes_from_scp(&envelope);
-                if !txset_hashes.is_empty() {
-                    let needs_fetch: HashSet<[u8; 32]> = txset_hashes
-                        .iter()
-                        .filter(|h| self.tx_set_cache.get(h).is_none())
-                        .copied()
-                        .collect();
-                    let handle = self.libp2p_handle.clone();
-                    let from_peer = from;
-                    tokio::spawn(async move {
-                        for txhash in &txset_hashes {
-                            debug!(
-                                "Recording peer {} as source for TX set {:02x?}...",
-                                from_peer,
-                                &txhash[..4]
-                            );
-                            handle.record_txset_source(*txhash, from_peer).await;
-                            if needs_fetch.contains(txhash) {
-                                info!(
-                                    "TXSET_AUTO_FETCH: Proactively fetching TX set {:02x?}... referenced in SCP from {}",
-                                    &txhash[..4],
-                                    from_peer
-                                );
-                                handle.fetch_txset(*txhash).await;
-                            }
-                        }
-                    });
+                for txhash in &txset_hashes {
+                    debug!(
+                        "Peer {} is a source for TX set {:02x?}...",
+                        from,
+                        &txhash[..4]
+                    );
                 }
 
                 // Forward to Core
@@ -728,73 +977,183 @@ impl App {
                 debug!("Received TX via QUIC from {}: {} bytes", from, tx.len());
                 self.overlay_handle.submit_tx(tx, 0, 0);
             }
-            LibP2pOverlayEvent::TxSetReceived { hash, data, from } => {
-                info!(
-                    "TXSET_RECV: Received TxSet {:02x?}... ({} bytes) from {}",
-                    &hash[..4],
-                    data.len(),
-                    from
-                );
-                let data = match xdr::verify_generalized_tx_set_xdr(&hash, &data) {
-                    Ok(canonical) => canonical,
-                    Err(e) => {
-                        warn!(
-                            "TXSET_RECV_DROP: Dropping invalid TxSet {:02x?}... from {}: {}",
-                            &hash[..4],
-                            from,
-                            e
-                        );
-                        return;
-                    }
-                };
 
-                // IMPORTANT: Cache the TxSet FIRST, before pushing to Core
-                // This ensures the TxSet is available when SCP processing resumes
-                cache_tx_set_xdr(
-                    &mut self.tx_set_cache,
-                    self.current_ledger_seq,
-                    hash,
-                    data.clone(),
-                );
-
-                // Always push TX set to Core (Core handles dedup)
-                info!(
-                    "TXSET_TO_CORE: Pushing TxSet {:02x?}... ({} bytes) to Core",
-                    &hash[..4],
-                    data.len()
-                );
-                if let Err(e) = self
-                    .core_ipc
-                    .sender
-                    .send_tx_set_available(hash, data.clone())
-                {
-                    error!("Failed to push TX set to Core: {}", e);
-                }
-            }
-            LibP2pOverlayEvent::TxSetRequested { hash, from } => {
-                info!("Peer {} requesting TxSet {:02x?}...", from, &hash[..4]);
-                // Look up in local cache and respond
-                if let Some(cached) = self.tx_set_cache.get(&hash) {
-                    info!(
-                        "Serving TxSet {:02x?}... ({} bytes) to {}",
-                        &hash[..4],
-                        cached.xdr.len(),
-                        from
-                    );
-                    let handle = self.libp2p_handle.clone();
-                    let data = cached.xdr.clone();
+            LibP2pOverlayEvent::CompactReceived { msg, from, size } => match msg {
+                CompactTxSetMessage::Set(compact_tx_set) => {
+                    let overlay_handle = self.overlay_handle.clone();
+                    let pending_cache = Arc::clone(&self.pending_compact_txsets);
+                    let p2p_handle = self.libp2p_handle.clone();
+                    let send_txset = self.send_tx_set_to_core.clone();
+                    let metrics = Arc::clone(&self.metrics);
+                    let request_percent =
+                        self.compact_force_request_txs_pct.load(Ordering::Relaxed);
+                    metrics.compact_count.fetch_add(1, Ordering::Relaxed);
+                    metrics
+                        .compact_size
+                        .fetch_add(size as u64, Ordering::Relaxed);
                     tokio::spawn(async move {
-                        handle.send_txset(hash, data, from).await;
+                        let begin = Instant::now();
+                        let hashes = compact_tx_set.txs.clone();
+                        let key: [u8; 16] = compact_tx_set.tx_set_hash.0[..16].try_into().unwrap();
+                        let mut missing = Vec::new();
+                        let txs_serialized =
+                            overlay_handle.get_txs_by_hashes(hashes.to_vec(), key).await;
+                        let force_missing_count =
+                            (txs_serialized.len() * request_percent as usize + 99) / 100;
+                        let mut txs = Vec::with_capacity(txs_serialized.len());
+                        for (i, tx) in txs_serialized.into_iter().enumerate() {
+                            if i < force_missing_count || tx.is_empty() {
+                                txs.push(None);
+                                missing.push(i);
+                            } else {
+                                txs.push(Some(
+                                    TransactionEnvelope::from_xdr(&tx, Limits::none())
+                                        .expect("Invalid TX XDR in cache"),
+                                ));
+                            }
+                        }
+
+                        if missing.is_empty() {
+                            reconstruct_tx_set(
+                                PendingCompactTxSet {
+                                    tx_set: compact_tx_set,
+                                    txs,
+                                    request_time: begin,
+                                },
+                                from,
+                                send_txset,
+                                metrics,
+                            );
+                        } else {
+                            let num_missing = missing.len();
+                            let missing = create_differential_indices(missing);
+                            let mut msg: Vec<u8> = Vec::new();
+                            msg.extend_from_slice(
+                                &(CompactTxSetMessageType::SetGetTxs as u32).to_be_bytes(),
+                            );
+                            msg.extend_from_slice(&compact_tx_set.tx_set_hash.0);
+                            msg.extend_from_slice(&(missing.len() as u32).to_be_bytes());
+                            msg.extend_from_slice(&missing);
+                            let rounded_size = msg.len().next_multiple_of(4);
+                            msg.resize(rounded_size, 0);
+                            metrics
+                                .txs_requested
+                                .fetch_add(num_missing as u64, Ordering::Relaxed);
+                            metrics
+                                .tx_bytes_requested
+                                .fetch_add(msg.len() as u64, Ordering::Relaxed);
+                            p2p_handle.send_compact_msg(msg, from).await;
+
+                            let mut cache = pending_cache.lock().unwrap();
+                            cache.put(
+                                compact_tx_set.tx_set_hash.clone(),
+                                PendingCompactTxSet {
+                                    tx_set: compact_tx_set,
+                                    txs,
+                                    request_time: begin,
+                                },
+                            );
+                        }
                     });
-                } else {
-                    warn!(
-                        "TxSet {:02x?}... NOT IN CACHE - cannot serve to {} (cache has {} entries)",
-                        &hash[..4],
-                        from,
-                        self.tx_set_cache.len()
-                    );
                 }
-            }
+                CompactTxSetMessage::SetGet(_) => panic!(
+                    "Received unexpected CompactTxSetMessage::SetGet from peer {}",
+                    from
+                ),
+                CompactTxSetMessage::SetGetTxs(compact_tx_set_get_txs) => {
+                    let compact_set_cache = Arc::clone(&self.compact_set_cache);
+                    let handle = self.libp2p_handle.clone();
+                    tokio::spawn(async move {
+                        let txs = {
+                            let mut cache = compact_set_cache.lock().unwrap();
+                            if let Some(txs) = cache.get(&compact_tx_set_get_txs.tx_set_hash.0) {
+                                Arc::clone(txs)
+                            } else {
+                                warn!(
+                                    "Cache miss for compact tx set {:02x?} requested by {}",
+                                    &compact_tx_set_get_txs.tx_set_hash.0[..4],
+                                    from
+                                );
+                                return;
+                            }
+                        };
+                        let indices = parse_differential_indices(&compact_tx_set_get_txs.indices);
+                        let mut msg: Vec<u8> = Vec::new();
+                        msg.extend_from_slice(
+                            &(CompactTxSetMessageType::SetTxs as u32).to_be_bytes(),
+                        );
+                        msg.extend_from_slice(&compact_tx_set_get_txs.tx_set_hash.0);
+                        msg.extend_from_slice(&(indices.len() as u32).to_be_bytes());
+                        for index in indices {
+                            msg.extend_from_slice(&txs[index]);
+                        }
+                        if msg.len() % 4 != 0 {
+                            panic!(
+                                "CompactTxSetMessage::SetTxs payload must be a multiple of 4 bytes"
+                            );
+                        }
+                        handle.send_compact_msg(msg, from).await;
+                    });
+                }
+                CompactTxSetMessage::SetTxs(compact_tx_set_txs) => {
+                    let pending_cache = Arc::clone(&self.pending_compact_txsets);
+                    let send_txset = self.send_tx_set_to_core.clone();
+                    let metrics = Arc::clone(&self.metrics);
+                    tokio::spawn(async move {
+                        let Some(mut request) = pending_cache
+                            .lock()
+                            .unwrap()
+                            .pop(&compact_tx_set_txs.tx_set_hash)
+                        else {
+                            warn!(
+                                "Received SetTxs for unknown compact set {:02x?} from {}",
+                                &compact_tx_set_txs.tx_set_hash.0[..4],
+                                from
+                            );
+                            return;
+                        };
+
+                        let mut indices = HashMap::<[u8; 6], usize>::new();
+                        for (i, hash) in request.tx_set.txs.chunks(6).enumerate() {
+                            if hash.len() != 6 {
+                                panic!(
+                            "Invalid hash length in LookupTxsByHash: expected 6 bytes, got {}",
+                            hash.len()
+                        );
+                            }
+                            let mut arr = [0u8; 6];
+                            arr.copy_from_slice(hash);
+                            indices.insert(arr, i);
+                        }
+
+                        let key: &[u8; 16] =
+                            &request.tx_set.tx_set_hash.0[..16].try_into().unwrap();
+                        for tx in compact_tx_set_txs.txs {
+                            let tx_xdr = tx
+                                .to_xdr(Limits::none())
+                                .expect("Failed to serialize TX XDR in SetTxs");
+                            let tx_hash = flood::compute_tx_hash(&tx_xdr);
+                            let mut hasher = SipHasher24::new_with_key(key);
+                            hasher.write(&tx_hash);
+                            let digest = hasher.finish().to_be_bytes();
+                            let index_bytes = &digest[2..8];
+                            if let Some(index) = indices.get(index_bytes) {
+                                request.txs[*index] = Some(tx);
+                            } else {
+                                warn!(
+                                    "Received TX that doesn't match any requested hash in compact set {:02x?}",
+                                    &request.tx_set.tx_set_hash.0[..4]
+                                );
+                            }
+                        }
+
+                        metrics
+                            .tx_bytes_received
+                            .fetch_add(size as u64, Ordering::Relaxed);
+                        reconstruct_tx_set(request, from, send_txset, metrics);
+                    });
+                }
+            },
 
             LibP2pOverlayEvent::ScpStateRequested {
                 peer_id,
@@ -970,6 +1329,66 @@ impl App {
                 });
             }
 
+            MessageType::BroadcastCompactSet => {
+                let tx_set_hash: [u8; 32] = msg
+                    .payload
+                    .try_into()
+                    .expect("Invalid payload length for BroadcastCompactSet");
+                let tx_set_cache = Arc::clone(&self.tx_set_cache);
+                let compact_set_cache = Arc::clone(&self.compact_set_cache);
+                let handle = self.libp2p_handle.clone();
+                tokio::spawn(async move {
+                    {
+                        // check if we already have this tx set in the compact cache before doing
+                        // the more expensive generation step
+                        let mut cache = compact_set_cache.lock().unwrap();
+                        if cache.contains(&tx_set_hash) {
+                            info!(
+                                "BroadcastCompactSet {:02x?}... already in compact cache, skipping generation",
+                                &tx_set_hash[..4],
+                            );
+                            return;
+                        }
+                        // insert a placeholder to prevent duplicate generation if we get multiple
+                        // requests for the same set before the first one finishes
+                        cache.put(tx_set_hash, Arc::new(Vec::new()));
+                    }
+                    let cached = {
+                        let cache = tx_set_cache.read().await;
+                        cache.get(&tx_set_hash).cloned()
+                    };
+                    if let Some(cached) = cached {
+                        info!(
+                            "Broadcasting CompactSet {:02x?}... ({} bytes) from Core",
+                            &tx_set_hash[..4],
+                            cached.xdr.len()
+                        );
+                        let xdr = cached.xdr;
+                        let compact_data =
+                            tokio::task::spawn_blocking(move || -> CompactTxSetData {
+                                gen_compact_tx_set(Hash(tx_set_hash), xdr)
+                            })
+                            .await
+                            .expect("Failed to generate CompactTxSetData");
+                        handle.broadcast_compact(compact_data.xdr).await;
+                        let mut compact_cache = compact_set_cache.lock().unwrap();
+                        if compact_cache
+                            .put(tx_set_hash, compact_data.txs.into())
+                            .is_none()
+                        {
+                            warn!("BroadcastCompactSet: requested CompactSet {:02x?}... wasn't in compact cache", &tx_set_hash[..4]);
+                        }
+                        drop(compact_cache);
+                    } else {
+                        // This should only happen for the TxSets before core upgrades
+                        warn!(
+                            "Cannot broadcast CompactSet {:02x?}... from Core: not in cache",
+                            &tx_set_hash[..4]
+                        );
+                    }
+                });
+            }
+
             MessageType::GetTopTxs => {
                 // Parse payload: [count:4]
                 if msg.payload.len() < 4 {
@@ -1022,28 +1441,24 @@ impl App {
                 let mut hash = [0u8; 32];
                 hash.copy_from_slice(&msg.payload[0..32]);
 
-                // First check local cache
-                if let Some(xdr) = get_cached_tx_set_xdr(&self.tx_set_cache, &hash) {
-                    info!(
-                        "TXSET_FROM_CACHE: Sending TX set {:02x?}... ({} bytes) from local cache",
-                        &hash[..4],
-                        xdr.len()
-                    );
-                    if let Err(e) = self.core_ipc.sender.send_tx_set_available(hash, xdr) {
-                        error!("Failed to send TX set: {}", e);
+                let tx_set_cache = Arc::clone(&self.tx_set_cache);
+                let core_sender = self.core_ipc.sender.clone();
+
+                tokio::spawn(async move {
+                    // First check local cache
+                    if let Some(xdr) = get_cached_tx_set_xdr(&*tx_set_cache.read().await, &hash) {
+                        info!(
+                            "TXSET_FROM_CACHE: Sending TX set {:02x?}... ({} bytes) from local cache",
+                            &hash[..4],
+                            xdr.len()
+                        );
+                        if let Err(e) = core_sender.send_tx_set_available(hash, xdr) {
+                            error!("Failed to send TX set: {}", e);
+                        }
+                    } else {
+                        info!("TXSET_CACHE_MISS: TX set {:02x?}... not in local cache, waiting for peer push", &hash[..4]);
                     }
-                } else {
-                    // Not in local cache - request from peers. Spawn so the main
-                    // loop never awaits on the bounded libp2p cmd channel.
-                    info!(
-                        "TXSET_FETCH_START: TX set {:02x?}... not in cache, fetching from peers",
-                        &hash[..4]
-                    );
-                    let handle = self.libp2p_handle.clone();
-                    tokio::spawn(async move {
-                        handle.fetch_txset(hash).await;
-                    });
-                }
+                });
             }
 
             MessageType::CacheTxSet => {
@@ -1076,10 +1491,17 @@ impl App {
                 );
 
                 cache_tx_set_xdr(
-                    &mut self.tx_set_cache,
+                    &mut *self.tx_set_cache.write().await,
                     self.current_ledger_seq,
                     hash,
                     tx_set_xdr,
+                );
+            }
+
+            MessageType::CompactForceRequestTxsPct => {
+                self.compact_force_request_txs_pct.store(
+                    u32::from_le_bytes(msg.payload[0..4].try_into().unwrap()),
+                    Ordering::Relaxed,
                 );
             }
 
@@ -1157,6 +1579,8 @@ impl App {
 
                     // Evict old TX sets from cache
                     self.tx_set_cache
+                        .write()
+                        .await
                         .evict_before(ledger_seq.saturating_sub(12));
                 }
             }
@@ -1510,7 +1934,7 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stellar_xdr::curr::{Limits, ScpEnvelope, WriteXdr};
+    use stellar_xdr::{Limits, ScpEnvelope, WriteXdr};
 
     fn test_scp_envelope_xdr(slot_index: u64) -> Vec<u8> {
         let mut envelope = ScpEnvelope::default();

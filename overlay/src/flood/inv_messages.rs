@@ -3,7 +3,7 @@
 //! Wire format: length-prefixed `StellarMessage` XDR.
 
 use std::io;
-use stellar_xdr::curr::{
+use stellar_xdr::{
     FloodAdvert, FloodDemand, Hash, Limits, ReadXdr, StellarMessage, TxAdvertVector,
     TxDemandVector, WriteXdr,
 };

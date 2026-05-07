@@ -27,7 +27,8 @@ RustOverlayManager::RustOverlayManager(Application& app)
               cfg.PEER_PORT);
 
     mOverlayIPC = std::make_unique<OverlayIPC>(
-        cfg.OVERLAY_SOCKET_PATH, cfg.OVERLAY_BINARY_PATH, cfg.PEER_PORT);
+        cfg.OVERLAY_SOCKET_PATH, cfg.OVERLAY_BINARY_PATH, cfg.PEER_PORT,
+        cfg.NODE_SEED.getPublicKey());
 }
 
 RustOverlayManager::~RustOverlayManager()
@@ -80,6 +81,8 @@ RustOverlayManager::start()
 
     mOverlayIPC->setPeerConfig(cfg.KNOWN_PEERS, cfg.PREFERRED_PEERS,
                                cfg.PEER_PORT);
+    mOverlayIPC->setCompactForceRequestTxsPct(
+        cfg.COMPACT_FORCE_REQUEST_TXS_PCT);
 
     CLOG_INFO(Overlay, "RustOverlayManager started, peer_port={}",
               cfg.PEER_PORT);
@@ -323,6 +326,23 @@ RustOverlayManager::syncOverlayMetrics()
     markDelta(m.mSendSCPMessageSetMeter, "send_scp_message");
     markDelta(m.mSendTransactionMeter, "send_transaction");
     markDelta(m.mSendTxSetMeter, "send_txset");
+
+    // Compact metrics
+    auto setCounter = [&](medida::Counter& counter,
+                          std::string const& jsonField) {
+        if (root.isMember(jsonField))
+        {
+            auto val = root[jsonField].asUInt64();
+            counter.set_count(val);
+        }
+    };
+    setCounter(m.mReconstructedSize, "reconstructed_size");
+    setCounter(m.mReconstructedCount, "reconstructed_count");
+    setCounter(m.mCompactSize, "compact_size");
+    setCounter(m.mCompactCount, "compact_count");
+    setCounter(m.mTxsRequested, "txs_requested");
+    setCounter(m.mTxBytesRequested, "tx_bytes_requested");
+    setCounter(m.mTxBytesReceived, "tx_bytes_received");
 
     // Connection lifecycle — these aren't registered as medida meters on
     // the C++ side yet, so they'll just be tracked by the existing counters.

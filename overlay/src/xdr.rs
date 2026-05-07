@@ -2,7 +2,7 @@
 
 use sha2::{Digest, Sha256};
 use std::fmt;
-use stellar_xdr::curr as xdr;
+use stellar_xdr as xdr;
 use xdr::{
     GeneralizedTransactionSet, Limits, MuxedAccount, Operation, OperationBody, ReadXdr, ScpBallot,
     ScpEnvelope, ScpStatementPledges, StellarMessage, StellarValue, TransactionEnvelope, Uint256,

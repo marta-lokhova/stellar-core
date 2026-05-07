@@ -57,7 +57,8 @@ class OverlayIPC
      * @param peerPort Port for peer TCP connections (passed to overlay)
      */
     OverlayIPC(std::optional<std::string> socketPath,
-               std::optional<std::string> overlayBinaryPath, uint16_t peerPort);
+               std::optional<std::string> overlayBinaryPath, uint16_t peerPort,
+               PublicKey const& nodeId);
 
     static std::string defaultSocketPath(uint16_t peerPort);
     static std::optional<std::string> findOverlayBinaryPath();
@@ -145,6 +146,8 @@ class OverlayIPC
     void setPeerConfig(std::vector<std::string> const& knownPeers,
                        std::vector<std::string> const& preferredPeers,
                        uint16_t listenPort);
+
+    void setCompactForceRequestTxsPct(uint32_t percentage);
 
     /**
      * Request a TX set by hash from peers (asynchronous).
@@ -240,6 +243,8 @@ class OverlayIPC
 
     // Protects mChannel->send() - channel is not thread-safe
     mutable std::mutex mSendMutex;
+
+    PublicKey const mNodePublicKey;
 };
 
 } // namespace stellar

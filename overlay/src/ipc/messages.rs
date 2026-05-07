@@ -24,6 +24,10 @@ pub enum MessageType {
     /// Request current SCP state (peer asked via GET_SCP_STATE)
     RequestScpState = 3,
 
+    /// Broadcast a compact representation of the current TX set to all peers
+    /// Payload [txSetHash:32]
+    BroadcastCompactSet = 9,
+
     // ═══ Core → Overlay (Non-Critical) ═══
     /// Ledger closed, here's the new state
     LedgerClosed = 4,
@@ -55,6 +59,11 @@ pub enum MessageType {
 
     /// Request overlay metrics snapshot (empty payload)
     RequestOverlayMetrics = 13,
+
+    /// Set the compact flow to always request at least this percentage of
+    /// transactions from the peer.
+    /// Payload: [percentage:u32]
+    CompactForceRequestTxsPct = 14,
 
     // ═══ Overlay → Core (Critical Path) ═══
     /// Received SCP envelope from network
@@ -89,10 +98,12 @@ impl TryFrom<u32> for MessageType {
             6 => Ok(MessageType::ScpStateResponse),
             7 => Ok(MessageType::Shutdown),
             8 => Ok(MessageType::SetPeerConfig),
+            9 => Ok(MessageType::BroadcastCompactSet),
             10 => Ok(MessageType::SubmitTx),
             11 => Ok(MessageType::RequestTxSet),
             12 => Ok(MessageType::CacheTxSet),
             13 => Ok(MessageType::RequestOverlayMetrics),
+            14 => Ok(MessageType::CompactForceRequestTxsPct),
             100 => Ok(MessageType::ScpReceived),
             101 => Ok(MessageType::TopTxsResponse),
             102 => Ok(MessageType::PeerRequestsScpState),

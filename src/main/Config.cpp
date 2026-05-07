@@ -236,6 +236,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     // Rust overlay defaults
     OVERLAY_BINARY_PATH = std::nullopt;
     OVERLAY_SOCKET_PATH = std::nullopt;
+    COMPACT_FORCE_REQUEST_TXS_PCT = 0;
 
     LOG_COLOR = false;
 
@@ -1474,6 +1475,11 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                 {"FLOOD_ARB_TX_BASE_ALLOWANCE",
                  [&]() {
                      FLOOD_ARB_TX_BASE_ALLOWANCE = readInt<int32_t>(item, -1);
+                 }},
+                {"COMPACT_FORCE_REQUEST_TXS_PCT",
+                 [&]() {
+                     COMPACT_FORCE_REQUEST_TXS_PCT =
+                         readInt<uint32_t>(item, 0, 100);
                  }},
                 {"FLOOD_ARB_TX_DAMPING_FACTOR",
                  [&]() {
