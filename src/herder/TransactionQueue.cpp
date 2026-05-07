@@ -74,11 +74,10 @@ logTryAddFailure(TransactionFrameBase const& tx,
                  TransactionQueue::AddResultCode code,
                  std::string const& reason, bool includeFeeInfo = true)
 {
-    auto feeInfo =
-        includeFeeInfo
-            ? fmt::format(FMT_STRING(", feeBid={}, inclusionFee={}"),
-                          tx.getFullFee(), tx.getInclusionFee())
-            : std::string{};
+    auto feeInfo = includeFeeInfo
+                       ? fmt::format(FMT_STRING(", feeBid={}, inclusionFee={}"),
+                                     tx.getFullFee(), tx.getInclusionFee())
+                       : std::string{};
     CLOG_INFO(Tx,
               "Mempool rejected transaction {} (status={}, source={}, "
               "feeSource={}, seq={}{}): {}",
@@ -371,11 +370,10 @@ TransactionQueue::canAdd(
         if (!mApp.getRunInOverlayOnlyMode())
 #endif
         {
-            return rejectTryAdd(
-                *tx,
-                AddResult(TransactionQueue::AddResultCode::
-                              ADD_STATUS_TRY_AGAIN_LATER),
-                "transaction hash is temporarily banned");
+            return rejectTryAdd(*tx,
+                                AddResult(TransactionQueue::AddResultCode::
+                                              ADD_STATUS_TRY_AGAIN_LATER),
+                                "transaction hash is temporarily banned");
         }
     }
     if (isFiltered(tx))
@@ -409,8 +407,9 @@ TransactionQueue::canAdd(
             *tx,
             AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR, *tx,
                       txMALFORMED),
-            fmt::format(FMT_STRING("fee fields must be non-negative (result={})"),
-                        txResultCodeName(txMALFORMED)));
+            fmt::format(
+                FMT_STRING("fee fields must be non-negative (result={})"),
+                txResultCodeName(txMALFORMED)));
     }
 
     stateIter = mAccountStates.find(tx->getSourceID());
@@ -434,8 +433,8 @@ TransactionQueue::canAdd(
             {
                 return rejectTryAdd(
                     *tx,
-                    AddResult(TransactionQueue::AddResultCode::
-                                  ADD_STATUS_DUPLICATE),
+                    AddResult(
+                        TransactionQueue::AddResultCode::ADD_STATUS_DUPLICATE),
                     "same transaction is already pending");
             }
 
@@ -446,14 +445,13 @@ TransactionQueue::canAdd(
                 // reject it
                 return rejectTryAdd(
                     *tx,
-                    AddResult(
-                        TransactionQueue::AddResultCode::ADD_STATUS_ERROR, *tx,
-                        txBAD_SEQ),
-                    fmt::format(FMT_STRING("sequence number is lower than the "
-                                           "pending transaction (pendingSeq={}, "
-                                           "result={})"),
-                                currentTx->getSeqNum(),
-                                txResultCodeName(txBAD_SEQ)));
+                    AddResult(TransactionQueue::AddResultCode::ADD_STATUS_ERROR,
+                              *tx, txBAD_SEQ),
+                    fmt::format(
+                        FMT_STRING("sequence number is lower than the "
+                                   "pending transaction (pendingSeq={}, "
+                                   "result={})"),
+                        currentTx->getSeqNum(), txResultCodeName(txBAD_SEQ)));
             }
 
             // Before rejecting Soroban transactions due to source account
@@ -560,8 +558,8 @@ TransactionQueue::canAdd(
         }
         return rejectTryAdd(
             *tx,
-            AddResult(TransactionQueue::AddResultCode::
-                          ADD_STATUS_TRY_AGAIN_LATER),
+            AddResult(
+                TransactionQueue::AddResultCode::ADD_STATUS_TRY_AGAIN_LATER),
             "transaction does not currently fit queue capacity");
     }
 
@@ -616,9 +614,7 @@ TransactionQueue::canAdd(
                                 : feeStateIter->second.mTotalFees;
         auto const availableBalance = getAvailableBalance(
             ledgerView.getLedgerHeader().current(), feeSource.current());
-        if (availableBalance -
-                newFullFee <
-            totalFees)
+        if (availableBalance - newFullFee < totalFees)
         {
             return rejectTryAdd(
                 *tx,

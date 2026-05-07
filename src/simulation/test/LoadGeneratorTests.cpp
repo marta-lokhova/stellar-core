@@ -13,6 +13,7 @@
 #include "simulation/Topologies.h"
 #include "test/Catch2.h"
 #include "test/test.h"
+#include "transactions/TransactionUtils.h"
 #include "transactions/test/SorobanTxTestUtils.h"
 #include "util/Math.h"
 #include "util/MetricsRegistry.h"
@@ -208,6 +209,73 @@ TEST_CASE("mixed pregen and synthetic soroban in overlay-only mode",
                        .count() == prev + 1;
         },
         100 * simulation->getExpectedLedgerCloseTime(), false);
+}
+
+TEST_CASE("overlay-only generated soroban tx sequence numbers are monotonic",
+          "[loadgen]")
+{
+    auto cfg = getTestConfig();
+    cfg.GENESIS_TEST_ACCOUNT_COUNT = 2;
+    cfg.LEDGER_PROTOCOL_VERSION = Config::CURRENT_LEDGER_PROTOCOL_VERSION;
+
+    VirtualClock clock(VirtualClock::REAL_TIME);
+    auto app = createTestApplication(clock, cfg);
+    app->setRunInOverlayOnlyMode(true);
+
+    TxGenerator txGenerator(*app);
+    auto const ledgerNum = app->getLedgerManager().getLastClosedLedgerNum() + 1;
+    uint64_t const sourceAccountId = 0;
+
+    auto requireNextSeq = [](auto makeTx) {
+        auto [account, firstTx] = makeTx();
+        auto [sameAccount, secondTx] = makeTx();
+
+        REQUIRE(sameAccount->getPublicKey() == account->getPublicKey());
+        REQUIRE(secondTx->getSeqNum() == firstTx->getSeqNum() + 1);
+    };
+
+    SECTION("apply-load invoke")
+    {
+        auto instance = makeSyntheticContractInstance("apply_load");
+        requireNextSeq([&]() {
+            return txGenerator.invokeSorobanLoadTransactionV2(
+                ledgerNum, sourceAccountId, instance, /* dataEntryCount */ 100,
+                /* dataEntrySize */ 64, std::nullopt);
+        });
+    }
+
+    SECTION("SAC payment")
+    {
+        auto instance = makeSyntheticContractInstance("sac_payment");
+        auto dest = makeAccountAddress(
+            txtest::getAccount("overlay-only-seq-dest").getPublicKey());
+        requireNextSeq([&]() {
+            return txGenerator.invokeSACPayment(ledgerNum, sourceAccountId,
+                                                dest, instance, /* amount */ 1,
+                                                std::nullopt);
+        });
+    }
+
+    SECTION("token transfer")
+    {
+        auto instance = makeSyntheticContractInstance("token_transfer");
+        requireNextSeq([&]() {
+            return txGenerator.invokeTokenTransfer(
+                ledgerNum, sourceAccountId, /* toAccountId */ 1, instance,
+                /* amount */ 1, std::nullopt);
+        });
+    }
+
+    SECTION("soroswap swap")
+    {
+        auto state = makeSyntheticSoroswapState(/* numTokens */ 2,
+                                                /* numPairs */ 1);
+        requireNextSeq([&]() {
+            return txGenerator.invokeSoroswapSwap(
+                ledgerNum, sourceAccountId, state, /* pairIndex */ 0,
+                /* swapAForB */ true, std::nullopt);
+        });
+    }
 }
 
 TEST_CASE("generate load in protocol 1", "[loadgen]")

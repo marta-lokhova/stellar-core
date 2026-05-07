@@ -149,6 +149,15 @@ TxGenerator::loadAccount(TxGenerator::TestAccountPtr acc)
     return false;
 }
 
+void
+TxGenerator::maybeLoadAccountSequenceNumber(TestAccountPtr const& account)
+{
+    if (!mApp.getRunInOverlayOnlyMode())
+    {
+        account->loadSequenceNumber();
+    }
+}
+
 std::pair<TxGenerator::TestAccountPtr, TxGenerator::TestAccountPtr>
 TxGenerator::pickAccountPair(uint32_t numAccounts, uint32_t offset,
                              uint32_t ledgerNum, uint64_t sourceAccountId)
@@ -537,8 +546,9 @@ TxGenerator::invokeSorobanLoadTransaction(
 
     // A tx created using this method may be discarded when creating the txSet,
     // so we need to refresh the TestAccount sequence number to avoid a
-    // txBAD_SEQ.
-    account->loadSequenceNumber();
+    // txBAD_SEQ. In overlay-only mode apply is skipped, so DB seqnums stay
+    // frozen and the local sequence counter is authoritative.
+    maybeLoadAccountSequenceNumber(account);
 
     auto tx = sorobanTransactionFrameFromOps(mApp.getNetworkID(), *account,
                                              {op}, {}, resources,
@@ -722,9 +732,10 @@ TxGenerator::invokeSorobanLoadTransactionV2(
 
     // A tx created using this method may be discarded when creating the txSet,
     // so we need to refresh the TestAccount sequence number to avoid a
-    // txBAD_SEQ.
+    // txBAD_SEQ. In overlay-only mode apply is skipped, so DB seqnums stay
+    // frozen and the local sequence counter is authoritative.
     auto account = findAccount(accountId, ledgerNum);
-    account->loadSequenceNumber();
+    maybeLoadAccountSequenceNumber(account);
 
     auto tx = sorobanTransactionFrameFromOps(
         mApp.getNetworkID(), *account, {op}, {}, resources,
@@ -743,7 +754,7 @@ TxGenerator::invokeSACPayment(uint32_t ledgerNum, uint64_t fromAccountId,
                               std::optional<uint32_t> maxGeneratedFeeRate)
 {
     auto fromAccount = findAccount(fromAccountId, ledgerNum);
-    fromAccount->loadSequenceNumber();
+    maybeLoadAccountSequenceNumber(fromAccount);
 
     SCVal fromVal(SCV_ADDRESS);
     fromVal.address() = makeAccountAddress(fromAccount->getPublicKey());
@@ -821,7 +832,7 @@ TxGenerator::invokeTokenTransfer(uint32_t ledgerNum, uint64_t fromAccountId,
                                  std::optional<uint32_t> maxGeneratedFeeRate)
 {
     auto fromAccount = findAccount(fromAccountId, ledgerNum);
-    fromAccount->loadSequenceNumber();
+    maybeLoadAccountSequenceNumber(fromAccount);
     auto toAccount = findAccount(toAccountId, ledgerNum);
 
     SCVal fromVal(SCV_ADDRESS);
@@ -1005,7 +1016,7 @@ TxGenerator::invokeSoroswapSwap(uint32_t ledgerNum, uint64_t fromAccountId,
     uint32_t tokenOutIdx = swapAForB ? pair.tokenBIndex : pair.tokenAIndex;
 
     auto fromAccount = findAccount(fromAccountId, ledgerNum);
-    fromAccount->loadSequenceNumber();
+    maybeLoadAccountSequenceNumber(fromAccount);
 
     auto fromVal =
         makeAddressSCVal(makeAccountAddress(fromAccount->getPublicKey()));
@@ -1669,7 +1680,7 @@ TxGenerator::invokeBatchTransfer(uint32_t ledgerNum, uint64_t sourceAccountId,
                                  std::vector<SCAddress> const& destinations)
 {
     auto sourceAccount = findAccount(sourceAccountId, ledgerNum);
-    sourceAccount->loadSequenceNumber();
+    maybeLoadAccountSequenceNumber(sourceAccount);
 
     // First invoke param: SAC contract address
     SCVal sacAddressVal(SCV_ADDRESS);

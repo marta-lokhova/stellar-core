@@ -1258,6 +1258,7 @@ LoadGenerator::maybeHandleFailedTx(TransactionFrameBaseConstPtr tx,
     if (status == TransactionQueue::AddResultCode::ADD_STATUS_ERROR &&
         code == txBAD_SEQ)
     {
+        releaseAssert(!mApp.getRunInOverlayOnlyMode());
         auto txQueueSeqNum =
             tx->isSoroban()
                 ? mApp.getHerder()
