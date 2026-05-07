@@ -2085,6 +2085,14 @@ Peer::recvFloodAdvert(StellarMessage const& msg)
 {
     releaseAssert(threadIsMain());
     releaseAssert(mTxAdverts);
+    if (Logging::isLogLevelAtLeast("Overlay", LogLevel::LVL_INFO))
+    {
+        for (auto const& hash : msg.floodAdvert().txHashes)
+        {
+            CLOG_INFO(Overlay, "Received tx advert for hash {} from peer {}",
+                      binToHex(hash), toString());
+        }
+    }
     auto seq = mAppConnector.getHerder().trackingConsensusLedgerIndex();
     mTxAdverts->queueIncomingAdvert(msg.floodAdvert().txHashes, seq);
 }
@@ -2182,6 +2190,11 @@ Peer::sendAdvert(Hash const& hash)
     }
 
     // Otherwise, queue up an advert to broadcast to peer
+    if (Logging::isLogLevelAtLeast("Overlay", LogLevel::LVL_INFO))
+    {
+        CLOG_INFO(Overlay, "Advertised tx hash {} to peer {}", binToHex(hash),
+                  toString());
+    }
     mTxAdverts->queueOutgoingAdvert(hash);
     return true;
 }

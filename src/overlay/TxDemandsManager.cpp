@@ -141,6 +141,11 @@ TxDemandsManager::demand()
             {
                 // We never received the txn.
                 om.mAbandonedDemandMeter.Mark();
+                CLOG_INFO(Overlay,
+                          "Tx demand for hash {} was not fulfilled after "
+                          "asking {} peers",
+                          binToHex(mPendingDemands.front()),
+                          it->second.peers.size());
             }
             mPendingDemands.pop();
             mDemandHistoryMap.erase(it);
@@ -179,6 +184,12 @@ TxDemandsManager::demand()
                 {
                 case DemandStatus::DEMAND:
                     demand.push_back(txHash);
+                    if (Logging::isLogLevelAtLeast("Overlay",
+                                                   LogLevel::LVL_INFO))
+                    {
+                        CLOG_INFO(Overlay, "Demanded tx hash {} from peer {}",
+                                  binToHex(txHash), peer->toString());
+                    }
                     if (mDemandHistoryMap.find(txHash) ==
                         mDemandHistoryMap.end())
                     {
@@ -186,8 +197,6 @@ TxDemandsManager::demand()
                         // hash.
                         mPendingDemands.push(txHash);
                         mDemandHistoryMap[txHash].firstDemanded = now;
-                        CLOG_DEBUG(Overlay, "Demand tx {}, asking peer {}",
-                                   hexAbbrev(txHash), peer->toString());
                     }
                     else
                     {
@@ -240,13 +249,17 @@ TxDemandsManager::recordTxPullLatency(Hash const& hash,
             auto delta = now - it->second.firstDemanded;
             om.mTxPullLatency.Update(delta);
             it->second.latencyRecorded = true;
-            CLOG_DEBUG(
-                Overlay,
-                "Pulled transaction {} in {} milliseconds, asked {} peers",
-                hexAbbrev(hash),
-                std::chrono::duration_cast<std::chrono::milliseconds>(delta)
-                    .count(),
-                it->second.peers.size());
+            if (Logging::isLogLevelAtLeast("Overlay", LogLevel::LVL_INFO))
+            {
+                CLOG_INFO(
+                    Overlay,
+                    "Tx demand for hash {} fulfilled in {} milliseconds after "
+                    "asking {} peers",
+                    binToHex(hash),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(delta)
+                        .count(),
+                    it->second.peers.size());
+            }
         }
 
         // Record pull time from individual peer
@@ -256,13 +269,16 @@ TxDemandsManager::recordTxPullLatency(Hash const& hash,
             auto delta = now - peerIt->second;
             om.mPeerTxPullLatency.Update(delta);
             peer->getPeerMetrics().mPullLatency.Update(delta);
-            CLOG_DEBUG(
-                Overlay,
-                "Pulled transaction {} in {} milliseconds from peer {}",
-                hexAbbrev(hash),
-                std::chrono::duration_cast<std::chrono::milliseconds>(delta)
-                    .count(),
-                peer->toString());
+            if (Logging::isLogLevelAtLeast("Overlay", LogLevel::LVL_INFO))
+            {
+                CLOG_INFO(
+                    Overlay,
+                    "Tx demand for hash {} fulfilled by peer {} in {} "
+                    "milliseconds",
+                    binToHex(hash), peer->toString(),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(delta)
+                        .count());
+            }
         }
     }
 }
@@ -298,9 +314,12 @@ TxDemandsManager::recvTxDemand(FloodDemand const& dmd, Peer::pointer peer)
         if (tx)
         {
             // The tx exists
-            CLOG_TRACE(Overlay, "fulfilled demand for {} demanded by {}",
-                       hexAbbrev(h),
-                       KeyUtils::toShortString(peer->getPeerID()));
+            if (Logging::isLogLevelAtLeast("Overlay", LogLevel::LVL_INFO))
+            {
+                CLOG_INFO(Overlay,
+                          "Fulfilled tx demand for hash {} from peer {}",
+                          binToHex(h), peer->toString());
+            }
             peer->getPeerMetrics().mMessagesFulfilled++;
             om.mMessagesFulfilledMeter.Mark();
 
@@ -347,10 +366,10 @@ TxDemandsManager::recvTxDemand(FloodDemand const& dmd, Peer::pointer peer)
         else
         {
             auto banned = herder.isBannedTx(h);
-            CLOG_TRACE(Overlay,
-                       "can't fulfill demand for {} hash {} demanded by {}",
-                       banned ? "banned" : "unknown", hexAbbrev(h),
-                       KeyUtils::toShortString(peer->getPeerID()));
+            CLOG_INFO(Overlay,
+                      "Unable to fulfill tx demand for {} hash {} from peer {}",
+                      banned ? "banned" : "unknown", binToHex(h),
+                      peer->toString());
             if (banned)
             {
                 om.mBannedMessageUnfulfilledMeter.Mark();
