@@ -2419,7 +2419,7 @@ LedgerManagerImpl::updateCanonicalStateForTesting(LedgerHeader const& header)
     mApp.getCommandHandler().addSnapshot(state);
 }
 #endif
-}
+//}
 
 std::vector<MutableTxResultPtr>
 LedgerManagerImpl::processFeesSeqNums(
