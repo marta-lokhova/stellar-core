@@ -39,10 +39,10 @@ use libp2p_overlay::{
 };
 use metrics::OverlayMetrics;
 use stellar_xdr::{
-    BytesM, CompactTxSet, CompactTxSetMessage, CompactTxSetMessageType,
-    GeneralizedTransactionSet, Hash, Limits, ParallelTxsComponent, ReadXdr, TransactionEnvelope,
-    TransactionPhase, TransactionSetV1, TxSetComponent, TxSetComponentTxsMaybeDiscountedFee,
-    WriteXdr,
+    BytesM, CompactTxSet, CompactTxSetMessage, CompactTxSetMessageType, DependentTxCluster,
+    GeneralizedTransactionSet, Hash, Limits, ParallelTxExecutionStage, ParallelTxsComponent,
+    ReadXdr, TransactionEnvelope, TransactionPhase, TransactionSetV1, TxSetComponent,
+    TxSetComponentTxsMaybeDiscountedFee, WriteXdr,
 };
 
 /// Command-line arguments
@@ -420,6 +420,8 @@ fn gen_compact_tx_set(txset_hash: Hash, txset_xdr: Vec<u8>) -> CompactTxSetData 
             .expect("Failed to parse TX set XDR for caching");
 
     let mut base_fee = None;
+    let mut soroban_base_fee = None;
+    let mut num_soroban_txs = 0;
     let mut tx_hashes = Vec::new();
     let mut txs = Vec::new();
     let key: &[u8; 16] = txset_hash.0[..16].try_into().unwrap();
@@ -448,7 +450,30 @@ fn gen_compact_tx_set(txset_hash: Hash, txset_xdr: Vec<u8>) -> CompactTxSetData 
             },
             TransactionPhase::V1(parallel) => {
                 if !parallel.execution_stages.is_empty() {
-                    panic!("Unexpected execution stages in TX set");
+                    if parallel.execution_stages.len() > 1 {
+                        panic!("Unexpected number of execution stages in parallel TX set")
+                    }
+                    let stage = &parallel.execution_stages[0];
+                    if stage.len() != 1 {
+                        panic!("Unexpected number of transactions in execution stage of parallel TX set")
+                    }
+                    let cluster = &stage[0];
+                    for tx in cluster.iter() {
+                        let tx_xdr = tx
+                            .to_xdr(Limits::none())
+                            .expect("Failed to convert TxEnvelope to XDR");
+                        let tx_hash = flood::compute_tx_hash(&tx_xdr);
+                        let mut hasher = SipHasher24::new_with_key(key);
+                        hasher.write(&tx_hash);
+                        let digest = hasher.finish().to_be_bytes();
+                        tx_hashes.extend_from_slice(&digest[2..8]);
+                        txs.push(tx_xdr);
+                    }
+                    num_soroban_txs = cluster.len();
+                    if num_soroban_txs == 0 {
+                        panic!("Unexpected number of transactions in execution stage of parallel TX set")
+                    }
+                    soroban_base_fee = parallel.base_fee;
                 }
             }
         }
@@ -459,6 +484,8 @@ fn gen_compact_tx_set(txset_hash: Hash, txset_xdr: Vec<u8>) -> CompactTxSetData 
         previous_ledger_hash: txset.previous_ledger_hash,
         base_fee,
         txs: BytesM::try_from(tx_hashes).expect("Failed to convert tx_hashes to BytesM"),
+        num_soroban_txs: num_soroban_txs as u32,
+        soroban_base_fee,
     };
 
     let compact_xdr = CompactTxSetMessage::Set(compact_set)
@@ -543,20 +570,25 @@ fn reconstruct_tx_set(
     send_txset: mpsc::UnboundedSender<([u8; 32], Vec<u8>, PeerId)>,
     metrics: Arc<OverlayMetrics>,
 ) {
-    let txs: Vec<_> = request
+    let num_classic = request.txs.len() - request.tx_set.num_soroban_txs as usize;
+    let mut txs = request
         .txs
         .into_iter()
-        .map(|tx| -> TransactionEnvelope { tx.expect("Failed to get all TXs for compact set") })
-        .collect();
+        .map(|tx| -> TransactionEnvelope { tx.expect("Failed to get all TXs for compact set") });
 
-    let phase0 = if txs.len() == 0 {
+    let classic_txs: Vec<_> = txs.by_ref().take(num_classic).collect();
+    let soroban_txs: Vec<_> = txs.collect();
+
+    let phase0 = if classic_txs.len() == 0 {
         TransactionPhase::V0([].try_into().unwrap())
     } else {
         TransactionPhase::V0(
             [TxSetComponent::TxsetCompTxsMaybeDiscountedFee(
                 TxSetComponentTxsMaybeDiscountedFee {
                     base_fee: request.tx_set.base_fee,
-                    txs: txs.try_into().expect("Too many TXs in set for V0 format"),
+                    txs: classic_txs
+                        .try_into()
+                        .expect("Too many TXs in set for V0 format"),
                 },
             )]
             .try_into()
@@ -564,7 +596,22 @@ fn reconstruct_tx_set(
         )
     };
 
-    let phase1 = TransactionPhase::V1(ParallelTxsComponent::default());
+    let phase1 = if soroban_txs.len() == 0 {
+        TransactionPhase::V1(ParallelTxsComponent::default())
+    } else {
+        let cluster: DependentTxCluster = soroban_txs
+            .try_into()
+            .expect("Too many TXs in set for single cluster in V1 format");
+        let stage: ParallelTxExecutionStage = vec![cluster]
+            .try_into()
+            .expect("Too many clusters in single execution stage for V1 format");
+        TransactionPhase::V1(ParallelTxsComponent {
+            base_fee: request.tx_set.soroban_base_fee,
+            execution_stages: [stage]
+                .try_into()
+                .expect("Too many execution stages for V1 format"),
+        })
+    };
 
     let full_tx_set = GeneralizedTransactionSet::V1(TransactionSetV1 {
         previous_ledger_hash: request.tx_set.previous_ledger_hash,

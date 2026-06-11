@@ -3918,7 +3918,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "siphasher",
- "stellar-xdr 26.0.0 (git+https://github.com/drebelsky/rs-stellar-xdr?rev=aa2125e023d5acf213618081e2a87b358b18dd6f)",
+ "stellar-xdr 26.0.0 (git+https://github.com/drebelsky/rs-stellar-xdr?rev=9e499d3e7e1fb358a9ee782cca8918b724daf1dc)",
  "tempfile",
  "tokio",
  "toml",
@@ -4063,7 +4063,7 @@ dependencies = [
 [[package]]
 name = "stellar-xdr"
 version = "26.0.0"
-source = "git+https://github.com/drebelsky/rs-stellar-xdr?rev=aa2125e023d5acf213618081e2a87b358b18dd6f#aa2125e023d5acf213618081e2a87b358b18dd6f"
+source = "git+https://github.com/drebelsky/rs-stellar-xdr?rev=9e499d3e7e1fb358a9ee782cca8918b724daf1dc#9e499d3e7e1fb358a9ee782cca8918b724daf1dc"
 dependencies = [
  "crate-git-revision 0.0.6",
  "escape-bytes",
