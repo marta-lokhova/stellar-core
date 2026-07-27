@@ -295,7 +295,11 @@ $(RUST_DEP_TREE_STAMP): $(wildcard rust/soroban/*/Cargo.*) Makefile $(RUST_TOOLC
 # soroban-env-common embeds GIT_REVISION from submodule git state, so a pure
 # submodule commit move must invalidate the host build even when Cargo.lock and
 # tracked Rust sources are otherwise unchanged.
-$(SOROBAN_BUILD_DIR)/%/target/git-state.txt: $(top_srcdir)/.git/modules/src/rust/soroban/%/HEAD $(top_srcdir)/.git/modules/src/rust/soroban/%/index Makefile $(RUST_TOOLCHAIN_FILE)
+# Resolve the git dir with rev-parse rather than assuming $(top_srcdir)/.git:
+# in a linked worktree the submodule git dirs live under
+# .git/worktrees/<name>/modules instead of .git/modules.
+SOROBAN_GIT_MODULES_DIR=$(shell git -C $(top_srcdir) rev-parse --absolute-git-dir)/modules/src/rust/soroban
+$(SOROBAN_BUILD_DIR)/%/target/git-state.txt: $(SOROBAN_GIT_MODULES_DIR)/%/HEAD $(SOROBAN_GIT_MODULES_DIR)/%/index Makefile $(RUST_TOOLCHAIN_FILE)
 	mkdir -p $(@D)
 	@state=$$(cd $(abspath $(top_srcdir))/src/rust/soroban/$* \
 		&& git describe --always --exclude='*' --long --abbrev=1000 --dirty 2>/dev/null \
