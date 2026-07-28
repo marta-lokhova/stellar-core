@@ -42,7 +42,10 @@ requireOverlayBinary()
     return *overlayBinary;
 }
 
-// Create a mock SCP envelope for testing
+// Create a mock SCP envelope for testing. Nomination votes must decode as
+// StellarValues with a STELLAR_VALUE_SIGNED ext: the compact block broadcast
+// path in OverlayIPC::broadcastSCP extracts and validates them, and picks out
+// the value signed by this node (tests construct OverlayIPC with PublicKey{}).
 SCPEnvelope
 makeMockSCPEnvelope(uint64_t slotIndex, uint32_t nodeId)
 {
@@ -54,11 +57,15 @@ makeMockSCPEnvelope(uint64_t slotIndex, uint32_t nodeId)
     auto& nom = env.statement.pledges.nominate();
     nom.quorumSetHash.fill(static_cast<uint8_t>(nodeId));
 
-    // Value is opaque<> (xvector<uint8_t>), not Hash
+    StellarValue sv;
+    sv.txSetHash.fill(static_cast<uint8_t>(slotIndex & 0xFF));
+    sv.closeTime = slotIndex;
+    sv.ext.v(STELLAR_VALUE_SIGNED);
+    sv.ext.lcValueSignature().nodeID = PublicKey{};
+
+    auto encoded = xdr::xdr_to_opaque(sv);
     Value mockValue;
-    mockValue.resize(32);
-    std::fill(mockValue.begin(), mockValue.end(),
-              static_cast<uint8_t>(slotIndex & 0xFF));
+    mockValue.assign(encoded.begin(), encoded.end());
     nom.votes.push_back(mockValue);
 
     return env;

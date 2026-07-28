@@ -395,7 +395,7 @@ mod tests {
     #[test]
     fn test_message_type_try_from_invalid() {
         assert!(MessageType::try_from(0).is_err());
-        assert!(MessageType::try_from(9).is_err()); // gap between 8 and 10
+        assert!(MessageType::try_from(15).is_err()); // above CompactForceRequestTxsPct
         assert!(MessageType::try_from(99).is_err());
         assert!(MessageType::try_from(104).is_err());
         assert!(MessageType::try_from(106).is_err());
