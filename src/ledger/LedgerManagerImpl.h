@@ -78,6 +78,10 @@ class LedgerManagerImpl : public LedgerManager
         medida::Buckets& mLedgerAgeClosed;
 #ifdef BUILD_TESTS
         medida::Histogram& mLedgerAgeClosedHistogram;
+        // Externalized tx counters maintained in overlay-only mode; loadgen's
+        // completion check reads these to track applied transactions.
+        medida::Counter& mPendingTxsSelfCount;
+        medida::Counter& mPendingSorobanTxsSelfCount;
 #endif
         medida::Counter& mLedgerAge;
         medida::Counter& mTransactionApplySucceeded;

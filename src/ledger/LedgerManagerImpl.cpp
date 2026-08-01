@@ -210,6 +210,10 @@ LedgerManagerImpl::LedgerApplyMetrics::LedgerApplyMetrics(
     , mLedgerAgeClosedHistogram(
           registry.NewHistogram({"ledger", "age", "closed-histogram"},
                                 medida::SamplingInterface::kSliding))
+    , mPendingTxsSelfCount(
+          registry.NewCounter({"herder", "pending-txs", "self-count"}))
+    , mPendingSorobanTxsSelfCount(
+          registry.NewCounter({"herder", "pending-soroban-txs", "self-count"}))
 #endif
     , mLedgerAge(registry.NewCounter({"ledger", "age", "current-seconds"}))
     , mTransactionApplySucceeded(
@@ -1813,6 +1817,11 @@ LedgerManagerImpl::applyLedger(LedgerCloseData const& ledgerData,
         mApplyState.getMetrics().mOperationCount.Update(
             static_cast<int64_t>(numOps));
         TracyPlot("ledger.operation.count", static_cast<int64_t>(numOps));
+
+        mApplyState.getMetrics().mPendingTxsSelfCount.inc(
+            static_cast<int64_t>(numClassicTxs));
+        mApplyState.getMetrics().mPendingSorobanTxsSelfCount.inc(
+            static_cast<int64_t>(numSorobanTxs));
 
         CLOG_INFO(Ledger,
                   "Overlay-only mode: skipping apply for ledger {} "
