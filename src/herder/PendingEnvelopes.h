@@ -68,6 +68,28 @@ class PendingEnvelopes
     // we've been waiting for a tx set (see getTxSetWaitingTime)
     std::map<Hash, VirtualClock::time_point> mTxSetFetchStartTimes;
 
+    // Per-slot tx set (candidate) fetch statistics. Consensus stalls show up
+    // here as multiple multi-MB candidates fetched per slot with a long time
+    // to the first arrival; these metrics make that visible without pairing
+    // raw log lines.
+    struct SlotTxSetFetchStats
+    {
+        // number of tx sets received from the network for this slot
+        uint32_t mCandidatesFetched{0};
+        // total encoded bytes of those tx sets
+        uint64_t mBytesFetched{0};
+        // when this slot first started waiting on a tx set
+        std::optional<VirtualClock::time_point> mFirstFetchStart;
+        // delay from the first fetch start to the first candidate arriving
+        std::optional<std::chrono::nanoseconds> mTimeToFirstCandidate;
+    };
+    // only holds slots that fetched at least one tx set; flushed to the
+    // scp.slot.* metrics when the slot is erased (externalized or purged)
+    std::map<uint64, SlotTxSetFetchStats> mSlotTxSetFetchStats;
+
+    // report and drop fetch stats for all slots below `belowSlot`
+    void flushSlotTxSetFetchStats(uint64 belowSlot);
+
     using TxSetFramCacheItem = std::pair<uint64, TxSetXDRFrameConstPtr>;
     // recent txsets
     // Note on thread-safety: the cache must be maintained strictly by the main
@@ -93,6 +115,10 @@ class PendingEnvelopes
     medida::Timer& mFetchQsetTimer;
     // Tracked cost per slot
     medida::Histogram& mCostPerSlot;
+    // Per-slot candidate (tx set) fetch metrics, one sample per closed slot
+    medida::Histogram& mSlotCandidatesFetched;
+    medida::Histogram& mSlotBytesFetched;
+    medida::Timer& mSlotTimeToFirstCandidate;
 
     // discards all SCP envelopes that use QSet with a given hash,
     // as it is not sane QSet

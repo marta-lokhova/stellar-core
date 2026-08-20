@@ -45,6 +45,12 @@ PendingEnvelopes::PendingEnvelopes(Application& app, HerderImpl& herder)
     , mFetchTxSetTimer(app.getMetrics().NewTimer({"overlay", "fetch", "txset"}))
     , mFetchQsetTimer(app.getMetrics().NewTimer({"overlay", "fetch", "qset"}))
     , mCostPerSlot(app.getMetrics().NewHistogram({"scp", "cost", "per-slot"}))
+    , mSlotCandidatesFetched(
+          app.getMetrics().NewHistogram({"scp", "slot", "candidates-fetched"}))
+    , mSlotBytesFetched(
+          app.getMetrics().NewHistogram({"scp", "slot", "bytes-fetched"}))
+    , mSlotTimeToFirstCandidate(
+          app.getMetrics().NewTimer({"scp", "slot", "time-to-first-candidate"}))
 {
 }
 
@@ -262,6 +268,26 @@ PendingEnvelopes::recvTxSet(Hash const& hash, TxSetXDRFrameConstPtr txset)
         CLOG_WARNING(Herder, "TxSet {} not in pending fetches - rejecting",
                      hexAbbrev(hash));
         return false;
+    }
+
+    // Attribute this candidate to the earliest slot waiting on it
+    if (!it->second.empty())
+    {
+        uint64 slot = std::min_element(it->second.begin(), it->second.end(),
+                                       [](auto const& a, auto const& b) {
+                                           return a.statement.slotIndex <
+                                                  b.statement.slotIndex;
+                                       })
+                          ->statement.slotIndex;
+        auto& stats = mSlotTxSetFetchStats[slot];
+        stats.mCandidatesFetched++;
+        stats.mBytesFetched += txset->encodedSize();
+        if (!stats.mTimeToFirstCandidate && stats.mFirstFetchStart)
+        {
+            stats.mTimeToFirstCandidate =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    mApp.getClock().now() - *stats.mFirstFetchStart);
+        }
     }
 
     addTxSet(hash, 0, txset);
@@ -682,7 +708,15 @@ PendingEnvelopes::startFetch(SCPEnvelope const& envelope)
             // Not fetching yet - start fetch
             auto& vec = mPendingTxSetFetches[h2];
             vec.push_back(envelope);
-            mTxSetFetchStartTimes.emplace(h2, mApp.getClock().now());
+            auto now = mApp.getClock().now();
+            mTxSetFetchStartTimes.emplace(h2, now);
+            // Track when this slot first started waiting on a tx set, for
+            // the per-slot time-to-first-candidate metric
+            auto& stats = mSlotTxSetFetchStats[envelope.statement.slotIndex];
+            if (!stats.mFirstFetchStart)
+            {
+                stats.mFirstFetchStart = now;
+            }
             mApp.getOverlayManager().requestTxSet(
                 h2,
                 static_cast<uint32_t>(
@@ -792,6 +826,8 @@ PendingEnvelopes::eraseOutsideRange(std::optional<uint64> minSlot,
 
     if (minSlot)
     {
+        flushSlotTxSetFetchStats(*minSlot);
+
         if (*minSlot > 0)
         {
             // report only for the highest non-future slot that we're
@@ -817,6 +853,9 @@ PendingEnvelopes::eraseOutsideRange(std::optional<uint64> minSlot,
         {
             maybeEraseEnvelope(iter);
         }
+        // drop (without reporting) fetch stats for purged future slots
+        mSlotTxSetFetchStats.erase(mSlotTxSetFetchStats.upper_bound(*maxSlot),
+                                   mSlotTxSetFetchStats.end());
     }
 
     // 0 is special mark for data that we do not know the slot index
@@ -901,6 +940,33 @@ PendingEnvelopes::getQSet(Hash const& hash)
         qset = putQSet(hash, *qset);
     }
     return qset;
+}
+
+void
+PendingEnvelopes::flushSlotTxSetFetchStats(uint64 belowSlot)
+{
+    for (auto it = mSlotTxSetFetchStats.begin();
+         it != mSlotTxSetFetchStats.end() && it->first < belowSlot;
+         it = mSlotTxSetFetchStats.erase(it))
+    {
+        auto const& stats = it->second;
+        mSlotCandidatesFetched.Update(stats.mCandidatesFetched);
+        mSlotBytesFetched.Update(static_cast<int64_t>(stats.mBytesFetched));
+        auto firstMs = std::chrono::milliseconds::zero();
+        if (stats.mTimeToFirstCandidate)
+        {
+            mSlotTimeToFirstCandidate.Update(*stats.mTimeToFirstCandidate);
+            firstMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                *stats.mTimeToFirstCandidate);
+        }
+        CLOG_INFO(Herder,
+                  "Slot {} tx set fetch stats: {} candidate(s), {} bytes, "
+                  "first candidate after {} ms",
+                  it->first, stats.mCandidatesFetched, stats.mBytesFetched,
+                  stats.mTimeToFirstCandidate.has_value()
+                      ? std::to_string(firstMs.count())
+                      : "n/a (never arrived)");
+    }
 }
 
 std::optional<std::chrono::milliseconds>

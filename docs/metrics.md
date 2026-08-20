@@ -212,6 +212,9 @@ scp.trigger.prepare-start-fallback        | meter     | trigger timer fell back 
 scp.value.invalid                         | meter     | SCP value is invalid
 scp.value.valid                           | meter     | SCP value is valid
 scp.slot.values-referenced                | histogram | number of values referenced per consensus round
+scp.slot.candidates-fetched               | histogram | number of tx sets fetched from the network per slot
+scp.slot.bytes-fetched                    | histogram | bytes of tx sets fetched from the network per slot
+scp.slot.time-to-first-candidate          | timer     | delay from a slot's first tx set fetch to the first tx set arriving
 scp.qic.successful-run                    | meter     | number of successful quorum intersection checks completed (a valid result was returned)
 scp.qic.failed-run                        | meter     | number of failed quorum intersection checks (an error/exception was thrown, this could happen if the time-limit was exceeded)
 scp.qic.aborted-run                       | meter     | number of aborted quorum intersection checks (the call was aborted, this could happen if the memory-limit was exceeded)
