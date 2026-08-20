@@ -237,6 +237,7 @@ Config::Config() : NODE_SEED(SecretKey::random())
     // Rust overlay defaults
     OVERLAY_BINARY_PATH = std::nullopt;
     OVERLAY_SOCKET_PATH = std::nullopt;
+    COMPACT_FORCE_REQUEST_TXS_PCT = 0;
 
     LOG_COLOR = false;
 
@@ -1373,6 +1374,11 @@ Config::processConfig(std::shared_ptr<cpptoml::table> t)
                  [&]() { OVERLAY_BINARY_PATH = readString(item); }},
                 {"OVERLAY_SOCKET_PATH",
                  [&]() { OVERLAY_SOCKET_PATH = readString(item); }},
+                {"COMPACT_FORCE_REQUEST_TXS_PCT",
+                 [&]() {
+                     COMPACT_FORCE_REQUEST_TXS_PCT =
+                         readInt<uint32_t>(item, 0, 100);
+                 }},
                 {"FILTERED_SOROBAN_KEYS_PATH",
                  [&]() {
                      LOG_WARNING(DEFAULT_LOG,

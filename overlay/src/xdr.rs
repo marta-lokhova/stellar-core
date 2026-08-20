@@ -79,16 +79,6 @@ pub(crate) fn frame_scp(envelope_bytes: &[u8]) -> Vec<u8> {
     frame(MessageType::ScpMessage, envelope_bytes)
 }
 
-/// `StellarMessage::GeneralizedTxSet(..)` framing over canonical tx set bytes.
-pub(crate) fn frame_tx_set(tx_set_bytes: &[u8]) -> Vec<u8> {
-    frame(MessageType::GeneralizedTxSet, tx_set_bytes)
-}
-
-/// `StellarMessage::GetTxSet(hash)` framing.
-pub(crate) fn frame_get_tx_set(hash: [u8; 32]) -> Vec<u8> {
-    frame(MessageType::GetTxSet, &hash)
-}
-
 /// `StellarMessage::GetScpState(ledger_seq)` framing.
 pub(crate) fn frame_get_scp_state(ledger_seq: u32) -> Vec<u8> {
     frame(MessageType::GetScpState, &ledger_seq.to_be_bytes())
@@ -154,7 +144,7 @@ pub(crate) mod tests {
     use xdr::{
         DecoratedSignature, GeneralizedTransactionSet, Hash, Limits, Operation, ScpNomination,
         ScpStatementPledges, SequenceNumber, StellarValueExt, TimePoint, Transaction,
-        TransactionEnvelope, TransactionV1Envelope, Uint256, Value, VecM, WriteXdr,
+        TransactionEnvelope, TransactionV1Envelope, Value, VecM, WriteXdr,
     };
 
     pub(crate) fn valid_transaction_xdr(fee: u32, sequence: i64, num_ops: usize) -> Vec<u8> {
@@ -204,26 +194,6 @@ pub(crate) mod tests {
                 .to_xdr(Limits::none())
                 .unwrap();
         assert_eq!(frame_scp(&bytes), expected);
-    }
-
-    #[test]
-    fn frames_match_typed_tx_set() {
-        let bytes = generalized_tx_set_xdr();
-        let expected = StellarMessage::GeneralizedTxSet(
-            GeneralizedTransactionSet::from_xdr(&bytes, Limits::none()).unwrap(),
-        )
-        .to_xdr(Limits::none())
-        .unwrap();
-        assert_eq!(frame_tx_set(&bytes), expected);
-    }
-
-    #[test]
-    fn frames_match_typed_get_tx_set() {
-        let hash = [0x5a; 32];
-        let expected = StellarMessage::GetTxSet(Uint256(hash))
-            .to_xdr(Limits::none())
-            .unwrap();
-        assert_eq!(frame_get_tx_set(hash), expected);
     }
 
     #[test]

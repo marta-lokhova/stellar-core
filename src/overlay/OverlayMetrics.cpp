@@ -56,6 +56,20 @@ OverlayMetrics::OverlayMetrics(Application& app)
           app.getMetrics().NewCounter({"overlay", "connection", "pending"}))
     , mAuthenticatedPeersSize(app.getMetrics().NewCounter(
           {"overlay", "connection", "authenticated"}))
+    , mCompactReconstructedSize(app.getMetrics().NewCounter(
+          {"overlay", "compact", "reconstructed-size"}))
+    , mCompactReconstructedCount(app.getMetrics().NewCounter(
+          {"overlay", "compact", "reconstructed-count"}))
+    , mCompactSize(
+          app.getMetrics().NewCounter({"overlay", "compact", "compact-size"}))
+    , mCompactCount(
+          app.getMetrics().NewCounter({"overlay", "compact", "compact-count"}))
+    , mCompactTxsRequested(
+          app.getMetrics().NewCounter({"overlay", "compact", "txs-requested"}))
+    , mCompactTxBytesRequested(app.getMetrics().NewCounter(
+          {"overlay", "compact", "tx-bytes-requested"}))
+    , mCompactTxBytesReceived(app.getMetrics().NewCounter(
+          {"overlay", "compact", "tx-bytes-received"}))
     , mFetchTxSetTimer(app.getMetrics().NewTimer({"overlay", "fetch", "txset"}))
 {
 }

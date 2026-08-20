@@ -2,6 +2,7 @@
 //!
 //! Public interface for the overlay crate, primarily for testing.
 
+pub mod compact;
 pub mod config;
 pub mod flood;
 pub mod integrated;

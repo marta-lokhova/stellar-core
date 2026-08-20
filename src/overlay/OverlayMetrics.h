@@ -66,6 +66,15 @@ struct OverlayMetrics
     medida::Counter& mPendingPeersSize;
     medida::Counter& mAuthenticatedPeersSize;
 
+    // ── Compact tx set dissemination (receiver's perspective) ──
+    medida::Counter& mCompactReconstructedSize;
+    medida::Counter& mCompactReconstructedCount;
+    medida::Counter& mCompactSize;
+    medida::Counter& mCompactCount;
+    medida::Counter& mCompactTxsRequested;
+    medida::Counter& mCompactTxBytesRequested;
+    medida::Counter& mCompactTxBytesReceived;
+
     // ── TxSet fetch latency ──
     medida::Timer& mFetchTxSetTimer;
 };

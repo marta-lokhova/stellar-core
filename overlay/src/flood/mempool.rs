@@ -136,6 +136,11 @@ impl Mempool {
         self.by_hash.get(hash).map(|entry| &entry.meta)
     }
 
+    /// Iterate over all (hash, tx) pairs (for compact set short-id matching).
+    pub fn iter(&self) -> impl Iterator<Item = (&TxHash, &Arc<ValidatedTx>)> {
+        self.by_hash.iter().map(|(hash, entry)| (hash, &entry.meta))
+    }
+
     /// Remove a transaction by hash, returning the removed tx if present.
     pub fn remove(&mut self, hash: &TxHash) -> Option<Arc<ValidatedTx>> {
         let entry = self.by_hash.remove(hash)?;

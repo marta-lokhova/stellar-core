@@ -5,17 +5,29 @@
 //! - Transaction mempool (fee-ordered, with dedup)
 //! - Core command handling for mempool operations
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, RwLock};
-use tracing::{debug, info};
+use tokio::sync::{mpsc, oneshot, RwLock};
+use tracing::{debug, info, warn};
 
+use crate::compact::{short_tx_id, SHORT_ID_LEN};
 use crate::flood::Mempool;
 use crate::wire::ValidatedTx;
 
 /// Commands from Core to Overlay
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum CoreCommand {
+    /// Look up transactions by 6-byte short id (for compact set
+    /// reconstruction). `short_ids` is a concatenation of SHORT_ID_LEN-byte
+    /// ids; the reply holds one entry per id, in order — the serialized tx
+    /// XDR when the mempool has a match, empty when it doesn't.
+    LookupTxsByShortId {
+        short_ids: Vec<u8>,
+        key: [u8; 16],
+        reply: oneshot::Sender<Vec<Vec<u8>>>,
+    },
+
     /// Submit a validated transaction for flooding
     SubmitTx(Arc<ValidatedTx>),
 
@@ -65,6 +77,34 @@ impl Overlay {
     /// Handle a command from Core.
     async fn handle_core_command(&self, cmd: CoreCommand) {
         match cmd {
+            CoreCommand::LookupTxsByShortId {
+                short_ids,
+                key,
+                reply,
+            } => {
+                // The requester (compact set handler) validated the length.
+                debug_assert!(short_ids.len() % SHORT_ID_LEN == 0);
+                let num_ids = short_ids.len() / SHORT_ID_LEN;
+                let mut indices = HashMap::<[u8; SHORT_ID_LEN], usize>::new();
+                for (i, id) in short_ids.chunks_exact(SHORT_ID_LEN).enumerate() {
+                    indices.insert(id.try_into().unwrap(), i);
+                }
+
+                let mut result: Vec<Vec<u8>> = vec![Vec::new(); num_ids];
+                {
+                    let mempool = self.mempool.read().await;
+                    for (tx_hash, tx) in mempool.iter() {
+                        if let Some(&index) = indices.get(&short_tx_id(&key, tx_hash)) {
+                            result[index] = tx.bytes().to_vec();
+                        }
+                    }
+                }
+
+                if reply.send(result).is_err() {
+                    warn!("LookupTxsByShortId: requester went away before reply");
+                }
+            }
+
             CoreCommand::SubmitTx(tx) => {
                 debug!(
                     "[SubmitTx] TX: hash={:02x?}, size={}, fee={}, ops={}",
@@ -127,6 +167,25 @@ impl OverlayHandle {
     /// Create a new handle.
     pub fn new(cmd_tx: mpsc::UnboundedSender<CoreCommand>) -> Self {
         Self { cmd_tx }
+    }
+
+    /// Look up transactions referenced by a compact set's short ids.
+    /// Returns one entry per id (empty vec = not in mempool), or `None` if
+    /// the mempool manager is gone (shutdown).
+    pub async fn get_txs_by_short_ids(
+        &self,
+        short_ids: Vec<u8>,
+        key: [u8; 16],
+    ) -> Option<Vec<Vec<u8>>> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(CoreCommand::LookupTxsByShortId {
+                short_ids,
+                key,
+                reply,
+            })
+            .ok()?;
+        rx.await.ok()
     }
 
     /// Submit a validated transaction.

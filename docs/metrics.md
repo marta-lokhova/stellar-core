@@ -123,6 +123,13 @@ overlay.byte.read                         | meter     | number of bytes received
 overlay.byte.write                        | meter     | number of bytes sent
 overlay.async.read                        | meter     | number of async read requests issued
 overlay.async.write                       | meter     | number of async write requests issued
+overlay.compact.compact-count             | counter   | number of compact tx sets received from peers
+overlay.compact.compact-size              | counter   | total bytes of compact tx sets received from peers
+overlay.compact.reconstructed-count       | counter   | number of full tx sets reconstructed from compact tx sets
+overlay.compact.reconstructed-size        | counter   | total bytes of full tx sets reconstructed from compact tx sets
+overlay.compact.txs-requested             | counter   | transactions missing from the mempool and requested from the announcing peer
+overlay.compact.tx-bytes-requested        | counter   | bytes of missing-transaction requests sent
+overlay.compact.tx-bytes-received         | counter   | bytes of missing-transaction responses received
 overlay.connection.authenticated          | counter   | number of authenticated peers
 overlay.connection.latency                | timer     | estimated latency between peers
 overlay.connection.pending                | counter   | number of pending connections

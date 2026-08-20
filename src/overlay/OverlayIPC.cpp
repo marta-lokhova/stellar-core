@@ -4,6 +4,7 @@
 
 #include "overlay/OverlayIPC.h"
 #include "crypto/Hex.h"
+#include "herder/HerderUtils.h"
 #include "util/Logging.h"
 #include "xdr/Stellar-ledger.h"
 #include <fmt/format.h>
@@ -46,12 +47,13 @@ absoluteIfExecutable(std::string const& path)
 
 OverlayIPC::OverlayIPC(std::optional<std::string> socketPath,
                        std::optional<std::string> overlayBinaryPath,
-                       uint16_t peerPort)
+                       uint16_t peerPort, PublicKey const& nodeId)
     : mSocketPath(socketPath && !socketPath->empty()
                       ? std::move(*socketPath)
                       : defaultSocketPath(peerPort))
     , mOverlayBinaryPath(std::move(overlayBinaryPath))
     , mPeerPort(peerPort)
+    , mNodePublicKey(nodeId)
 {
 }
 
@@ -439,11 +441,62 @@ OverlayIPC::broadcastSCP(SCPEnvelope const& envelope)
         return false;
     }
 
+    // When broadcasting our own nomination, tell the overlay to push the
+    // nominated tx set (cached earlier via CACHE_TX_SET) to all peers in
+    // compact form, so followers don't need to pull the full multi-MB set.
+    std::optional<Hash> compactBroadcastHash;
+    if (envelope.statement.pledges.type() == SCP_ST_NOMINATE)
+    {
+        // broadcastSCP also relays other nodes' envelopes, whose values may
+        // not decode; those simply don't trigger a compact broadcast.
+        auto const values = getStellarValues(envelope.statement);
+        if (values.has_value())
+        {
+            for (auto const& sv : values.value())
+            {
+                if (sv.ext.v() == STELLAR_VALUE_SIGNED &&
+                    sv.ext.lcValueSignature().nodeID == mNodePublicKey)
+                {
+                    // A slot's local candidate is built once, so every value
+                    // we signed references the same tx set. (The signature
+                    // itself isn't checked here, so don't assert on a
+                    // mismatch — a hostile envelope could claim our nodeID.)
+                    if (compactBroadcastHash.has_value() &&
+                        *compactBroadcastHash != sv.txSetHash)
+                    {
+                        CLOG_WARNING(Overlay,
+                                     "Multiple self-signed nomination values "
+                                     "with different tx sets: {} vs {}",
+                                     hexAbbrev(*compactBroadcastHash),
+                                     hexAbbrev(sv.txSetHash));
+                    }
+                    compactBroadcastHash = sv.txSetHash;
+                }
+            }
+        }
+    }
+
+    IPCMessage compactMsg;
+    if (compactBroadcastHash.has_value())
+    {
+        compactMsg.type = IPCMessageType::BROADCAST_COMPACT_SET;
+        compactMsg.payload.assign(compactBroadcastHash->begin(),
+                                  compactBroadcastHash->end());
+    }
+
     IPCMessage msg;
     msg.type = IPCMessageType::BROADCAST_SCP;
     msg.payload = xdr::xdr_to_opaque(envelope);
 
     std::lock_guard<std::mutex> lock(mSendMutex);
+    if (compactBroadcastHash.has_value())
+    {
+        if (!mChannel->send(compactMsg))
+        {
+            CLOG_WARNING(Overlay, "Failed to send BROADCAST_COMPACT_SET for {}",
+                         hexAbbrev(*compactBroadcastHash));
+        }
+    }
     return mChannel->send(msg);
 }
 
@@ -702,6 +755,23 @@ OverlayIPC::setPeerConfig(std::vector<std::string> const& knownPeers,
     msg.payload.assign(json.begin(), json.end());
 
     CLOG_DEBUG(Overlay, "Sending peer config: {}", json);
+    std::lock_guard<std::mutex> lock(mSendMutex);
+    mChannel->send(msg);
+}
+
+void
+OverlayIPC::setCompactForceRequestTxsPct(uint32_t percentage)
+{
+    if (!mChannel || !mChannel->isConnected())
+    {
+        return;
+    }
+
+    IPCMessage msg;
+    msg.type = IPCMessageType::COMPACT_FORCE_REQUEST_TXS_PCT;
+    msg.payload.resize(4);
+    std::memcpy(msg.payload.data(), &percentage, 4);
+
     std::lock_guard<std::mutex> lock(mSendMutex);
     mChannel->send(msg);
 }

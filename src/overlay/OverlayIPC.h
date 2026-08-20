@@ -55,9 +55,13 @@ class OverlayIPC
      * @param socketPath Path for Unix domain socket, or empty for default
      * @param overlayBinaryPath Path to the overlay binary, or empty to search
      * @param peerPort Port for peer TCP connections (passed to overlay)
+     * @param nodeId This node's public key, used to recognize self-signed
+     *               nomination values so their tx sets can be broadcast in
+     *               compact form alongside the SCP envelope
      */
     OverlayIPC(std::optional<std::string> socketPath,
-               std::optional<std::string> overlayBinaryPath, uint16_t peerPort);
+               std::optional<std::string> overlayBinaryPath, uint16_t peerPort,
+               PublicKey const& nodeId);
 
     static std::string defaultSocketPath(uint16_t peerPort);
     static std::optional<std::string> findOverlayBinaryPath();
@@ -145,6 +149,13 @@ class OverlayIPC
                        uint16_t listenPort);
 
     /**
+     * Testing knob: make the compact tx set flow request at least this
+     * percentage of transactions from the announcing peer even when the
+     * mempool already has them.
+     */
+    void setCompactForceRequestTxsPct(uint32_t percentage);
+
+    /**
      * Request a TX set by hash from peers (asynchronous).
      *
      * The Rust overlay will fetch from peers and notify via the
@@ -218,6 +229,7 @@ class OverlayIPC
     std::string mSocketPath;
     std::optional<std::string> mOverlayBinaryPath;
     uint16_t mPeerPort;
+    PublicKey const mNodePublicKey;
 
     std::unique_ptr<IPCChannel> mChannel;
     std::thread mReaderThread;

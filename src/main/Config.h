@@ -732,6 +732,10 @@ class Config : public std::enable_shared_from_this<Config>
     // Rust overlay process config
     std::optional<std::string> OVERLAY_BINARY_PATH;
     std::optional<std::string> OVERLAY_SOCKET_PATH;
+    // Testing knob: percentage of a compact tx set's transactions the
+    // overlay always requests from the announcing peer even when the
+    // mempool has them (exercises the missing-tx path). 0-100, default 0.
+    uint32_t COMPACT_FORCE_REQUEST_TXS_PCT;
     int FLOOD_SOROBAN_TX_PERIOD_MS;
     int32_t FLOOD_ARB_TX_BASE_ALLOWANCE;
     double FLOOD_ARB_TX_DAMPING_FACTOR;
