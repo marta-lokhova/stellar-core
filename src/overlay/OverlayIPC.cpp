@@ -570,6 +570,16 @@ OverlayIPC::getTopTransactions(size_t count)
     req.payload.resize(4);
     std::memcpy(req.payload.data(), &countU32, 4);
 
+    // Arm the response slot BEFORE sending. The overlay can answer within
+    // microseconds, so a reset after the send races the reader thread: if
+    // the response lands first, the reset destroys it and the wait below
+    // never wakes. (Only the main thread issues this request, so there is
+    // no concurrent-caller hazard in arming early.)
+    {
+        std::lock_guard<std::mutex> lock(mRequestMutex);
+        mPendingResponse.reset();
+    }
+
     {
         std::lock_guard<std::mutex> lock(mSendMutex);
         if (!mChannel->send(req))
@@ -579,13 +589,23 @@ OverlayIPC::getTopTransactions(size_t count)
     }
 
     // Wait for response; shutdown and connection loss notify the cv to
-    // unblock us.
+    // unblock us. This runs on the main thread (block trigger), so bound
+    // the wait: a lost response must degrade to an empty proposal, never a
+    // wedged node. A late response left behind by a timeout is cleared by
+    // the reset above on the next request.
     std::unique_lock<std::mutex> lock(mRequestMutex);
-    mPendingResponse.reset();
+    bool gotResponse =
+        mRequestCv.wait_for(lock, std::chrono::seconds(2), [this] {
+            return mPendingResponse.has_value() || !mRunning || !mReaderAlive;
+        });
 
-    mRequestCv.wait(lock, [this] {
-        return mPendingResponse.has_value() || !mRunning || !mReaderAlive;
-    });
+    if (!gotResponse)
+    {
+        CLOG_WARNING(Overlay,
+                     "Timeout waiting for top transactions from overlay; "
+                     "proposing without mempool transactions");
+        return result;
+    }
 
     if (!mPendingResponse.has_value())
     {
@@ -863,6 +883,13 @@ OverlayIPC::requestMetrics(int timeoutMs)
     IPCMessage req;
     req.type = IPCMessageType::REQUEST_OVERLAY_METRICS;
 
+    // Arm the response slot BEFORE sending (same lost-wakeup hazard as
+    // getTopTransactions; here it only costs a dropped metrics sample).
+    {
+        std::lock_guard<std::mutex> lock(mMetricsMutex);
+        mPendingMetricsResponse.reset();
+    }
+
     {
         std::lock_guard<std::mutex> lock(mSendMutex);
         if (!mChannel->send(req))
@@ -873,7 +900,6 @@ OverlayIPC::requestMetrics(int timeoutMs)
 
     // Wait for response on separate CV
     std::unique_lock<std::mutex> lock(mMetricsMutex);
-    mPendingMetricsResponse.reset();
 
     bool gotResponse =
         mMetricsCv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
