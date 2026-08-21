@@ -59,5 +59,16 @@ class TxSetUtils
                 UnorderedMap<AccountID, int64_t>& accountFeeMap,
                 uint64_t lowerBoundCloseTimeOffset,
                 uint64_t upperBoundCloseTimeOffset, TxFrameList& invalidTxs);
+
+    // Pre-populate the global signature verification cache for the given
+    // transactions using `numThreads` threads, so that the serial per-tx
+    // `checkValid` calls in `trimInvalid` hit the cache instead of running
+    // ed25519 verification on the main thread. Only the common case of an
+    // ed25519 source account signing its own transaction is prewarmed;
+    // any other (signer, signature) pair simply misses the cache and is
+    // verified as before, so this is purely an optimization and can never
+    // change validation results.
+    static void prewarmSignatureCache(TxFrameList const& txs,
+                                      unsigned numThreads);
 }; // class TxSetUtils
 } // namespace stellar

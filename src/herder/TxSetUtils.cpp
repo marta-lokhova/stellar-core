@@ -7,6 +7,7 @@
 #include "crypto/Hex.h"
 #include "crypto/Random.h"
 #include "crypto/SHA.h"
+#include "crypto/SecretKey.h"
 #include "database/Database.h"
 #include "ledger/LedgerManager.h"
 #include "ledger/LedgerTxn.h"
@@ -27,8 +28,11 @@
 
 #include <Tracy.hpp>
 #include <algorithm>
+#include <atomic>
+#include <cstring>
 #include <list>
 #include <numeric>
+#include <thread>
 
 namespace stellar
 {
@@ -270,6 +274,84 @@ TxSetUtils::getInvalidTxListWithErrors<TxSetPhaseFrame>(
     TxSetPhaseFrame const& txs, Application& app,
     UnorderedMap<AccountID, int64_t>& accountFeeMap,
     uint64_t lowerBoundCloseTimeOffset, uint64_t upperBoundCloseTimeOffset);
+
+void
+TxSetUtils::prewarmSignatureCache(TxFrameList const& txs, unsigned numThreads)
+{
+    ZoneScoped;
+    if (txs.empty() || numThreads == 0)
+    {
+        return;
+    }
+
+    // Collect the (key, signature, payload) triples we can predict without
+    // ledger state: an ed25519 source account signing its own transaction
+    // (identified by the signature hint matching the key). Anything else
+    // (fee-bumps, extra signers, muxed/other key types) is skipped and will
+    // be verified on the normal path.
+    struct SigWork
+    {
+        PublicKey key;
+        Signature const* sig;
+        Hash payload;
+    };
+    std::vector<SigWork> work;
+    work.reserve(txs.size());
+    for (auto const& tx : txs)
+    {
+        auto const& env = tx->getEnvelope();
+        if (env.type() != ENVELOPE_TYPE_TX && env.type() != ENVELOPE_TYPE_TX_V0)
+        {
+            continue;
+        }
+        auto const& sourceID = tx->getSourceID();
+        if (sourceID.type() != PUBLIC_KEY_TYPE_ED25519)
+        {
+            continue;
+        }
+        auto const& ed = sourceID.ed25519();
+        SignatureHint hint;
+        std::memcpy(hint.data(), ed.data() + ed.size() - hint.size(),
+                    hint.size());
+        auto const& sigs = env.type() == ENVELOPE_TYPE_TX
+                               ? env.v1().signatures
+                               : env.v0().signatures;
+        // Computing the contents hash here (on the main thread) also
+        // guarantees the lazily-cached hash is safe to read from workers.
+        auto const& payload = tx->getContentsHash();
+        for (auto const& decSig : sigs)
+        {
+            if (decSig.hint == hint)
+            {
+                work.push_back(SigWork{sourceID, &decSig.signature, payload});
+            }
+        }
+    }
+    if (work.empty())
+    {
+        return;
+    }
+
+    std::atomic<size_t> next{0};
+    auto verifyLoop = [&] {
+        for (size_t i = next.fetch_add(1); i < work.size();
+             i = next.fetch_add(1))
+        {
+            PubKeyUtils::verifySig(work[i].key, *work[i].sig, work[i].payload);
+        }
+    };
+    std::vector<std::thread> threads;
+    threads.reserve(numThreads - 1);
+    for (unsigned t = 1; t < numThreads; ++t)
+    {
+        threads.emplace_back(verifyLoop);
+    }
+    verifyLoop();
+    for (auto& t : threads)
+    {
+        t.join();
+    }
+}
 
 TxFrameList
 TxSetUtils::trimInvalid(TxFrameList const& txs, Application& app,

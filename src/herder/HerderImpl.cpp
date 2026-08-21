@@ -48,6 +48,8 @@
 #include "xdrpp/marshal.h"
 #include "xdrpp/types.h"
 #include <Tracy.hpp>
+#include <chrono>
+#include <thread>
 
 #include "util/GlobalChecks.h"
 #include <algorithm>
@@ -1602,7 +1604,9 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
         maxCandidates +=
             lm.getLastClosedSorobanNetworkConfig().ledgerMaxTxCount();
     }
+    auto fetchStart = std::chrono::steady_clock::now();
     auto txEnvelopes = overlayMgr.getTopTransactions(maxCandidates * 2);
+    auto fetchEnd = std::chrono::steady_clock::now();
 
     CLOG_INFO(Herder, "Got {} transactions from Rust overlay mempool",
               txEnvelopes.size());
@@ -1645,11 +1649,32 @@ HerderImpl::triggerNextLedger(uint32_t ledgerSeqToTrigger,
     PerPhaseTransactionList invalidTxPhases;
     invalidTxPhases.resize(txPhases.size());
 
+    // Verify candidate signatures in parallel before the serial per-tx
+    // validation below; checkValid then hits the signature cache instead of
+    // running ed25519 verification on the main thread. This is purely a
+    // cache-warming step and cannot change validation outcomes.
+    auto prewarmStart = std::chrono::steady_clock::now();
+    unsigned prewarmThreads = std::max(2u, std::thread::hardware_concurrency());
+    for (auto const& phase : txPhases)
+    {
+        TxSetUtils::prewarmSignatureCache(phase, prewarmThreads);
+    }
+    auto prewarmEnd = std::chrono::steady_clock::now();
+
     std::tie(proposedSet, applicableProposedSet) =
         makeTxSetFromTransactions(txPhases, mApp, lowerBoundCloseTimeOffset,
                                   upperBoundCloseTimeOffset, invalidTxPhases);
-    CLOG_INFO(Herder, "Proposed TX set has {} transactions",
-              proposedSet->sizeTxTotal());
+    auto makeSetEnd = std::chrono::steady_clock::now();
+    auto ms = [](auto start, auto end) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(end -
+                                                                     start)
+            .count();
+    };
+    CLOG_INFO(Herder,
+              "Proposed TX set has {} transactions (fetch {} ms, sig-prewarm "
+              "{} ms, build {} ms)",
+              proposedSet->sizeTxTotal(), ms(fetchStart, fetchEnd),
+              ms(prewarmStart, prewarmEnd), ms(prewarmEnd, makeSetEnd));
 
     if (!applicableProposedSet)
     {

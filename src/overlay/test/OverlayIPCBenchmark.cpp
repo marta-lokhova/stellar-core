@@ -6,8 +6,11 @@
 #include "overlay/OverlayIPC.h"
 #include "util/Logging.h"
 #include "util/TmpDir.h"
+#include "xdr/Stellar-transaction.h"
+#include "xdrpp/marshal.h"
 
 #include <chrono>
+#include <cstdio>
 #include <thread>
 #include <vector>
 
@@ -219,6 +222,192 @@ TEST_CASE("IPC payload size benchmark", "[overlay-ipc-rust][.][benchmark]")
     CLOG_INFO(Overlay, "Benchmark complete!");
 
     ipc.shutdown();
+}
+
+namespace
+{
+// Build a syntactically valid, realistically sized (~300 byte) signed payment
+// envelope with a distinct source account per index. Signature is garbage --
+// the Rust overlay trusts core-submitted txs and only hashes the bytes.
+TransactionEnvelope
+makeSyntheticPaymentTx(uint32_t index)
+{
+    TransactionEnvelope env(ENVELOPE_TYPE_TX);
+    auto& tx = env.v1().tx;
+    tx.sourceAccount.ed25519().at(0) = static_cast<uint8_t>(index);
+    tx.sourceAccount.ed25519().at(1) = static_cast<uint8_t>(index >> 8);
+    tx.sourceAccount.ed25519().at(2) = static_cast<uint8_t>(index >> 16);
+    tx.fee = 100 + (index % 1000);
+    tx.seqNum = 1;
+    tx.memo.type(MEMO_TEXT);
+    tx.memo.text() = "benchmark-synthetic-tx-pad";
+    auto& op = tx.operations.emplace_back();
+    op.body.type(PAYMENT);
+    op.body.paymentOp().destination.ed25519().at(0) = 0x42;
+    op.body.paymentOp().asset.type(ASSET_TYPE_NATIVE);
+    op.body.paymentOp().amount = 1 + index;
+    auto& sig = env.v1().signatures.emplace_back();
+    sig.hint.at(0) = static_cast<uint8_t>(index);
+    sig.signature.resize(64);
+    return env;
+}
+
+// Build a syntactically valid, realistically sized (~700 B) signed Soroban SAC
+// transfer envelope (InvokeHostFunction "transfer" with source-account auth,
+// a 4-entry footprint and Soroban resources), distinct source per index.
+// Signature is garbage -- the Rust overlay only hashes the bytes.
+TransactionEnvelope
+makeSyntheticSacTransferTx(uint32_t index)
+{
+    TransactionEnvelope env(ENVELOPE_TYPE_TX);
+    auto& tx = env.v1().tx;
+    tx.sourceAccount.ed25519().at(0) = static_cast<uint8_t>(index);
+    tx.sourceAccount.ed25519().at(1) = static_cast<uint8_t>(index >> 8);
+    tx.sourceAccount.ed25519().at(2) = static_cast<uint8_t>(index >> 16);
+    tx.fee = 1'000'000;
+    tx.seqNum = 1;
+
+    SCAddress contractAddr(SC_ADDRESS_TYPE_CONTRACT);
+    contractAddr.contractId().at(0) = 0x53; // arbitrary fixed SAC contract id
+    contractAddr.contractId().at(1) = 0xac;
+
+    SCVal from(SCV_ADDRESS);
+    from.address().type(SC_ADDRESS_TYPE_ACCOUNT);
+    from.address().accountId().ed25519() = tx.sourceAccount.ed25519();
+    SCVal to(SCV_ADDRESS);
+    to.address().type(SC_ADDRESS_TYPE_ACCOUNT);
+    to.address().accountId().ed25519().at(0) = static_cast<uint8_t>(~index);
+    SCVal amount(SCV_I128);
+    amount.i128().hi = 0;
+    amount.i128().lo = 1 + index;
+
+    auto& op = tx.operations.emplace_back();
+    op.body.type(INVOKE_HOST_FUNCTION);
+    auto& ihf = op.body.invokeHostFunctionOp();
+    ihf.hostFunction.type(HOST_FUNCTION_TYPE_INVOKE_CONTRACT);
+    auto& call = ihf.hostFunction.invokeContract();
+    call.contractAddress = contractAddr;
+    call.functionName = "transfer";
+    call.args = {from, to, amount};
+
+    auto& auth = ihf.auth.emplace_back();
+    auth.credentials.type(SOROBAN_CREDENTIALS_SOURCE_ACCOUNT);
+    auth.rootInvocation.function.type(
+        SOROBAN_AUTHORIZED_FUNCTION_TYPE_CONTRACT_FN);
+    auth.rootInvocation.function.contractFn() = call;
+
+    tx.ext.v(1);
+    auto& sorobanData = tx.ext.sorobanData();
+    auto& resources = sorobanData.resources;
+    resources.instructions = 2'000'000;
+    resources.diskReadBytes = 2000;
+    resources.writeBytes = 2000;
+
+    LedgerKey instanceKey(CONTRACT_DATA);
+    instanceKey.contractData().contract = contractAddr;
+    instanceKey.contractData().key.type(SCV_LEDGER_KEY_CONTRACT_INSTANCE);
+    instanceKey.contractData().durability = PERSISTENT;
+    LedgerKey codeKey(CONTRACT_CODE);
+    codeKey.contractCode().hash.at(0) = 0xc0;
+    resources.footprint.readOnly = {instanceKey, codeKey};
+
+    LedgerKey fromKey(ACCOUNT);
+    fromKey.account().accountID.ed25519() = tx.sourceAccount.ed25519();
+    LedgerKey toKey(ACCOUNT);
+    toKey.account().accountID.ed25519() = to.address().accountId().ed25519();
+    resources.footprint.readWrite = {fromKey, toKey};
+
+    sorobanData.resourceFee = 900'000;
+
+    auto& sig = env.v1().signatures.emplace_back();
+    sig.hint.at(0) = static_cast<uint8_t>(index);
+    sig.signature.resize(64);
+    return env;
+}
+} // namespace
+
+/**
+ * Benchmark getTopTransactions against a POPULATED mempool: this measures the
+ * real triggerNextLedger-path cost (Rust mempool walk + serialize + pipe
+ * transfer + C++ XDR parse) rather than an empty round-trip.
+ */
+TEST_CASE("IPC getTopTransactions populated mempool benchmark",
+          "[overlay-ipc-rust][.][benchmark]")
+{
+    std::string overlayBinary = requireOverlayBinary();
+
+    struct TxKind
+    {
+        char const* name;
+        TransactionEnvelope (*make)(uint32_t);
+    };
+    // Fresh overlay process + mempool per kind so fee-based eviction of one
+    // shape by the other can't skew results.
+    for (auto const& kind :
+         {TxKind{"classic payment (~230 B)", makeSyntheticPaymentTx},
+          TxKind{"Soroban SAC transfer (~700 B)", makeSyntheticSacTransferTx}})
+    {
+        TmpDir tmpDir("ipc-benchmark");
+        std::string socketPath = tmpDir.getName() + "/overlay.sock";
+
+        OverlayIPC ipc(socketPath, overlayBinary, 11625);
+        ipc.start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        REQUIRE(ipc.isConnected());
+
+        size_t const TOTAL_TXS = 8000;
+        size_t txBytes = xdr::xdr_to_opaque(kind.make(0)).size();
+        printf("\n=== getTopTransactions populated mempool benchmark: %s "
+               "(%zu B/tx) ===\n",
+               kind.name, txBytes);
+        printf("Submitting %zu synthetic txs to Rust mempool...\n", TOTAL_TXS);
+
+        for (uint32_t i = 0; i < TOTAL_TXS; ++i)
+        {
+            auto env = kind.make(i);
+            ipc.submitTransaction(env, 100 + (i % 1000), 1);
+        }
+
+        // Wait for async ingestion to finish.
+        size_t inPool = 0;
+        for (int attempt = 0; attempt < 100; ++attempt)
+        {
+            inPool = ipc.getTopTransactions(TOTAL_TXS).size();
+            if (inPool == TOTAL_TXS)
+            {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        printf("Mempool populated with %zu txs\n", inPool);
+        REQUIRE(inPool == TOTAL_TXS);
+
+        for (size_t count : {size_t(500), size_t(1000), size_t(2000),
+                             size_t(4000), size_t(8000)})
+        {
+            int const iterations = 20;
+            double totalMs = 0, minMs = 1e9, maxMs = 0;
+            size_t got = 0;
+            for (int i = 0; i < iterations; ++i)
+            {
+                auto start = std::chrono::steady_clock::now();
+                auto txs = ipc.getTopTransactions(count);
+                double ms = std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - start)
+                                .count();
+                got = txs.size();
+                totalMs += ms;
+                minMs = std::min(minMs, ms);
+                maxMs = std::max(maxMs, ms);
+            }
+            printf("getTopTransactions(%5zu) -> %5zu txs: avg %7.2f ms  min "
+                   "%7.2f  max %7.2f\n",
+                   count, got, totalMs / iterations, minMs, maxMs);
+            fflush(stdout);
+        }
+
+        ipc.shutdown();
+    }
 }
 
 /**
